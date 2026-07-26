@@ -477,7 +477,10 @@ function run!(sim::Simulation{T}; tmax, dtout=nothing, maxsteps::Integer=typemax
         ncell = prod(sim.grid.n)
         @printf("done: %d steps, t = %.6g, %.2f s (%.3g cell-updates/s)\n",
                 sim.step, sim.t, el, el > 0 ? ncell * sim.step / el : 0.0)
-        sim.nrepaired > 0 && @printf("warning: %d cell states were repaired by the floors\n",
+        # A handful of floor hits is normal wherever the solution genuinely
+        # reaches vacuum (deep shadows, the interior of a blast). A count
+        # comparable to the number of cell updates means the run is unphysical.
+        sim.nrepaired > 0 && @printf("note: %d cell updates hit a positivity floor\n",
                                      sim.nrepaired)
     end
     return sim
