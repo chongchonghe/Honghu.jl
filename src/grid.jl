@@ -135,7 +135,10 @@ Index ranges of the cells whose interface states must be reconstructed for a
 sweep along direction `D`: the interior extended by one cell in `D`.
 """
 @inline function cell_ranges(g::CartesianGrid, ::Val{D}) where {D}
-    ntuple(d -> (d == D ? (g.lo[d]-1):(g.hi[d]+1) : (g.lo[d]):(g.hi[d])), 3)
+    ntuple(Val(3)) do d
+        pad = d == D ? 1 : 0
+        (g.lo[d] - pad):(g.hi[d] + pad)
+    end
 end
 
 """
@@ -146,7 +149,9 @@ direction `D`. Face `f` is the low-side face of cell `f`, so the interior cells
 `lo:hi` are bounded by faces `lo:hi+1`.
 """
 @inline function face_ranges(g::CartesianGrid, ::Val{D}) where {D}
-    ntuple(d -> (d == D ? (g.lo[d]):(g.hi[d]+1) : (g.lo[d]):(g.hi[d])), 3)
+    ntuple(Val(3)) do d
+        g.lo[d]:(g.hi[d] + (d == D ? 1 : 0))
+    end
 end
 
 """
