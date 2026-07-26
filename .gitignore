@@ -4,3 +4,4 @@ Manifest.toml
 *.pvd
 *.h3d
 .DS_Store
+.claude/
