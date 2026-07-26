@@ -131,29 +131,30 @@ function marshak_wave(; nx::Integer=256, kappa=300.0, T_wall=1.0, T_init=1e-4,
 end
 
 """
-    radiation_shadow(; n = (280, 80), kappa = 1.0, rho_blob = 1e3, kwargs...)
+    radiation_shadow(; n = (280, 112), kappa = 1.0, rho_blob = 1e3, kwargs...)
         -> (sim, tmax)
 
 The shadow test of Hayes & Norman (2003) in 2D: a collimated beam enters from
-the left of a transparent box and strikes an opaque elliptical clump of
-semi-axes `(0.10, 0.06)` centred at `x = 0.3`.
+the left of a transparent box and strikes an opaque, absorbing elliptical clump
+of semi-axes `(0.10, 0.06)` centred at `x = 0.25`.
 
 A two-moment scheme with the M1 closure preserves the direction of the
-radiation and leaves a shadow behind the clump; a diffusion-based scheme lets
-radiation leak around the obstacle and fills the shadow in. (M1 does still fill
-the far shadow in slowly, because it carries only one flux vector per cell and
-so cannot represent the two crossing beams that meet there.)
+radiation and leaves a sharp shadow behind the clump; a diffusion-based scheme
+lets radiation leak around the obstacle and fills the shadow in. Far downstream
+M1 does fill the shadow in slowly, because it carries a single flux vector per
+cell and so cannot represent the two crossing beams that meet there.
 
-The opacity is purely scattering-like (`kappa_P = kappa_E = 0`), so the result
-depends only on the transport.
+The clump is given a very large heat capacity so that it absorbs without
+re-emitting, which isolates the transport.
 """
-function radiation_shadow(; n=(280, 80), kappa=1.0, rho_blob=1e3, rho_bg=1e-2, kwargs...)
+function radiation_shadow(; n=(280, 112), kappa=1.0, rho_blob=1e3, rho_bg=1e-2, kwargs...)
     c = 1.0
     E0 = 1.0
     rad = RadiationPhysics(; c=c, chat=c, a_rad=1.0, beta_order=0,
-                           opacity=ConstantOpacity(planck=0.0, energy=0.0, flux=kappa))
+                           opacity=ConstantOpacity(kappa))
     beam = Fixed((E0, 0.999 * c * E0, 0.0, 0.0))
-    sim = Simulation(; n=(n[1], n[2], 1), xlo=(0.0, -0.12, 0.0), xhi=(1.0, 0.12, 1.0),
+    sim = Simulation(; n=(n[1], n[2], 1), xlo=(0.0, -0.2, 0.0), xhi=(1.0, 0.2, 1.0),
+                     eos=IdealGas(gamma=5 / 3, cv=1e10),
                      radiation=rad, hydro=false,
                      boundaries=Boundaries(Outflow()),
                      radiation_boundaries=Boundaries((beam, Outflow()),
@@ -162,7 +163,7 @@ function radiation_shadow(; n=(280, 80), kappa=1.0, rho_blob=1e3, rho_bg=1e-2, k
                      kwargs...)
     ax, ay = 0.10, 0.06
     set_initial_conditions!(sim) do x, y, z
-        inside = ((x - 0.3) / ax)^2 + (y / ay)^2 < 1
+        inside = ((x - 0.25) / ax)^2 + (y / ay)^2 < 1
         (rho=inside ? rho_blob : rho_bg, p=1.0, Erad=1e-10, Fx=0.0)
     end
     return sim, 1.5

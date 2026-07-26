@@ -192,20 +192,23 @@ function radiation_source_step!(U::A, R::A, eos::AbstractEOS, phys::RadiationPhy
                 # --- flux, momentum ------------------------------------------
                 Fcoeff = chat * rho * kF * dt
                 if keep_beta
+                    # O(v/c) terms: thermal emission dragged along by the gas,
+                    # plus the radiation pressure acting on the moving matter.
+                    # Written out component by component on purpose: a closure
+                    # here (an `ntuple do` block) would capture the loop
+                    # variables and force Julia to box them, which turns every
+                    # Newton iteration into a heap allocation.
                     ce = c * Erad
                     tedd = eddington_tensor(Frad0[1] / ce, Frad0[2] / ce, Frad0[3] / ce)
-                    vt = SVec(ntuple(Val(3)) do a
-                        planck = kP * B
-                        kF == kE || (planck += (kF - kE) * Erad)
-                        planck *= chat * dt * mom0[a]
-                        press = zero(T)
-                        for b in 1:3
-                            press += mom0[b] * tedd[a, b]
-                        end
-                        press *= chat * dt * kF * Erad
-                        planck + press
-                    end)
-                    Frad = (Frad0 + vt) / (1 + Fcoeff)
+                    pl = kP * B
+                    kF == kE || (pl += (kF - kE) * Erad)
+                    pl *= chat * dt
+                    pk = chat * dt * kF * Erad
+                    m1, m2, m3 = mom0[1], mom0[2], mom0[3]
+                    v1 = pl * m1 + pk * (m1 * tedd[1, 1] + m2 * tedd[1, 2] + m3 * tedd[1, 3])
+                    v2 = pl * m2 + pk * (m1 * tedd[2, 1] + m2 * tedd[2, 2] + m3 * tedd[2, 3])
+                    v3 = pl * m3 + pk * (m1 * tedd[3, 1] + m2 * tedd[3, 2] + m3 * tedd[3, 3])
+                    Frad = (Frad0 + SVec(v1, v2, v3)) / (1 + Fcoeff)
                 else
                     Frad = Frad0 / (1 + Fcoeff)
                 end

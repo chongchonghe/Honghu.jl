@@ -64,7 +64,11 @@ carbuncle correction and may be passed as zero to disable it.
     vmagR = sqrt(uR * uR + vR * vR + wR * wR)
     chi = min(one(T), max(vmagL, vmagR) / cs_max)
     phi = chi * (2 - chi)
-    P_LR = (pL + pR) / 2 + phi * (dmL * (S_star - uL) + dmR * (S_star - uR)) / 2
+    # The linearised star pressure can go negative when two strong rarefactions
+    # open up a near vacuum (Toro's "123" problem), where the wave-speed
+    # estimates stop being valid. Clamping at zero keeps the star state
+    # admissible; for any well-resolved state the clamp is inactive.
+    P_LR = max((pL + pR) / 2 + phi * (dmL * (S_star - uL) + dmR * (S_star - uR)) / 2, zero(T))
 
     # --- fluxes --------------------------------------------------------------
     z = zero(T)
