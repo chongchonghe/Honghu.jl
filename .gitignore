@@ -1,0 +1,6 @@
+Manifest.toml
+/output/
+*.vti
+*.pvd
+*.h3d
+.DS_Store
