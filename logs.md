@@ -24,14 +24,14 @@ Two follow-ups arrived mid-session: *"Commit your changes to track the progress"
 
 ## Constraint discovered early: no dependencies
 
-The machine has no Julia package registry and an empty depot (`~/.julia/packages` does not exist). Any `Pkg.add` would have made the package unrunnable. So `Hydro3D` depends on `Printf` and nothing else. Two things that would normally be a dependency are written in-tree instead:
+The machine had no Julia package registry and an empty depot (`~/.julia/packages` did not exist). Any `Pkg.add` would have made the package unrunnable. So `Hydro3D` depends on `Printf` and nothing else. (A registry appeared later in the session; see the follow-up section below. The core stayed dependency-free by choice rather than necessity.) Two things that would normally be a dependency are written in-tree instead:
 
 - `src/staticvec.jl` -- a 58-line `SVec{N,T}`, deliberately *not* an `AbstractArray` so a stray broadcast cannot silently heap-allocate in a hot loop. It exists so the Riemann solvers can be written in the vector form the papers use.
 - `src/output.jl` -- a VTK ImageData writer emitting raw appended binary. Validated by parsing the XML header and unpacking every binary block from Python.
 
 ## What was built
 
-22 source files totalling about 3300 lines, plus 830 lines of tests and 6 examples.
+23 source files totalling about 3500 lines, plus a 126-line plotting extension, 1050 lines of tests, 6 examples and 2 figure scripts.
 
 ### Physics
 
@@ -83,7 +83,7 @@ A second, related trap was avoided by construction: `reduce_max_jk` writes parti
 
 ## Verification
 
-The suite is 374 tests, about 7 s: `julia --project=. -t 4 test/runtests.jl`.
+The suite is 405 tests, about 8 s: `julia --project=. -t 4 test/runtests.jl`.
 
 Measured against exact solutions:
 
@@ -123,6 +123,22 @@ The example was rebuilt gas-dominated, it now prints both governing ratios befor
 
 No mesh refinement, MPI or GPU. Grey radiation only -- no multigroup, dust, chemistry or self-gravity. No dual-energy formalism (Quokka carries `Eint` as a separate conserved variable; here it is recovered as $E_{\rm tot} - E_{\rm kin}$, which is enough without AMR). No LLF/Rusanov fallback solver, since HLLC and HLL were what was asked for.
 
+## Follow-up: plotting, figures and benchmarks
+
+After the first pass the user installed a Julia registry and Plots, and asked what could be improved now that packages were available. Four things were agreed and implemented.
+
+**Plotting as a package extension, not a hard dependency.** `Plots` is a `[weakdeps]` entry and the methods live in `ext/Hydro3DPlotsExt.jl`. `src/plotting.jl` holds `field` / `available_fields` / `coordinates` (which need nothing external and are useful on their own), the three function stubs with their docstrings, and fallbacks that raise "run `using Plots` first" rather than a bare `MethodError`. `plotstate` picks its representation from the dimensionality -- line in 1D, heat map in 2D, mid-plane slice in 3D -- and a `@recipe` makes plain `plot(sim)` work. The point of the extension is that solving still pulls in nothing: the ~100-package plotting stack stays out of the way on a compute node.
+
+**Verification figures.** `docs/make_figures.jl` regenerates seven panels now embedded in the README: Sod against the exact Riemann solution, the convergence plot with measured slopes against reference lines, static diffusion against the analytic Gaussian, the Marshak wave at three times showing $T_{\rm rad}$ ahead of $T_{\rm gas}$, the shadow with the clump outlined and a log cut through it, Kelvin-Helmholtz at three times, and Sedov with every cell in the box collapsed onto one radial profile. The README previously asserted these numbers with nothing to look at.
+
+**Animations.** `docs/make_animations.jl` writes `kh.gif`, `shadow.gif` and `sedov.gif`. Sizes were tuned down to about 3 MB, 0.8 MB and 0.8 MB; the GIF structure was verified by parsing the headers and counting frames, because the FFMPEG artifact on this machine is broken (`libatomic.1.dylib` missing) and cannot be used to inspect them.
+
+**BenchmarkTools, as a test extra.** `test/benchmarks.jl` prints the per-step and per-kernel timing table that now backs the README's performance section, replacing hand-rolled timing loops. It shows the implicit coupling at 21.9 ns/cell dominating a radiation step, against 2.78 for the HLLC sweep and 2.71 for PPM reconstruction.
+
+The more valuable addition was `test/test_performance.jl`, which is not about speed but about allocation. It asserts that every hot kernel stays under 8 bytes per interior cell and that allocation per step does not grow with the grid. Those two checks would have caught the boxing bug directly -- it was 12416 B/cell, against the 0.25 B/cell the implicit source term measures now -- and nothing in the physics suite noticed it, because the answers were right and only the run time was destroyed.
+
+Three packages were considered and declined, for reasons recorded in `CLAUDE.md`: `StaticArrays` would replace 58 lines of already allocation-free `SVec`; `HDF5`/`WriteVTK` would replace a validated 200-line writer; a generic nonlinear solver would be slower than a hand-written $2\times2$ Newton whose Jacobian inverts analytically.
+
 ## Commits
 
 ```
@@ -140,9 +156,15 @@ The repository was initialised in this session and has no remote, so there is no
 ```
 hydro3d.jl/
   Project.toml          only dependency: Printf
-  README.md             what it solves, how to run it, verification numbers
+  README.md             what it solves, how to run it, verification figures
   CLAUDE.md             invariants, performance traps, where things live
   logs.md               this file
+  ext/
+    Hydro3DPlotsExt.jl  plotting methods, loaded only when Plots is present
+  docs/
+    make_figures.jl     regenerates the README figures
+    make_animations.jl  regenerates the README GIFs
+    figures/            the generated PNGs and GIFs
   src/
     Hydro3D.jl          module, include order, public API
     staticvec.jl        SVec{N,T}
@@ -162,8 +184,9 @@ hydro3d.jl/
     integrators.jl      SSP-RK tableaux, IMEX PD-ARS constants
     simulation.jl       Simulation, workspaces, RHS, stage drivers, run!
     output.jl           VTK, text line-outs, checkpoints
+    plotting.jl         field extraction, plotting stubs and fallbacks
     problems/           built-in problems and the exact Riemann solver
-  test/                 374 tests in seven files
+  test/                 405 tests in nine files, plus benchmarks.jl
   examples/             sod_1d, kelvin_helmholtz_2d, sedov_3d,
                         marshak_wave, radiation_shadow, radiating_blast_3d
 ```

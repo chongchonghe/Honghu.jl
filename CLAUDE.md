@@ -4,17 +4,29 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Overview
 
-Hydro3D is a 3D radiation-hydrodynamics code in pure Julia with **zero dependencies outside the standard library** (only `Printf`). It solves the Euler equations with an HLLC method-of-lines scheme and grey two-moment (M1) radiation with an HLL solver and an IMEX PD-ARS integrator. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `../quokka` and is the reference to check against when a numerical detail is in doubt.
+Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with an HLLC method-of-lines scheme and grey two-moment (M1) radiation with an HLL solver and an IMEX PD-ARS integrator. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `../quokka` and is the reference to check against when a numerical detail is in doubt.
 
 ## Commands
 
 ```bash
-julia --project=. -t 4 test/runtests.jl      # full suite, ~10 s, 374 tests
-julia --project=. -t auto examples/sod_1d.jl # run an example
-julia --project=. -e 'include("src/Hydro3D.jl")'   # syntax check without precompiling
+julia --project=. -t 4 test/runtests.jl           # full suite, ~9 s, 405 tests
+julia --project=. -t auto examples/sod_1d.jl      # run an example
+julia --project=. -t auto docs/make_figures.jl    # regenerate README figures
+julia --project=. -t auto docs/make_animations.jl # regenerate README GIFs
+julia --project=. -t 8 test/benchmarks.jl         # timing table (BenchmarkTools)
+julia --project=. -e 'include("src/Hydro3D.jl")'  # syntax check without precompiling
 ```
 
-There is no build step and no registry access. Do **not** add package dependencies: the machine this was written on has no Julia registry, so any `Pkg.add` makes the code unrunnable. If you need a small utility (a fixed-size vector, a VTK writer), write it — that is what `src/staticvec.jl` and `src/output.jl` are.
+## Dependencies
+
+The runtime dependency list is `Printf` and nothing else, and it should stay that way. That is a design property, not an accident: this code is meant to run on nodes where a large dependency tree is a liability. Two things that would normally be a package are written in-tree instead — `src/staticvec.jl` (a fixed-size vector) and the VTK writer in `src/output.jl`.
+
+Anything that is not needed to *solve* goes in a weak dependency or a test extra:
+
+- **`Plots`** is a `[weakdeps]` entry. The plotting methods live in `ext/Hydro3DPlotsExt.jl` and appear only when the user loads Plots. `src/plotting.jl` holds the function stubs, their docstrings, and fallbacks that raise a message telling the caller to load Plots. Add new plotting features to the extension, never to `src/`.
+- **`BenchmarkTools`** is a test extra, used only by `test/benchmarks.jl`.
+
+Before adding any dependency, ask whether it earns its place. `StaticArrays` would replace 58 lines of `SVec` that are already allocation-free; `HDF5`/`WriteVTK` would replace a validated 200-line writer; a generic nonlinear solver would be slower than the hand-written 2×2 Newton whose Jacobian inverts analytically. All three were considered and declined.
 
 ## Source layout
 
@@ -38,7 +50,10 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `integrators.jl` | SSP-RK tableaux and the IMEX PD-ARS constants. |
 | `simulation.jl` | `Simulation`, workspaces, right-hand sides, stage drivers, `run!`. |
 | `output.jl` | VTK, text line-outs, checkpoints. |
+| `plotting.jl` | `field` / `available_fields` / `coordinates`, plus the stubs and no-Plots fallbacks for the three plotting entry points. |
 | `problems/` | Built-in test problems and the exact Riemann solver. |
+
+`ext/Hydro3DPlotsExt.jl` sits outside `src/` and is loaded by Julia's extension mechanism when Plots is present.
 
 ## Invariants to preserve
 
@@ -61,13 +76,15 @@ The inner loops must stay allocation-free. Two traps have already bitten this co
 1. **Closures inside the cell loop box their captured variables.** An `ntuple(Val(3)) do a … end` in `source_terms.jl` captured Newton-loop variables that were assigned in several places, so Julia boxed them; every assignment then heap-allocated. That cost 406 MB and 200 ms per source step at 32³. Write such kernels out component by component instead.
 2. **Threaded reductions must not use `threadid()`.** `Threads.@threads` defaults to dynamic scheduling, so `threadid()` is not stable across a chunk. `reduce_max_jk` writes partial results to distinct slots keyed by the loop index instead.
 
+`test/test_performance.jl` guards both: it asserts that every hot kernel allocates under 8 bytes per interior cell, and that allocation per step does not grow with the grid. Those are the tests that would have caught the boxing bug, so extend them whenever you add a kernel.
+
 When changing a hot kernel, check with
 
 ```julia
 a = @allocated some_kernel!(args...)   # after one warm-up call
 ```
 
-and profile with `Profile.Allocs.@profile sample_rate=0.02` if it is non-zero.
+and profile with `Profile.Allocs.@profile sample_rate=0.02` if it is non-zero. `test/benchmarks.jl` gives the per-kernel timing breakdown.
 
 Directional kernels take `Val(D)` so `D` is a compile-time constant. Call them from an explicit `grid.active[1] && sweep!(…, Val(1))` chain, never `for D in 1:3` with a runtime `Val(D)`.
 

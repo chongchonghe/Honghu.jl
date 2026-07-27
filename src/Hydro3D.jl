@@ -59,6 +59,7 @@ include("source_terms.jl")
 include("integrators.jl")
 include("simulation.jl")
 include("output.jl")
+include("plotting.jl")
 include("problems/Problems.jl")
 
 # --- public API --------------------------------------------------------------
@@ -81,5 +82,9 @@ export Boundaries, Periodic, Outflow, Reflecting, Fixed
 
 # output
 export write_vtk, write_line, save_checkpoint, load_checkpoint!
+
+# fields and plotting (plotting methods require `using Plots`)
+export field, available_fields, coordinates
+export plotstate, plotpanels, animate_run
 
 end # module Hydro3D

@@ -14,4 +14,6 @@ const P = Hydro3D.Problems
     include("test_hydro.jl")
     include("test_radiation.jl")
     include("test_io.jl")
+    include("test_plotting.jl")
+    include("test_performance.jl")
 end

@@ -6,11 +6,22 @@ version = "0.1.0"
 [deps]
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
+# Plotting is a weak dependency: `plotstate`, `plotpanels` and `animate_run`
+# only acquire methods once the user has loaded Plots. Solving stays free of the
+# ~100-package plotting stack, which matters on a compute node.
+[weakdeps]
+Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+
+[extensions]
+Hydro3DPlotsExt = "Plots"
+
 [compat]
+Plots = "1"
 julia = "1.9"
 
 [extras]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Test", "BenchmarkTools"]
