@@ -4,11 +4,12 @@
 # sphere expanding into a marginally optically thick medium, with the radiation
 # field coupled to the gas.
 #
-#   julia --project=. -t auto examples/radiating_blast_3d.jl [n]
+#   julia --project=. -t auto examples/radiating_blast_3d.jl [n] [--no-plot] [--outdir=DIR]
 #
 # Exercises everything at once: HLLC hydro, M1 transport, radiation subcycling
 # at the reduced speed of light, the implicit coupling, and the radiation force.
-# Writes a VTK series to blast/. About 2 minutes at n = 64 on 8 threads.
+# Writes blast.png (a six-panel overview of the final state) and a VTK series to
+# blast/. About 2 minutes at n = 64 on 8 threads.
 #
 # Choosing the parameters of a radiation-hydrodynamics problem takes some care.
 # Two ratios decide whether the setup is well posed:
@@ -25,9 +26,10 @@
 
 using Hydro3D
 using Printf
+include(joinpath(@__DIR__, "common.jl"))
 const CGS = Hydro3D.CGS
 
-n = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 64
+n = isempty(OPTS) ? 64 : parse(Int, OPTS[1])
 
 # --- problem scales ---------------------------------------------------------
 L = 1.0e14                  # box size, cm
@@ -66,7 +68,8 @@ println(sim)
 
 tmax = 1.5e7    # s, roughly the time for the blast to cross a quarter of the box
 t0 = conserved_totals(sim)
-run!(sim; tmax, outdir="blast", basename="blast", dtout=tmax / 30)
+vtkdir = outpath("blast")
+run!(sim; tmax, outdir=vtkdir, basename="blast", dtout=tmax / 30)
 t1 = conserved_totals(sim)
 
 # With a reduced speed of light the conserved quantity is E_gas + (c/chat) E_rad,
@@ -91,4 +94,7 @@ prim = primitives(sim)
 @printf("peak gas speed        : %.4g cm/s  (%.3g c)\n",
         maximum(sqrt.(prim[2, :, :, :] .^ 2 .+ prim[3, :, :, :] .^ 2 .+ prim[4, :, :, :] .^ 2)),
         maximum(abs.(prim[2, :, :, :])) / CGS.c_light)
-println("wrote 31 snapshots to blast/")
+println("  wrote 31 VTK snapshots to $vtkdir/")
+
+PLOTTING && saveplot(plotpanels(sim; size=(1100, 700)), "blast.png")
+plotting_note()

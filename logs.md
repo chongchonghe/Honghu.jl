@@ -139,6 +139,16 @@ The more valuable addition was `test/test_performance.jl`, which is not about sp
 
 Three packages were considered and declined, for reasons recorded in `CLAUDE.md`: `StaticArrays` would replace 58 lines of already allocation-free `SVec`; `HDF5`/`WriteVTK` would replace a validated 200-line writer; a generic nonlinear solver would be slower than a hand-written $2\times2$ Newton whose Jacobian inverts analytically.
 
+## Follow-up: figures from the examples and the tests
+
+The user ran `julia examples/sod_1d.jl` and got no figure. The script was writing only text tables -- the plotting work above had gone into the package and the README, not into the examples. Fixed by making figures the default output rather than something to add afterwards.
+
+`examples/common.jl` now carries the shared set-up: it parses `--no-plot` and `--outdir=DIR`, leaves positional arguments in `OPTS`, sets `GKSwstype` so GR renders off-screen, tries to load Plots, and exposes `PLOTTING`, `outpath`, `saveplot` and `plotting_note`. All six examples were rewritten around it. Each now writes one figure by default: Sod against the exact solution, Kelvin-Helmholtz at three times, Sedov as a slice plus every cell collapsed onto one radial profile, the Marshak wave at three times, the shadow as a log map plus a cut, and the 3D blast as a six-panel overview. Where possible they are built from `plotstate` and `plotpanels`, which keeps them short and doubles as documentation for the plotting API. With Plots absent the examples still run, still write their data, and print one line saying how to get the figures.
+
+The defaults differ deliberately between the two halves of the request. Examples plot by default, because an example you have to post-process by hand is not much of an example. The test suite does not, because re-running every problem at production resolution takes a couple of minutes and writes files into the repository -- neither belongs in a default `Pkg.test()`. `test/runtests.jl --figures` (or `HYDRO3D_FIGURES=1`) turns them on, and rather than duplicating two hundred lines of plotting it runs `docs/make_figures.jl` in a subprocess, so the figure script's globals cannot collide with the test session's. When figures are off, the suite prints one line pointing at the flag, which is what makes the feature discoverable.
+
+Two cosmetic bugs surfaced while checking the output and were fixed at the source rather than per-call: long colour-bar titles collided with the tick labels, so `plotstate` now sets a right margin (as a default that user keyword arguments still override), and multi-panel figures had their subplot titles run into the overall title, fixed with `plot_titlevspan`.
+
 ## Commits
 
 ```

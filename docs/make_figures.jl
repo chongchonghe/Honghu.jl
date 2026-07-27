@@ -46,7 +46,8 @@ function figure_sod(nx=256)
         push!(panels, pl)
     end
     save(plot(panels...; layout=(2, 2), size=(900, 620),
-              plot_title=@sprintf("Sod shock tube at t = %.2f", sim.t)), "sod.png")
+              plot_title=@sprintf("Sod shock tube at t = %.2f", sim.t),
+              plot_titlevspan=0.08), "sod.png")
 end
 
 # --- 2. Order of accuracy on smooth advection -------------------------------
@@ -146,7 +147,8 @@ function figure_kh(n=256)
                                 ylabel=(t == 0.8 ? "y" : "")))
     end
     save(plot(panels...; layout=(1, 3), size=(1050, 380),
-              plot_title="Kelvin-Helmholtz instability, $(n)^2, PPM + SSPRK3"), "kh.png")
+              plot_title="Kelvin-Helmholtz instability, $(n)^2, PPM + SSPRK3",
+              plot_titlevspan=0.14, bottom_margin=5Plots.mm), "kh.png")
 end
 
 # --- 7. Sedov blast: spherical symmetry on a Cartesian grid -----------------
@@ -158,7 +160,7 @@ function figure_sedov(n=96)
     ic = cld(n, 2)
     sl = heatmap(coordinates(g, 1), coordinates(g, 2), permutedims(rho[:, :, ic]);
                  xlabel="x", ylabel="y", aspect_ratio=:equal, c=:viridis,
-                 colorbar_title="density", title="z = 0 slice")
+                 colorbar_title="", title="z = 0 slice", left_margin=5Plots.mm)
     # radial scatter of every cell, against the similarity radius
     r = Float64[]
     d = Float64[]
@@ -172,7 +174,8 @@ function figure_sedov(n=96)
     vline!(rp, [1.15 * (tmax^2)^(1 / 5)]; c=:black, lw=2, ls=:dash,
            label="Sedov-Taylor radius")
     save(plot(sl, rp; layout=(1, 2), size=(1000, 430),
-              plot_title=@sprintf("Sedov blast, %d^3, t = %.3f", n, tmax)), "sedov.png")
+              plot_title=@sprintf("Sedov blast, %d^3, t = %.3f", n, tmax),
+              plot_titlevspan=0.12, bottom_margin=6Plots.mm), "sedov.png")
 end
 
 println("writing figures to $OUT")

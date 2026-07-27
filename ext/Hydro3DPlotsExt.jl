@@ -41,11 +41,12 @@ function Hydro3D.plotstate(sim::Simulation; var::Symbol=:density, slice=nothing,
     data, label = field(sim, var)
     d1, d2, k = _plane(sim, slice)
 
+    # Defaults come first so that anything the caller passes overrides them.
     if d2 == 0                                  # one active direction: line plot
         x = coordinates(g, d1)
-        y = vec(data)
-        return plot(x, y; xlabel=_axislabel(d1), ylabel=label, legend=false,
-                    title=_title(sim, label), lw=2, kwargs...)
+        kw = (; xlabel=_axislabel(d1), ylabel=label, legend=false,
+              title=_title(sim, label), lw=2, kwargs...)
+        return plot(x, vec(data); kw...)
     end
 
     # two or three active directions: heat map of the (d1, d2) plane
@@ -56,10 +57,12 @@ function Hydro3D.plotstate(sim::Simulation; var::Symbol=:density, slice=nothing,
     cb = logscale ? "log10 " * label : label
     ttl = _title(sim, label)
     ndim(g) == 3 && (ttl *= @sprintf("  [%s slice %d]", _axislabel(3), k))
+    # the right margin keeps a long colour-bar title off the tick labels
+    kw = (; xlabel=_axislabel(d1), ylabel=_axislabel(d2), title=ttl,
+          colorbar_title=cb, aspect_ratio=:equal, xlims=extrema(x), ylims=extrema(y),
+          right_margin=4Plots.mm, kwargs...)
     # transpose: Plots wants (y, x) for a heat map of z(x, y)
-    heatmap(x, y, permutedims(z); xlabel=_axislabel(d1), ylabel=_axislabel(d2),
-            title=ttl, colorbar_title=cb, aspect_ratio=:equal,
-            xlims=extrema(x), ylims=extrema(y), kwargs...)
+    heatmap(x, y, permutedims(z); kw...)
 end
 
 function Hydro3D.plotpanels(sim::Simulation; vars=nothing, slice=nothing,

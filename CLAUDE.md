@@ -9,13 +9,22 @@ Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler 
 ## Commands
 
 ```bash
-julia --project=. -t 4 test/runtests.jl           # full suite, ~9 s, 405 tests
-julia --project=. -t auto examples/sod_1d.jl      # run an example
-julia --project=. -t auto docs/make_figures.jl    # regenerate README figures
-julia --project=. -t auto docs/make_animations.jl # regenerate README GIFs
-julia --project=. -t 8 test/benchmarks.jl         # timing table (BenchmarkTools)
-julia --project=. -e 'include("src/Hydro3D.jl")'  # syntax check without precompiling
+julia --project=. -t 4 test/runtests.jl             # full suite, ~9 s, 405 tests
+julia --project=. -t auto test/runtests.jl --figures # ... and redraw docs/figures/
+julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a figure)
+julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
+julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
+julia --project=. -t 8 test/benchmarks.jl           # timing table (BenchmarkTools)
+julia --project=. -e 'include("src/Hydro3D.jl")'    # syntax check without precompiling
 ```
+
+## Scripts and figures
+
+Examples share `examples/common.jl`, which handles the flags (`--no-plot`, `--outdir=DIR`), leaves positional arguments in `OPTS`, sets `GKSwstype` for headless GR, and exposes `PLOTTING`, `outpath`, `saveplot` and `plotting_note`. A new example should `include` it, guard its plotting block with `PLOTTING`, route every output path through `outpath`, and end with `plotting_note()`.
+
+Figures are **on by default** in examples: an example you have to post-process by hand is not much of an example. They are **off by default** in the test suite, because re-running every problem at production resolution costs a couple of minutes and writes files into the repo; `--figures` (or `HYDRO3D_FIGURES=1`) turns them on, and runs `docs/make_figures.jl` in a subprocess so its globals cannot collide with the test session.
+
+Prefer building example figures out of `plotstate` / `plotpanels` rather than raw Plots calls. It keeps the examples short and doubles as documentation for the plotting API.
 
 ## Dependencies
 
