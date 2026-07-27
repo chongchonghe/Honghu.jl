@@ -15,17 +15,50 @@
 # problem is always the HLL star state.
 
 """
-    eddington_factor(f)
+    AbstractClosure
 
-Levermore (1984) M1 closure, `chi(f) = (3 + 4f²) / (5 + 2√(4 - 3f²))`, for the
-reduced flux `f = |F| / (c E)`. Returns `1/3` in the diffusion limit (`f = 0`)
-and `1` in the free-streaming limit (`f = 1`).
+Supertype for the closure that supplies the Eddington factor `chi(f)`:
+[`LevermoreClosure`](@ref) or [`EddingtonClosure`](@ref).
 """
-@inline function eddington_factor(f_in::T) where {T<:AbstractFloat}
+abstract type AbstractClosure end
+
+"""
+    LevermoreClosure()
+
+The M1 closure of Levermore (1984),
+`chi(f) = (3 + 4f²) / (5 + 2√(4 - 3f²))`. Interpolates between `1/3` in the
+diffusion limit and `1` in the free-streaming limit, so radiation travels in
+straight lines and casts shadows. The default.
+"""
+struct LevermoreClosure <: AbstractClosure end
+
+"""
+    EddingtonClosure()
+
+The Eddington (P1) approximation, `chi = 1/3` for every `f`, which makes the
+radiation pressure isotropic everywhere.
+
+This is *not* a two-moment closure in the usual sense: it cannot free-stream and
+will not cast a shadow. It is here because several semi-analytic reference
+solutions are derived under it -- notably the Lowrie & Edwards (2008) radiative
+shock -- so reproducing them requires matching the assumption.
+"""
+struct EddingtonClosure <: AbstractClosure end
+
+"""
+    eddington_factor([closure = LevermoreClosure()], f)
+
+Eddington factor for the reduced flux `f = |F| / (c E)`.
+"""
+@inline function eddington_factor(::LevermoreClosure, f_in::T) where {T<:AbstractFloat}
     f = clamp(f_in, zero(T), one(T))
     ffac = sqrt(4 - 3 * f * f)
     (3 + 4 * f * f) / (5 + 2 * ffac)
 end
+
+@inline eddington_factor(::EddingtonClosure, f::T) where {T<:AbstractFloat} = one(T) / 3
+
+@inline eddington_factor(f::AbstractFloat) = eddington_factor(LevermoreClosure(), f)
 
 """
     EddingtonTensor(diag, aniso, n)
@@ -40,16 +73,19 @@ struct EddingtonTensor{T<:AbstractFloat}
 end
 
 """
-    eddington_tensor(fx, fy, fz) -> EddingtonTensor
+    eddington_tensor([closure = LevermoreClosure()], fx, fy, fz) -> EddingtonTensor
 
-Build the M1 Eddington tensor from the reduced flux vector.
+Build the Eddington tensor from the reduced flux vector.
 """
-@inline function eddington_tensor(fx::T, fy::T, fz::T) where {T<:AbstractFloat}
+@inline function eddington_tensor(cl::AbstractClosure, fx::T, fy::T, fz::T) where {T<:AbstractFloat}
     f = sqrt(fx * fx + fy * fy + fz * fz)
     s = f > zero(T) ? one(T) / f : zero(T)
-    chi = eddington_factor(f)
+    chi = eddington_factor(cl, f)
     EddingtonTensor((1 - chi) / 2, (3 * chi - 1) / 2, SVec(fx * s, fy * s, fz * s))
 end
+
+@inline eddington_tensor(fx::T, fy::T, fz::T) where {T<:AbstractFloat} =
+    eddington_tensor(LevermoreClosure(), fx, fy, fz)
 
 @inline function Base.getindex(T::EddingtonTensor{S}, a::Int, b::Int) where {S}
     d = a == b ? T.diag : zero(S)
@@ -74,17 +110,19 @@ flux) from occurring in cells where the Eddington tensor becomes degenerate.
 end
 
 """
-    hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chat, Val(D)) -> SVec{4}
+    hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chat, Val(D),
+                  closure = LevermoreClosure()) -> SVec{4}
 
 HLL flux of the grey M1 system across one interface with normal along direction
 `D`. Components are `(energy, x-momentum, y-momentum, z-momentum)`.
 """
 @inline function hll_radiation(erL::T, FxL::T, FyL::T, FzL::T,
                                erR::T, FxR::T, FyR::T, FzR::T,
-                               c::T, chat::T, ::Val{D}) where {T<:AbstractFloat,D}
+                               c::T, chat::T, ::Val{D},
+                               cl::AbstractClosure=LevermoreClosure()) where {T<:AbstractFloat,D}
     ci = one(T) / c
-    tL = eddington_tensor(FxL * ci / erL, FyL * ci / erL, FzL * ci / erL)
-    tR = eddington_tensor(FxR * ci / erR, FyR * ci / erR, FzR * ci / erR)
+    tL = eddington_tensor(cl, FxL * ci / erL, FyL * ci / erL, FzL * ci / erL)
+    tR = eddington_tensor(cl, FxR * ci / erR, FyR * ci / erR, FzR * ci / erR)
 
     GL0, SL0 = m1_flux(erL, FxL, FyL, FzL, tL, D)
     GR0, SR0 = m1_flux(erR, FxR, FyR, FzR, tR, D)

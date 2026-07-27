@@ -62,6 +62,7 @@ function radiation_source_step!(U::A, R::A, eos::AbstractEOS, phys::RadiationPhy
     cscale = c / chat
     arad = phys.a_rad
     op = phys.opacity
+    cl = phys.closure
     tol = phys.tolerance
     maxit = phys.max_iterations
     keep_beta = phys.beta_order >= 1 && update_momentum
@@ -199,7 +200,7 @@ function radiation_source_step!(U::A, R::A, eos::AbstractEOS, phys::RadiationPhy
                     # variables and force Julia to box them, which turns every
                     # Newton iteration into a heap allocation.
                     ce = c * Erad
-                    tedd = eddington_tensor(Frad0[1] / ce, Frad0[2] / ce, Frad0[3] / ce)
+                    tedd = eddington_tensor(cl, Frad0[1] / ce, Frad0[2] / ce, Frad0[3] / ce)
                     pl = kP * B
                     kF == kE || (pl += (kF - kE) * Erad)
                     pl *= chat * dt

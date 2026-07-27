@@ -163,8 +163,8 @@ function Base.show(io::IO, sim::Simulation{T}) where {T}
     println(io, "  hydro          : ", sim.hydro_enabled)
     if has_radiation(sim)
         r = sim.radiation
-        println(io, "  radiation      : M1, c = ", r.c, ", chat/c = ", r.chat / r.c,
-                ", beta_order = ", r.beta_order)
+        println(io, "  radiation      : ", nameof(typeof(r.closure)), ", c = ", r.c,
+                ", chat/c = ", r.chat / r.c, ", beta_order = ", r.beta_order)
         println(io, "  opacity        : ", r.opacity)
     else
         println(io, "  radiation      : disabled")

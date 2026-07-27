@@ -9,7 +9,7 @@ Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler 
 ## Commands
 
 ```bash
-julia --project=. -t 4 test/runtests.jl             # full suite, ~9 s, 405 tests
+julia --project=. -t 4 test/runtests.jl             # full suite, ~12 s, 454 tests
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw docs/figures/
 julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a figure)
 julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
@@ -109,7 +109,11 @@ Structure, and why each piece is there:
 - `J11 = -big` (a large finite number) rather than `-Inf` when `tau <= 0`: `Inf` arithmetic in the 2×2 solve produces `NaN`.
 - Floors are applied at the end by moving energy between `Eint` and `Erad`, so total energy is still conserved.
 
-Any change here must keep the `matter_coupling` test passing at `kappa = 1e9`, which takes one step a hundred million times longer than the coupling time.
+Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`, which takes one step a hundred million times longer than the coupling time, and `radhydro_shock`, the Lowrie & Edwards Mach 3 radiative shock. The second is the sensitive one -- its Zel'dovich spike only appears if the velocity-dependent coupling terms, the implicit solve and the shock capturing are all correct together, so it is the test that will catch a subtle regression here.
+
+## Closures
+
+`RadiationPhysics` carries a `closure`. `LevermoreClosure()` is the M1 default. `EddingtonClosure()` fixes `chi = 1/3`, cannot free-stream, and exists only so that reference solutions derived under the P1 approximation can be reproduced -- `radhydro_shock` needs it, exactly as Quokka overrides `ComputeEddingtonFactor` for the same problem. Do not make it the default, and do not use it for anything with a directional radiation field.
 
 ## Style
 

@@ -140,6 +140,111 @@ end
     @test issorted(Tr; rev=true)
 end
 
+@testset "closures" begin
+    # The Eddington closure is isotropic at every reduced flux; Levermore is
+    # not, and that difference is the whole point of using M1.
+    for f in (0.0, 0.3, 0.7, 0.999)
+        @test Hydro3D.eddington_factor(EddingtonClosure(), f) ≈ 1 / 3
+    end
+    @test Hydro3D.eddington_factor(LevermoreClosure(), 0.0) ≈ 1 / 3
+    @test Hydro3D.eddington_factor(LevermoreClosure(), 1.0) ≈ 1.0
+    # the one-argument form must keep meaning Levermore
+    @test Hydro3D.eddington_factor(0.6) == Hydro3D.eddington_factor(LevermoreClosure(), 0.6)
+
+    T = Hydro3D.eddington_tensor(EddingtonClosure(), 1.0, 0.0, 0.0)
+    @test T[1, 1] ≈ 1 / 3
+    @test T[2, 2] ≈ 1 / 3
+    @test T[1, 2] ≈ 0.0 atol = 1e-14
+
+    # P1 cannot free-stream: a beam under the Eddington closure spreads, while
+    # under M1 it stays collimated with |F| = cE.
+    function beam_front(cl)
+        c = 1.0
+        rad = RadiationPhysics(c=c, chat=c, a_rad=1.0, beta_order=0, closure=cl,
+                               opacity=ConstantOpacity(0.0))
+        b = Fixed((1.0, 0.999 * c, 0.0, 0.0))
+        sim = Simulation(n=(256, 1, 1), radiation=rad, hydro=false,
+                         boundaries=Boundaries(Outflow()),
+                         radiation_boundaries=Boundaries((b, Outflow()),
+                                                         (Outflow(), Outflow()),
+                                                         (Outflow(), Outflow())))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=1.0, p=1.0, Erad=1e-10)
+        end
+        run!(sim; tmax=0.5, verbose=false)
+        g = sim.grid
+        er = [sim.R[IERAD, i+g.ng[1], 1, 1] for i in 1:g.n[1]]
+        xs = [(i - 0.5) * g.dx[1] for i in 1:g.n[1]]
+        xs[findlast(>(0.5), er)]
+    end
+    @test beam_front(LevermoreClosure()) ≈ 0.5 rtol = 0.02   # front travels at chat
+    @test beam_front(EddingtonClosure()) < 0.45              # P1 runs slow, c/sqrt(3)
+end
+
+@testset "radiative shock (Lowrie & Edwards Mach 3)" begin
+    # Quokka's RadhydroShock: the most demanding 1D radiation-hydrodynamics
+    # problem here. A Mach 3 shock in an optically thick, strongly coupled
+    # medium, with a radiative precursor ahead of the front and a Zel'dovich
+    # spike behind it where the matter temperature overshoots its downstream
+    # value. The spike only appears if the velocity-dependent coupling, the
+    # implicit solve and the shock capturing are all correct together.
+    xe, rhoe, ve, Tme, Tre = P.radhydro_shock_exact()
+    @test issorted(xe)
+    @test maximum(Tme) ≈ 4.2618 rtol = 1e-4      # the spike, in the reference
+    @test Tre[end] ≈ 3.6617 rtol = 1e-3          # downstream radiation temperature
+
+    errs = Float64[]
+    spikes = Float64[]
+    for nx in (128, 256)
+        sim, tmax = P.radhydro_shock(; nx)
+        run!(sim; tmax, verbose=false)
+        @test sim.t ≈ tmax
+        g = sim.grid
+        x = coordinates(g, 1)
+        Tg = gas_temperature(sim)[:, 1, 1]
+        Tr = radiation_temperature(sim)[:, 1, 1]
+        prim = primitives(sim)
+
+        # relative L1 error in the radiation temperature, Quokka's metric
+        push!(errs, sum(abs, P.interpolate_to(xe, x, Tr) .- Tre) / sum(abs, Tre))
+        push!(spikes, maximum(Tg))
+
+        # the scheme must hold this together without help from the floors
+        @test sim.nrepaired == 0
+        @test all(prim[IRHO, :, 1, 1] .> 0)
+        @test all(prim[IPRE, :, 1, 1] .> 0)
+        @test all(Tr .> 0)
+
+        # upstream and downstream Rankine-Hugoniot states are held by the
+        # boundaries and must survive the interior solve
+        @test prim[IRHO, 2, 1, 1] ≈ 1.0 rtol = 1e-3
+        @test prim[IVX, 2, 1, 1] ≈ 3.0 rtol = 1e-3
+        @test Tg[2] ≈ 1.0 rtol = 1e-2
+        @test prim[IRHO, end-1, 1, 1] ≈ 3.00217 rtol = 5e-3
+        @test Tg[end-1] ≈ 3.6619 rtol = 1e-2
+        # mass flux rho*v is conserved across the shock
+        @test prim[IRHO, 2, 1, 1] * prim[IVX, 2, 1, 1] ≈
+              prim[IRHO, end-1, 1, 1] * prim[IVX, end-1, 1, 1] rtol = 5e-3
+
+        # radiative precursor: the gas ahead of the shock is preheated well
+        # above its upstream temperature
+        ishock = argmax(Tg)
+        @test Tg[max(ishock - 12, 1)] > 1.5
+        # Zel'dovich spike: matter hotter than the downstream state, and hotter
+        # than the radiation at the same place
+        @test Tg[ishock] > 1.03 * Tg[end-1]
+        @test Tg[ishock] > Tr[ishock]
+        # ... and it is a local feature, not a monotone ramp
+        @test Tg[ishock] > Tg[min(ishock + 8, length(Tg))]
+    end
+
+    # Quokka asserts a relative L1 error below 1% at 256 cells
+    @test errs[2] < 0.01
+    @test errs[2] < errs[1]                       # and it converges
+    @test spikes[1] < spikes[2] < 4.2618          # spike sharpens towards the exact value
+    @test spikes[2] > 4.15
+end
+
 @testset "radiation directional isotropy" begin
     # a streaming beam along x, y and z must give identical profiles
     function beam_along(D)

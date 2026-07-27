@@ -71,6 +71,7 @@ export conserved_totals, primitives, gas_temperature, radiation_temperature
 # physics
 export IdealGas, cv_from_mu, RadiationPhysics, Floors
 export ConstantOpacity, PowerLawOpacity, UserOpacity
+export LevermoreClosure, EddingtonClosure
 
 # numerics
 export PCM, PLM, PPM

@@ -25,7 +25,7 @@ include("radiation.jl")
 
 export sod_shock_tube, smooth_advection, kelvin_helmholtz, sedov_blast
 export radiation_streaming, radiation_diffusion, matter_coupling
-export marshak_wave, radiation_shadow
-export sod_exact, diffusion_exact
+export marshak_wave, radiation_shadow, radhydro_shock
+export sod_exact, diffusion_exact, radhydro_shock_exact, interpolate_to
 
 end # module Problems

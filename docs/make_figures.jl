@@ -115,6 +115,38 @@ function figure_marshak(nx=256)
     save(plot(pl; size=(700, 500)), "marshak.png")
 end
 
+# --- 4b. Radiative shock (Lowrie & Edwards Mach 3) --------------------------
+function figure_radshock(nx=256)
+    xe, rhoe, ve, Tme, Tre = P.radhydro_shock_exact()
+    sim, tmax = P.radhydro_shock(; nx)
+    run!(sim; tmax, verbose=false)
+    g = sim.grid
+    x = coordinates(g, 1)
+    Tg = gas_temperature(sim)[:, 1, 1]
+    Tr = radiation_temperature(sim)[:, 1, 1]
+    err = sum(abs, P.interpolate_to(xe, x, Tr) .- Tre) / sum(abs, Tre)
+
+    full = plot(xe, Tme; lw=2, c=:black, label="T_matter, semi-analytic",
+                xlabel="x", ylabel="temperature", legend=:topleft)
+    plot!(full, xe, Tre; lw=2, c=:gray, ls=:dash, label="T_radiation, semi-analytic")
+    scatter!(full, x, Tg; ms=2.2, msw=0, c=1, label="T_matter, Hydro3D")
+    scatter!(full, x, Tr; ms=2.2, msw=0, c=2, label="T_radiation, Hydro3D")
+
+    # the Zel'dovich spike is the reason this test is hard: zoom in on it
+    zoom = plot(xe, Tme; lw=2, c=:black, label="", xlabel="x", ylabel="temperature",
+                xlims=(0.0120, 0.0142), ylims=(3.2, 4.5),
+                title="Zel'dovich spike")
+    plot!(zoom, xe, Tre; lw=2, c=:gray, ls=:dash, label="")
+    scatter!(zoom, x, Tg; ms=3, msw=0, c=1, label="")
+    scatter!(zoom, x, Tr; ms=3, msw=0, c=2, label="")
+
+    save(plot(full, zoom; layout=(1, 2), size=(1050, 450),
+              plot_title=@sprintf("Mach 3 radiative shock, %d cells (relative L1 in T_rad = %.3f%%)",
+                                  nx, 100err),
+              plot_titlevspan=0.09, bottom_margin=5Plots.mm,
+              left_margin=5Plots.mm), "radshock.png")
+end
+
 # --- 5. Shadow: what M1 buys over flux-limited diffusion --------------------
 function figure_shadow()
     sim, tmax = P.radiation_shadow()
@@ -183,6 +215,7 @@ figure_sod()
 figure_convergence()
 figure_diffusion()
 figure_marshak()
+figure_radshock()
 figure_shadow()
 figure_kh()
 figure_sedov()

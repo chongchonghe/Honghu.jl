@@ -149,6 +149,28 @@ The defaults differ deliberately between the two halves of the request. Examples
 
 Two cosmetic bugs surfaced while checking the output and were fixed at the source rather than per-call: long colour-bar titles collided with the tick labels, so `plotstate` now sets a right margin (as a default that user keyword arguments still override), and multi-panel figures had their subplot titles run into the overall title, fixed with `plot_titlevspan`.
 
+## Follow-up: the Lowrie & Edwards radiative shock
+
+Added Quokka's `RadhydroShock` -- the Mach 3 radiative shock of Lowrie & Edwards (2008) -- on request, as the most stringent one-dimensional radiation-hydrodynamics test available.
+
+Reproducing it faithfully needed one feature the code did not have. Quokka overrides `ComputeEddingtonFactor` to return `1/3` for this problem, because the semi-analytic solution is derived under the Eddington (P1) approximation; comparing an M1 run against it would be measuring the closure difference rather than the scheme. So `RadiationPhysics` now carries a `closure`: `LevermoreClosure()` by default, `EddingtonClosure()` for this problem. The change threads a type parameter through the flux sweep and the source term, and the single-argument `eddington_factor` / `eddington_tensor` still mean Levermore, so nothing else moved.
+
+The reference table is vendored at `src/problems/data/lowrie_edwards_shock.txt`, subsampled from Quokka's `extern/LowrieEdwards/shock.txt` -- every sixth point, but every point across the Zel'dovich spike, where the gradients are. `radhydro_shock_exact()` reads it and `interpolate_to` puts a numerical profile on its abscissae, which is how Quokka computes its error norm.
+
+Results, using Quokka's own metric (relative $L_1$ in the radiation temperature, interpolated onto the exact abscissae):
+
+| cells | rel $L_1$ in $T_{\rm rad}$ | Zel'dovich spike | wall time |
+|---:|---:|---:|---:|
+| 64 | 0.62% | 4.017 | 0.1 s |
+| 128 | 0.41% | 4.134 | 0.5 s |
+| 256 | 0.19% | 4.206 | 2.0 s |
+
+against an exact spike of 4.262 and Quokka's pass threshold of 1% at 256 cells. No positivity floors were triggered at any resolution.
+
+The test asserts more than the error norm, because the norm alone would pass on a solution with no spike at all: the upstream and downstream Rankine-Hugoniot states, conservation of the mass flux across the shock, a radiative precursor preheating the gas ahead of the front, a matter temperature that exceeds both its own downstream value and the local radiation temperature at the spike, and convergence of both the error and the spike height with resolution. The closure itself gained a test too -- a beam under P1 must spread and travel at $c/\sqrt{3}$, while under M1 it stays collimated at $\hat{c}$.
+
+The suite is now 454 tests in about 12 s.
+
 ## Commits
 
 ```

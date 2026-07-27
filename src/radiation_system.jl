@@ -3,6 +3,7 @@
 
 """
     RadiationPhysics(; c, chat = c, a_rad, opacity,
+                     closure = LevermoreClosure(),
                      beta_order = 1,
                      tolerance = 1e-9,
                      max_iterations = 100,
@@ -19,17 +20,22 @@ Parameters of the grey two-moment radiation module.
   - `a_rad`   : radiation constant `4σ/c`, so that the equilibrium radiation
     energy density is `a_rad T⁴`.
   - `opacity` : an [`AbstractOpacity`](@ref).
+  - `closure`  : [`LevermoreClosure`](@ref) (the M1 default) or
+    [`EddingtonClosure`](@ref), which fixes `chi = 1/3`. Use the latter only to
+    reproduce reference solutions derived under the P1 approximation; it cannot
+    free-stream.
   - `beta_order` : `1` keeps the `O(v/c)` terms in the matter-radiation coupling
     (radiation force, work, and the comoving-frame corrections); `0` drops them,
     which is appropriate only for a static medium.
   - `tolerance`, `max_iterations`, `max_outer_iterations` : controls of the
     implicit coupling solve (see [`radiation_source_step!`](@ref)).
 """
-struct RadiationPhysics{T<:AbstractFloat,O<:AbstractOpacity}
+struct RadiationPhysics{T<:AbstractFloat,O<:AbstractOpacity,C<:AbstractClosure}
     c::T
     chat::T
     a_rad::T
     opacity::O
+    closure::C
     beta_order::Int
     tolerance::T
     max_iterations::Int
@@ -37,6 +43,7 @@ struct RadiationPhysics{T<:AbstractFloat,O<:AbstractOpacity}
 end
 
 function RadiationPhysics(; c, chat=c, a_rad, opacity,
+                          closure::AbstractClosure=LevermoreClosure(),
                           beta_order::Integer=1,
                           tolerance=1e-9,
                           max_iterations::Integer=100,
@@ -44,7 +51,7 @@ function RadiationPhysics(; c, chat=c, a_rad, opacity,
     0 <= beta_order <= 1 || throw(ArgumentError("beta_order must be 0 or 1, got $beta_order"))
     chat <= c || throw(ArgumentError("the reduced speed of light must satisfy chat <= c"))
     cc, cch, ar, tol = promote(float(c), float(chat), float(a_rad), float(tolerance))
-    RadiationPhysics(cc, cch, ar, opacity, Int(beta_order), tol,
+    RadiationPhysics(cc, cch, ar, opacity, closure, Int(beta_order), tol,
                      Int(max_iterations), Int(max_outer_iterations))
 end
 
@@ -163,6 +170,7 @@ function rad_fluxes!(flux::A, qL::A, qR::A, R::A, phys::RadiationPhysics{T},
     e1, e2, e3 = _shift(Val(D))
     c = phys.c
     chat = phys.chat
+    cl = phys.closure
     ir, jr, kr = face_ranges(g, Val(D))
     threaded_jk(jr, kr) do j, k
         @inbounds for i in ir
@@ -200,7 +208,7 @@ function rad_fluxes!(flux::A, qL::A, qR::A, R::A, phys::RadiationPhysics{T},
                 FzR = R[IFRZ, i, j, k]
             end
 
-            F = hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chat, Val(D))
+            F = hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chat, Val(D), cl)
 
             flux[IERAD, i, j, k] = F[1]
             flux[IFRX, i, j, k] = F[2]
