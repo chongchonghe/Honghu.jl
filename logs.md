@@ -152,14 +152,10 @@ Two cosmetic bugs surfaced while checking the output and were fixed at the sourc
 ## Commits
 
 ```
-39ca4d6 feat: plotting extension, verification figures, animations, benchmarks
-edd13c2 docs: add logs.md recording the request and the implementation
-effec5b chore: ignore .claude worktree directory
-2fc1f79 docs: README, CLAUDE.md and runnable examples
-94cf7b9 test: full test suite; fix HLLC star pressure and source-term boxing
-5353be1 feat: complete Hydro3D solver, driver, I/O and test problems
-6959e39 wip: core physics modules for Hydro3D
+git -C hydro3d.jl log --oneline
 ```
+
+(The list is deliberately not pinned here; it went stale twice.)
 
 The repository was initialised in this session and has no remote, so there is no pull request; the work is on `main` in this directory. Development happened in a git worktree under `.claude/worktrees/` (background-session isolation) and was fast-forwarded onto `main` at the end.
 
