@@ -5,3 +5,6 @@ Manifest.toml
 *.h3d
 .DS_Store
 .claude/
+
+/examples/*.png
+/examples/*.txt
