@@ -142,6 +142,8 @@ Three packages were considered and declined, for reasons recorded in `CLAUDE.md`
 ## Commits
 
 ```
+39ca4d6 feat: plotting extension, verification figures, animations, benchmarks
+edd13c2 docs: add logs.md recording the request and the implementation
 effec5b chore: ignore .claude worktree directory
 2fc1f79 docs: README, CLAUDE.md and runnable examples
 94cf7b9 test: full test suite; fix HLLC star pressure and source-term boxing
