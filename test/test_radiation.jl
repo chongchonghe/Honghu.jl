@@ -122,6 +122,32 @@ end
     @test abs(conserved_totals(still).momentum[1]) < 1e-14
 end
 
+@testset "diagnostics" begin
+    # The implicit solve's convergence behaviour used to be computed and thrown
+    # away: `radiation_source_step!` built a SourceStats, `advance_radiation!`
+    # summed it, and `step!` dropped the value. Nothing in the package read it.
+    sim, tmax = P.radhydro_shock(nx=64)
+    run!(sim; tmax, verbose=false)
+    d = sim.diag
+
+    @test d.steps == sim.step
+    @test d.rad_substeps >= d.steps          # radiation subcycles inside the hydro step
+    @test d.newton_cells == d.rad_substeps * 2 * prod(sim.grid.n)   # two IMEX stages
+    @test d.newton_failures == 0
+    @test d.newton_max >= 1
+    # the reported mean can never exceed the reported worst case -- these used
+    # to be counted per outer iteration and per cell respectively, so on this
+    # problem the mean (4.95) came out above the max (3)
+    @test d.newton_iterations / d.newton_cells <= d.newton_max
+
+    @test nrepaired(sim) == d.floors_hydro + d.floors_rad
+    reset_diagnostics!(sim)
+    @test d.steps == 0 && d.newton_cells == 0 && nrepaired(sim) == 0
+    # ... and the counters resume from zero rather than being frozen
+    step!(sim)
+    @test d.steps == 1 && d.newton_cells > 0
+end
+
 @testset "Marshak wave" begin
     sim, tmax = P.marshak_wave(nx=128)
     run!(sim; tmax, verbose=false)
@@ -210,7 +236,7 @@ end
         push!(spikes, maximum(Tg))
 
         # the scheme must hold this together without help from the floors
-        @test sim.nrepaired == 0
+        @test nrepaired(sim) == 0
         @test all(prim[IRHO, :, 1, 1] .> 0)
         @test all(prim[IPRE, :, 1, 1] .> 0)
         @test all(Tr .> 0)

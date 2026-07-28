@@ -60,7 +60,7 @@ end
         g = sim.grid
         @test all(pr[IRHO, :, 1, 1] .> 0)
         @test all(pr[IPRE, :, 1, 1] .> 0)
-        @test sim.nrepaired == 0            # no help from the positivity floors
+        @test nrepaired(sim) == 0            # no help from the positivity floors
         e = 0.0
         for i in 1:g.n[1]
             xc = (i - 0.5) * g.dx[1]
@@ -105,7 +105,7 @@ end
     @test isapprox(t1.mass, t0.mass; rtol=1e-12)
     @test isapprox(t1.energy_total, t0.energy_total; rtol=1e-12)
     @test isapprox(t1.momentum[1], t0.momentum[1]; atol=1e-12 * t0.mass)
-    @test sim.nrepaired == 0
+    @test nrepaired(sim) == 0
 end
 
 @testset "diagnostics do not perturb the state" begin
@@ -124,7 +124,7 @@ end
 
     sim = mk()
     step!(sim)                       # a state the floors have already touched
-    U0, R0, n0 = copy(sim.U), copy(sim.R), sim.nrepaired
+    U0, R0, n0 = copy(sim.U), copy(sim.R), nrepaired(sim)
 
     for f in (s -> primitives(s), s -> field(s, :density), s -> field(s, :pressure),
               s -> field(s, :temperature), s -> field(s, :mach), s -> gas_temperature(s),
@@ -138,7 +138,7 @@ end
 
     @test sim.U == U0                # bit-identical, not merely close
     @test sim.R == R0
-    @test sim.nrepaired == n0
+    @test nrepaired(sim) == n0
 
     # ... and the trajectory itself is independent of how often you looked
     a, b = mk(), mk()

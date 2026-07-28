@@ -67,6 +67,7 @@ include("problems/Problems.jl")
 # grid and state
 export CartesianGrid, Simulation, set_initial_conditions!, run!, step!, timestep
 export conserved_totals, primitives, gas_temperature, radiation_temperature
+export Diagnostics, reset_diagnostics!, nrepaired
 
 # physics
 export IdealGas, cv_from_mu, RadiationPhysics, Floors

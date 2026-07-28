@@ -132,6 +132,6 @@ Physics changes need a test that would fail without them. The suite already prov
 
 - Analytic comparison where one exists (`sod_exact`, `diffusion_exact`, the radiation drag law).
 - Order-of-accuracy checks rather than fixed error thresholds, where the answer is only asymptotically right.
-- Invariants that must hold exactly: conservation on periodic boundaries, direction isotropy, `|F| <= cE`, positivity without floor repairs (`sim.nrepaired == 0`).
+- Invariants that must hold exactly: conservation on periodic boundaries, direction isotropy, `|F| <= cE`, positivity without floor repairs (`nrepaired(sim) == 0`), and state that a read cannot perturb (`sim.U == U0` after every accessor).
 
 Prefer the last kind. They catch real bugs and do not need retuning when the scheme improves.

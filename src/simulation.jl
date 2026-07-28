@@ -12,6 +12,74 @@
 # `|v| + c_s`.
 
 """
+    Diagnostics
+
+Running counters describing how hard the solver had to work, accumulated from
+construction and reported by [`run!`](@ref). Read them off `sim.diag`, or reset
+them with [`reset_diagnostics!`](@ref).
+
+| field | meaning |
+|:---|:---|
+| `steps` | steps taken |
+| `rad_substeps` | IMEX radiation substeps taken |
+| `floors_hydro` | cell updates that hit a gas density or pressure floor |
+| `floors_rad` | cell updates projected back onto the M1 admissible set |
+| `newton_cells` | cells passed through the implicit coupling solve |
+| `newton_iterations` | Newton iterations summed over those cells |
+| `newton_max` | worst-case Newton iterations in any one cell |
+| `newton_failures` | cells that hit `max_iterations` without converging |
+
+A handful of floor hits is normal wherever the solution genuinely reaches
+vacuum. `newton_failures > 0` is not: it means the implicit solve gave up, and
+the run should not be trusted.
+"""
+mutable struct Diagnostics
+    steps::Int
+    rad_substeps::Int
+    floors_hydro::Int
+    floors_rad::Int
+    newton_cells::Int
+    newton_iterations::Int
+    newton_max::Int
+    newton_failures::Int
+end
+
+Diagnostics() = Diagnostics(0, 0, 0, 0, 0, 0, 0, 0)
+
+"""
+    reset_diagnostics!(sim) -> Diagnostics
+
+Zero the counters in `sim.diag`. Useful when timing or scoring a phase of a run
+separately from the transient that preceded it.
+"""
+function reset_diagnostics!(sim)
+    d = sim.diag
+    d.steps = d.rad_substeps = d.floors_hydro = d.floors_rad = 0
+    d.newton_cells = d.newton_iterations = d.newton_max = d.newton_failures = 0
+    return d
+end
+
+@inline function _record!(d::Diagnostics, s::SourceStats)
+    d.newton_cells += s.cells
+    d.newton_iterations += s.newton_iterations
+    d.newton_max = max(d.newton_max, s.max_newton)
+    d.newton_failures += s.failures
+    return d
+end
+
+function Base.show(io::IO, d::Diagnostics)
+    print(io, "Diagnostics(steps = ", d.steps)
+    d.rad_substeps > 0 && print(io, ", rad_substeps = ", d.rad_substeps)
+    print(io, ", floors = ", d.floors_hydro, " gas / ", d.floors_rad, " rad")
+    if d.newton_cells > 0
+        @printf(io, ", newton = %.2f mean / %d max", d.newton_iterations / d.newton_cells,
+                d.newton_max)
+        d.newton_failures > 0 && print(io, ", ", d.newton_failures, " FAILURES")
+    end
+    print(io, ")")
+end
+
+"""
     HydroWorkspace{T}
 
 Scratch arrays for the hydrodynamic sweeps. Allocated once per simulation.
@@ -111,10 +179,10 @@ mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
     const R::Array{T,4}
     const hw::HydroWorkspace{T}
     const rw::RW
+    const diag::Diagnostics
     t::T
     dt::T
     step::Int
-    nrepaired::Int
 end
 
 function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
@@ -140,7 +208,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     Simulation(grid, eos, radiation, reconstruction, integrator, boundaries,
                radiation_boundaries, source, fl, T(cfl), T(cfl_radiation),
                Int(max_radiation_substeps), hydro, U, Rarr,
-               HydroWorkspace(grid), rw, zero(T), zero(T), 0, 0)
+               HydroWorkspace(grid), rw, Diagnostics(), zero(T), zero(T), 0)
 end
 
 """
@@ -268,7 +336,7 @@ directional sweep per active dimension.
 function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
     g = sim.grid
     fill_ghosts!(U, sim.boundaries, g, sim.t)
-    sim.nrepaired += enforce_floors!(U, sim.eos, g, sim.floors)
+    sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors)
     cons2prim!(sim.hw.prim, U, sim.eos, g)
     fill!(dU, zero(T))
     g.active[1] && _hydro_sweep!(dU, sim, Val(1))
@@ -296,7 +364,7 @@ solver always satisfies `E > 0` and `|F| < cE`.
 function rad_rhs!(dR::Array{T,4}, R::Array{T,4}, sim::Simulation{T}, t::T) where {T}
     g = sim.grid
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
-    sim.nrepaired += enforce_rad_floors!(R, sim.radiation, g, sim.floors)
+    sim.diag.floors_rad += enforce_rad_floors!(R, sim.radiation, g, sim.floors)
     rad_cons2prim!(sim.rw.prim, R, sim.radiation, g)
     fill!(dR, zero(T))
     g.active[1] && _rad_sweep!(dR, R, sim, Val(1))
@@ -375,6 +443,8 @@ function advance_radiation!(sim::Simulation{T}, dt::T) where {T}
         stats += imex_substep!(sim, dts, tt)
         tt += dts
     end
+    sim.diag.rad_substeps += nsub
+    _record!(sim.diag, stats)
     return stats
 end
 
@@ -427,8 +497,18 @@ function step!(sim::Simulation{T}, dt::Real=timestep(sim)) where {T}
     sim.t += dtT
     sim.dt = dtT
     sim.step += 1
+    sim.diag.steps += 1
     return dtT
 end
+
+"""
+    nrepaired(sim) -> Int
+
+Total cell updates that hit a positivity floor, gas and radiation together.
+Zero is the invariant worth asserting in a test: a scheme that needs no help
+from the floors is one whose positivity you have actually verified.
+"""
+nrepaired(sim::Simulation) = sim.diag.floors_hydro + sim.diag.floors_rad
 
 """
     enforce_state!(sim) -> Int
@@ -442,9 +522,16 @@ driver.
 """
 function enforce_state!(sim::Simulation)
     n = 0
-    sim.hydro_enabled && (n += enforce_floors!(sim.U, sim.eos, sim.grid, sim.floors))
-    has_radiation(sim) && (n += amend_rad_state!(sim.R, sim.radiation, sim.grid, sim.floors))
-    sim.nrepaired += n
+    if sim.hydro_enabled
+        m = enforce_floors!(sim.U, sim.eos, sim.grid, sim.floors)
+        sim.diag.floors_hydro += m
+        n += m
+    end
+    if has_radiation(sim)
+        m = amend_rad_state!(sim.R, sim.radiation, sim.grid, sim.floors)
+        sim.diag.floors_rad += m
+        n += m
+    end
     return n
 end
 
@@ -501,18 +588,32 @@ function run!(sim::Simulation{T}; tmax, dtout=nothing, maxsteps::Integer=typemax
     if outdir !== nothing && !writing
         write_vtk(sim, joinpath(outdir, @sprintf("%s_%05d", basename, nout)))
     end
-    if verbose
-        el = time() - t0
-        ncell = prod(sim.grid.n)
-        @printf("done: %d steps, t = %.6g, %.2f s (%.3g cell-updates/s)\n",
-                sim.step, sim.t, el, el > 0 ? ncell * sim.step / el : 0.0)
-        # A handful of floor hits is normal wherever the solution genuinely
-        # reaches vacuum (deep shadows, the interior of a blast). A count
-        # comparable to the number of cell updates means the run is unphysical.
-        sim.nrepaired > 0 && @printf("note: %d cell updates hit a positivity floor\n",
-                                     sim.nrepaired)
-    end
+    verbose && _print_summary(sim, time() - t0)
     return sim
+end
+
+function _print_summary(sim::Simulation, elapsed)
+    d = sim.diag
+    ncell = prod(sim.grid.n)
+    @printf("done: %d steps, t = %.6g, %.2f s (%.3g cell-updates/s)\n",
+            sim.step, sim.t, elapsed, elapsed > 0 ? ncell * sim.step / elapsed : 0.0)
+    # A handful of floor hits is normal wherever the solution genuinely reaches
+    # vacuum (deep shadows, the interior of a blast). A count comparable to the
+    # number of cell updates means the run is unphysical.
+    nfl = d.floors_hydro + d.floors_rad
+    nfl > 0 && @printf("note: %d cell updates hit a positivity floor (%d gas, %d radiation)\n",
+                       nfl, d.floors_hydro, d.floors_rad)
+    if d.newton_cells > 0
+        @printf("      implicit coupling: %.2f Newton iterations per cell, %d worst case, %d substeps\n",
+                d.newton_iterations / d.newton_cells, d.newton_max, d.rad_substeps)
+        # Not a note. A cell that exhausted `max_iterations` did not solve the
+        # coupling, so the energy exchange in it is whatever the last iterate
+        # happened to be.
+        d.newton_failures > 0 &&
+            @printf("WARNING: the implicit solve failed to converge in %d cell updates\n",
+                    d.newton_failures)
+    end
+    return nothing
 end
 
 function _print_header(sim::Simulation, tend)

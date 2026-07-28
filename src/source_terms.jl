@@ -21,6 +21,14 @@
     SourceStats(cells, newton_iterations, max_newton, failures)
 
 Diagnostics returned by [`radiation_source_step!`](@ref).
+
+`newton_iterations` is the total over all cells and `max_newton` the worst any
+single cell needed, both counted *per cell* rather than per outer iteration, so
+`newton_iterations / cells <= max_newton` always holds. `failures` counts cells
+that exhausted `max_iterations` without converging; those cells did not solve
+the coupling at all.
+
+Accumulated into [`Diagnostics`](@ref) by `advance_radiation!`.
 """
 struct SourceStats
     cells::Int
@@ -104,6 +112,7 @@ function radiation_source_step!(U::A, R::A, eos::AbstractEOS, phys::RadiationPhy
             Erad = Erad0
             Frad = Frad0
             mom1 = mom0
+            citers = 0                # Newton iterations spent on *this* cell
 
             for outer in 1:maxouter
                 Eint = Eint0
@@ -179,8 +188,7 @@ function radiation_source_step!(U::A, R::A, eos::AbstractEOS, phys::RadiationPhy
                     end
                     n += 1
                 end
-                iters += n + 1
-                worst = max(worst, n + 1)
+                citers += n + 1
                 converged || (fails += 1)
 
                 # keep the opacities and emission consistent with the solution
@@ -235,6 +243,11 @@ function radiation_source_step!(U::A, R::A, eos::AbstractEOS, phys::RadiationPhy
                     break
                 end
             end
+
+            # Counted per cell, not per outer iteration, so that the reported
+            # mean can never exceed the reported worst case.
+            iters += citers
+            worst = max(worst, citers)
 
             # --- store, enforcing floors while conserving total energy --------
             if Erad < floors.erad
