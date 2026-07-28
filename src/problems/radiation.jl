@@ -4,7 +4,8 @@
 # readable; nothing in the code depends on that choice.
 
 """
-    radiation_streaming(; nx = 128, chat_over_c = 1.0, kwargs...) -> (sim, tmax)
+    radiation_streaming(; nx = 128, chat_over_c = 1.0, closure = LevermoreClosure(),
+                        beta_order = 0, kwargs...) -> (sim, tmax)
 
 Free-streaming limit: radiation injected at the left boundary of a transparent
 (`kappa = 0`), static medium. The front must advance at exactly `chat` while
@@ -13,11 +14,13 @@ differs from flux-limited diffusion.
 
 At `tmax = 0.5` the front sits at `x = 0.5 chat`.
 """
-function radiation_streaming(; nx::Integer=128, chat_over_c=1.0, kwargs...)
+function radiation_streaming(; nx::Integer=128, chat_over_c=1.0,
+                             closure::AbstractClosure=LevermoreClosure(),
+                             beta_order::Integer=0, kwargs...)
     c = 1.0
     E0 = 1.0
-    rad = RadiationPhysics(; c=c, chat=c * chat_over_c, a_rad=1.0,
-                           opacity=ConstantOpacity(0.0), beta_order=0)
+    rad = RadiationPhysics(; c=c, chat=c * chat_over_c, a_rad=1.0, closure, beta_order,
+                           opacity=ConstantOpacity(0.0))
     # ghost state: a beam at (very nearly) the causal limit
     beam = Fixed((E0, 0.999 * c * E0, 0.0, 0.0))
     sim = Simulation(; n=(nx, 1, 1), xhi=(1.0, 1.0, 1.0),
@@ -34,7 +37,8 @@ function radiation_streaming(; nx::Integer=128, chat_over_c=1.0, kwargs...)
 end
 
 """
-    radiation_diffusion(; nx = 128, kappa = 300.0, sigma0 = 0.05, kwargs...)
+    radiation_diffusion(; nx = 128, kappa = 300.0, sigma0 = 0.05,
+                        closure = LevermoreClosure(), beta_order = 0, kwargs...)
         -> (sim, tmax)
 
 Static-diffusion limit: a Gaussian pulse of radiation energy in a periodic,
@@ -49,9 +53,11 @@ the answer must not depend on how many mean free paths a cell spans.
 Note that a reduced speed of light rescales `D` by `chat/c`, so this problem is
 set up with `chat = c`.
 """
-function radiation_diffusion(; nx::Integer=128, kappa=300.0, sigma0=0.05, E0=1.0, kwargs...)
+function radiation_diffusion(; nx::Integer=128, kappa=300.0, sigma0=0.05, E0=1.0,
+                             closure::AbstractClosure=LevermoreClosure(),
+                             beta_order::Integer=0, kwargs...)
     c = 1.0
-    rad = RadiationPhysics(; c=c, chat=c, a_rad=1.0, beta_order=0,
+    rad = RadiationPhysics(; c=c, chat=c, a_rad=1.0, closure, beta_order,
                            opacity=ConstantOpacity(planck=0.0, energy=0.0, flux=kappa))
     sim = Simulation(; n=(nx, 1, 1), xhi=(1.0, 1.0, 1.0),
                      radiation=rad, hydro=false,
@@ -99,7 +105,8 @@ function matter_coupling(; kappa=1e3, T_gas=1.0, T_rad=0.1, cv=1.0, gamma=5 / 3,
 end
 
 """
-    marshak_wave(; nx = 256, kappa = 300.0, T_wall = 1.0, cv = 1.0, kwargs...)
+    marshak_wave(; nx = 256, kappa = 300.0, T_wall = 1.0, cv = 1.0,
+                 closure = LevermoreClosure(), beta_order = 0, kwargs...)
         -> (sim, tmax)
 
 A non-equilibrium Marshak wave: a cold, static, optically thick slab heated from
@@ -112,9 +119,11 @@ The wall is imposed as a Dirichlet condition on the radiation moments,
 set by the jump across the boundary.
 """
 function marshak_wave(; nx::Integer=256, kappa=300.0, T_wall=1.0, T_init=1e-4,
-                      cv=1.0, gamma=5 / 3, kwargs...)
+                      cv=1.0, gamma=5 / 3,
+                      closure::AbstractClosure=LevermoreClosure(),
+                      beta_order::Integer=0, kwargs...)
     a_rad = 1.0
-    rad = RadiationPhysics(; c=1.0, chat=1.0, a_rad=a_rad, beta_order=0,
+    rad = RadiationPhysics(; c=1.0, chat=1.0, a_rad=a_rad, closure, beta_order,
                            opacity=ConstantOpacity(kappa))
     wall = Fixed((a_rad * T_wall^4, 0.0, 0.0, 0.0))
     sim = Simulation(; n=(nx, 1, 1), xhi=(1.0, 1.0, 1.0),
@@ -131,7 +140,8 @@ function marshak_wave(; nx::Integer=256, kappa=300.0, T_wall=1.0, T_init=1e-4,
 end
 
 """
-    radhydro_shock(; nx = 256, kwargs...) -> (sim, tmax)
+    radhydro_shock(; nx = 256, closure = EddingtonClosure(), beta_order = 1,
+                   chat_factor = 10.0, kwargs...) -> (sim, tmax)
 
 The Mach 3 radiative shock of Lowrie & Edwards (2008), in the form used by
 Quokka's `RadhydroShock` test. This is the most demanding one-dimensional
@@ -157,10 +167,18 @@ the shock is initialised slightly left of where it settles, because it drifts a
 little during the run.
 
 Runs with [`EddingtonClosure`](@ref) rather than M1, to match the assumption the
-semi-analytic solution is derived under. Compare against
-[`radhydro_shock_exact`](@ref); `tmax` is three shock-crossing times.
+semi-analytic solution is derived under -- exactly as Quokka overrides
+`ComputeEddingtonFactor` for this problem. Pass `closure = LevermoreClosure()`
+to measure what that assumption costs; the difference is the closure error, not
+a scheme error. `chat_factor` scales the reduced speed of light, whose default
+of `10 (v_0 + c_s0)` is Quokka's.
+
+Compare against [`radhydro_shock_exact`](@ref); `tmax` is three shock-crossing
+times.
 """
-function radhydro_shock(; nx::Integer=256, kwargs...)
+function radhydro_shock(; nx::Integer=256,
+                        closure::AbstractClosure=EddingtonClosure(),
+                        beta_order::Integer=1, chat_factor=10.0, kwargs...)
     a_rad = 1.0e-4
     sigma_a = 1.0e6
     c_s0 = 1.0
@@ -178,13 +196,12 @@ function radhydro_shock(; nx::Integer=256, kwargs...)
     rho1 = 3.0021676971081166
     v1 = v0 * rho0 / rho1
 
-    chat = 10 * (v0 + c_s0)
+    chat = chat_factor * (v0 + c_s0)
     Lx = 0.01578396467532876                      # 9.11 mean free paths
     shock_position = 0.0130
 
     eos = IdealGas(; gamma, cv)
-    rad = RadiationPhysics(; c, chat, a_rad, beta_order=1,
-                           closure=EddingtonClosure(),
+    rad = RadiationPhysics(; c, chat, a_rad, closure, beta_order,
                            opacity=UserOpacity((rho, T) -> kappa_abs / rho))
 
     egas(rho, T) = rho * cv * T
@@ -209,7 +226,8 @@ function radhydro_shock(; nx::Integer=256, kwargs...)
 end
 
 """
-    radiation_shadow(; n = (280, 112), kappa = 1.0, rho_blob = 1e3, kwargs...)
+    radiation_shadow(; n = (280, 112), kappa = 1.0, rho_blob = 1e3,
+                     closure = LevermoreClosure(), beta_order = 0, kwargs...)
         -> (sim, tmax)
 
 The shadow test of Hayes & Norman (2003) in 2D: a collimated beam enters from
@@ -225,10 +243,12 @@ cell and so cannot represent the two crossing beams that meet there.
 The clump is given a very large heat capacity so that it absorbs without
 re-emitting, which isolates the transport.
 """
-function radiation_shadow(; n=(280, 112), kappa=1.0, rho_blob=1e3, rho_bg=1e-2, kwargs...)
+function radiation_shadow(; n=(280, 112), kappa=1.0, rho_blob=1e3, rho_bg=1e-2,
+                          closure::AbstractClosure=LevermoreClosure(),
+                          beta_order::Integer=0, kwargs...)
     c = 1.0
     E0 = 1.0
-    rad = RadiationPhysics(; c=c, chat=c, a_rad=1.0, beta_order=0,
+    rad = RadiationPhysics(; c=c, chat=c, a_rad=1.0, closure, beta_order,
                            opacity=ConstantOpacity(kappa))
     beam = Fixed((E0, 0.999 * c * E0, 0.0, 0.0))
     sim = Simulation(; n=(n[1], n[2], 1), xlo=(0.0, -0.2, 0.0), xhi=(1.0, 0.2, 1.0),

@@ -122,6 +122,40 @@ end
     @test abs(conserved_totals(still).momentum[1]) < 1e-14
 end
 
+@testset "problem factories expose their physics" begin
+    # A factory builds its own RadiationPhysics from constants that exist only
+    # in its body, so overriding the whole object means re-deriving them -- and
+    # getting one wrong gives a *running* simulation with different physics
+    # rather than an error. The knobs worth varying are named keywords instead.
+    @test P.radhydro_shock(nx=16)[1].radiation.closure isa EddingtonClosure
+    @test P.radhydro_shock(nx=16, closure=LevermoreClosure())[1].radiation.closure isa
+          LevermoreClosure
+    @test P.radhydro_shock(nx=16, beta_order=0)[1].radiation.beta_order == 0
+
+    # chat_factor scales the reduced speed of light, so it scales the substep count
+    chat(f) = P.radhydro_shock(nx=16, chat_factor=f)[1].radiation.chat
+    @test chat(20.0) ≈ 2 * chat(10.0)
+
+    for f in (P.radiation_streaming, P.radiation_diffusion, P.marshak_wave,
+              P.radiation_shadow)
+        @test f(closure=EddingtonClosure())[1].radiation.closure isa EddingtonClosure
+        @test f(beta_order=1)[1].radiation.beta_order == 1
+        @test f()[1].radiation.closure isa LevermoreClosure   # default unchanged
+    end
+
+    # and the override reaches the solver, not just the struct
+    spike(cl) = begin
+        sim, tmax = P.radhydro_shock(nx=128, closure=cl)
+        run!(sim; tmax, verbose=false)
+        maximum(gas_temperature(sim)[:, 1, 1])
+    end
+    # optically thick and nearly isotropic here, so M1 and P1 agree closely --
+    # but the run must actually differ, or the keyword is doing nothing
+    sM1, sP1 = spike(LevermoreClosure()), spike(EddingtonClosure())
+    @test sM1 != sP1
+    @test isapprox(sM1, sP1; rtol=1e-3)
+end
+
 @testset "diagnostics" begin
     # The implicit solve's convergence behaviour used to be computed and thrown
     # away: `radiation_source_step!` built a SourceStats, `advance_radiation!`
