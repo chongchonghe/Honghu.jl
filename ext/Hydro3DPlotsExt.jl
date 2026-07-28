@@ -4,14 +4,15 @@
 Plotting methods for Hydro3D, loaded automatically when Plots is available.
 
 Provides methods for [`Hydro3D.plotstate`](@ref), [`Hydro3D.plotpanels`](@ref)
-and [`Hydro3D.animate_run`](@ref), plus a Plots recipe so that `plot(sim)`
-works directly.
+[`Hydro3D.animate_run`](@ref) and [`Hydro3D.plotcompare`](@ref), plus a Plots
+recipe so that `plot(sim)` works directly.
 """
 module Hydro3DPlotsExt
 
 using Hydro3D
 using Hydro3D: Simulation, CartesianGrid, ndim, field, coordinates, has_radiation,
-               available_fields
+               available_fields, ComparisonTable, read_comparison, convergence_rate,
+               variants
 using Plots
 using Printf
 
@@ -124,6 +125,68 @@ end
         aspect_ratio --> :equal
         return coordinates(g, d1), coordinates(g, d2), permutedims(z)
     end
+end
+
+# --- comparison tables -------------------------------------------------------
+
+# Columns that describe how the run went rather than how good it was. They are
+# worth storing next to the metrics -- a variant that wins only because it took
+# ten times as long should be visible -- but they do not belong on a
+# convergence plot.
+const _BOOKKEEPING = ("size", "cells", "steps", "wall_s", "floors",
+                      "newton_mean", "newton_max", "newton_failures")
+
+Hydro3D.plotcompare(path::AbstractString; kwargs...) =
+    Hydro3D.plotcompare(read_comparison(path); kwargs...)
+
+function Hydro3D.plotcompare(t::ComparisonTable; metric=nothing, kwargs...)
+    isempty(t) && throw(ArgumentError("plotcompare: the table is empty"))
+    ms = metric === nothing ? filter(c -> !(c in _BOOKKEEPING), t.columns) :
+         [String(metric)]
+    isempty(ms) && throw(ArgumentError("plotcompare: the table has no metric columns"))
+
+    vs = variants(t)
+    sizes = t[:size]
+    # tick at the resolutions actually run: log decades are useless when the
+    # sweep spans less than one
+    ticks = sort!(unique(sizes))
+
+    # Not every metric is an error. `spike` converges *to* 4.26 rather than to
+    # zero, so a log-log slope through it is a number with no meaning. Treat a
+    # metric as an error only where it actually falls under refinement, and
+    # quote a rate only for the variants where it falls monotonically -- M1
+    # scored against a P1 reference converges to the wrong answer, and its
+    # non-monotone error should not be labelled with a rate either.
+    _decreasing(y) = length(y) >= 2 && all(y[i+1] < y[i] for i in 1:length(y)-1)
+    _byvariant(m) = [(v, findall(==(v), t.variant)) for v in vs]
+
+    panels = map(ms) do m
+        y = t[m]
+        errorlike = all(>(0), y) &&
+                    any(_decreasing(y[k]) for (_, k) in _byvariant(m))
+        pl = plot(; xscale=:log10, yscale=(errorlike ? :log10 : :identity),
+                  xlabel="cells per side", ylabel=m,
+                  xticks=(ticks, string.(Int.(ticks))), legend=:best)
+        for (i, (v, k)) in enumerate(_byvariant(m))
+            o = sortperm(sizes[k])
+            k = k[o]
+            lbl = errorlike && _decreasing(y[k]) ?
+                  @sprintf("%s  (rate %.2f)", v, convergence_rate(t, m; variant=v)) : v
+            plot!(pl, sizes[k], y[k]; marker=:circle, ms=4, lw=2, c=i, label=lbl)
+        end
+        pl
+    end
+
+    # Stamp the code version onto the figure. A convergence plot without one is
+    # a number you cannot go back to.
+    code = something(findfirst(p -> first(p) == "code", t.meta), 0)
+    stamp = code == 0 ? "" : "   [" * last(t.meta[code]) * "]"
+    n = length(panels)
+    defaults = (; layout=(1, n), size=(460n + 80, 440),
+                plot_title=t.problem * stamp, plot_titlefontsize=11,
+                plot_titlevspan=0.09, bottom_margin=6Plots.mm, left_margin=8Plots.mm,
+                right_margin=4Plots.mm)
+    plot(panels...; defaults..., kwargs...)
 end
 
 end # module Hydro3DPlotsExt

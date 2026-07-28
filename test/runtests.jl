@@ -3,7 +3,8 @@ using Hydro3D
 using Hydro3D: SVec, dot, norm, minmod, limit, ppm_edges, eddington_factor,
                eddington_tensor, hllc, hll_radiation, cell_ranges, face_ranges,
                NHYDRO, NRAD, IRHO, IVX, IPRE, IERAD, IFRX, IFRY, cons2prim, prim2cons,
-               reconstruct!, required_ghosts, allocate, cellcenter, fill_ghosts!
+               reconstruct!, required_ghosts, allocate, cellcenter, fill_ghosts!,
+               variants, rows
 const P = Hydro3D.Problems
 
 @testset "Hydro3D" begin
@@ -16,6 +17,7 @@ const P = Hydro3D.Problems
     include("test_io.jl")
     include("test_plotting.jl")
     include("test_extensions.jl")
+    include("test_compare.jl")
     include("test_performance.jl")
 end
 

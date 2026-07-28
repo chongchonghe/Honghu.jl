@@ -40,6 +40,7 @@ run!(sim, tmax = 2.0, outdir = "kh", dtout = 0.02)
 module Hydro3D
 
 using Printf
+using Dates          # provenance timestamps only; a stdlib, not a package
 
 # --- core types and kernels --------------------------------------------------
 include("staticvec.jl")
@@ -61,6 +62,7 @@ include("simulation.jl")
 include("output.jl")
 include("plotting.jl")
 include("metrics.jl")
+include("compare.jl")
 include("problems/Problems.jl")
 
 # --- public API --------------------------------------------------------------
@@ -86,8 +88,10 @@ export Boundaries, Periodic, Outflow, Reflecting, Fixed
 # output
 export write_vtk, write_line, save_checkpoint, load_checkpoint!
 
-# metrics
+# metrics and comparison
 export relative_l1, relative_l2, default_metrics
+export compare, ComparisonTable, write_comparison, read_comparison, convergence_rate
+export plotcompare
 
 # fields and plotting (plotting methods require `using Plots`)
 export field, available_fields, coordinates

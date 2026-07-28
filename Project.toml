@@ -4,6 +4,7 @@ authors = ["ChongChong He <che1234@umd.edu> and contributors"]
 version = "0.1.0"
 
 [deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
 # Plotting is a weak dependency: `plotstate`, `plotpanels` and `animate_run`

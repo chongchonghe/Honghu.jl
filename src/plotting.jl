@@ -152,8 +152,29 @@ animate_run(sim; tmax, var = :density, filename = "kh.gif")
 """
 function animate_run end
 
+"""
+    plotcompare(table_or_path; metric = nothing, kwargs...)
+
+Plot a [`ComparisonTable`](@ref): each metric against resolution, one line per
+variant, on log-log axes with the measured convergence rate in the legend.
+
+Accepts a table or the path to one written by [`compare`](@ref), so a figure can
+be redrawn from stored numbers without re-running any simulation:
+
+```julia
+using Plots, Hydro3D
+plotcompare("radhydro_shock_compare.txt")
+```
+
+Pass `metric` to draw one panel instead of all of them.
+
+**Requires `using Plots`.**
+"""
+function plotcompare end
+
 # Informative fallbacks. The extension's methods are more specific, so they win
 # whenever Plots is loaded.
 plotstate(::Any...; kwargs...) = error("plotstate: ", _PLOTS_HINT)
 plotpanels(::Any...; kwargs...) = error("plotpanels: ", _PLOTS_HINT)
 animate_run(::Any...; kwargs...) = error("animate_run: ", _PLOTS_HINT)
+plotcompare(::Any...; kwargs...) = error("plotcompare: ", _PLOTS_HINT)
