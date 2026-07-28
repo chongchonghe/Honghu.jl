@@ -89,6 +89,18 @@ end
 struct ToyClosure <: Hydro3D.AbstractClosure end
 Hydro3D.eddington_factor(::ToyClosure, f) = (1 + 2 * f^2) / 3
 
+# AbstractRiemannSolver: one method. This is LLF.
+struct ToySolver <: Hydro3D.AbstractRiemannSolver end
+function Hydro3D.riemann_flux(::ToySolver, sL::HydroState, sR::HydroState, gamma, du, dw)
+    Sp = max(abs(sL.u) + sL.cs, abs(sR.u) + sR.cs)
+    z, o = zero(Sp), one(Sp)
+    U_L = Hydro3D.SVec(sL.rho, sL.rho * sL.u, sL.rho * sL.v, sL.rho * sL.w, sL.E)
+    U_R = Hydro3D.SVec(sR.rho, sR.rho * sR.u, sR.rho * sR.v, sR.rho * sR.w, sR.E)
+    F_L = sL.u * U_L + sL.P * Hydro3D.SVec(z, o, z, z, sL.u)
+    F_R = sR.u * U_R + sR.P * Hydro3D.SVec(z, o, z, z, sR.u)
+    (F_L + F_R) / 2 - (Sp / 2) * (U_R - U_L)
+end
+
 # --- harnesses ---------------------------------------------------------------
 
 # A short shock tube. Three steps is enough: the state has been through the
@@ -167,6 +179,14 @@ end
               _hydro3(boundaries=Boundaries(Outflow()))
         @test _hydro3(boundaries=Boundaries(ToyBC())) !=
               _hydro3(boundaries=Boundaries(Reflecting()))
+    end
+
+    @testset "AbstractRiemannSolver" begin
+        @test _hydro3(riemann=ToySolver()) == _hydro3(riemann=LLF())
+        @test _hydro3(riemann=ToySolver()) != _hydro3(riemann=HLLC())
+        @test _hydro3() == _hydro3(riemann=HLLC())          # HLLC is the default
+        # the solver is a compile-time property of the simulation type
+        @test Simulation(n=(8, 1, 1), riemann=LLF()).riemann isa LLF
     end
 
     @testset "AbstractClosure" begin

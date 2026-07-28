@@ -2,7 +2,8 @@
 #
 # One step is operator-split into
 #
-#   1. an explicit SSP-RK update of the Euler equations (HLLC fluxes), then
+#   1. an explicit SSP-RK update of the Euler equations (fluxes from the
+#      chosen AbstractRiemannSolver), then
 #   2. a sequence of IMEX PD-ARS radiation substeps, each of which transports
 #      the radiation moments explicitly (HLL + M1) and couples them to the
 #      matter implicitly.
@@ -143,6 +144,7 @@ A three-dimensional (radiation-)hydrodynamics simulation.
 # Numerics
   - `reconstruction = PPM()` : [`PCM`](@ref), [`PLM`](@ref) or [`PPM`](@ref).
     Sets the ghost-cell width.
+  - `riemann = HLLC()` : interface flux solver, [`HLLC`](@ref) or [`LLF`](@ref).
   - `integrator = SSPRK3()`  : explicit integrator for the hydro subsystem.
   - `boundaries = Boundaries(Outflow())`, `radiation_boundaries = boundaries`.
   - `cfl = 0.4`, `cfl_radiation = 0.3`.
@@ -161,11 +163,12 @@ run!(sim, tmax = 0.5)
 ```
 """
 mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
-                          IN<:AbstractIntegrator,BH,BR,SRC,RW}
+                          RS<:AbstractRiemannSolver,IN<:AbstractIntegrator,BH,BR,SRC,RW}
     const grid::CartesianGrid{T}
     const eos::E
     const radiation::RP
     const reconstruction::RC
+    const riemann::RS
     const integrator::IN
     const boundaries::BH
     const radiation_boundaries::BR
@@ -192,6 +195,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     source=nothing,
                     floors::Floors=Floors(),
                     reconstruction::AbstractReconstruction=PPM(),
+                    riemann::AbstractRiemannSolver=HLLC(),
                     integrator::AbstractIntegrator=SSPRK3(),
                     boundaries::Boundaries=Boundaries(Outflow()),
                     radiation_boundaries::Boundaries=boundaries,
@@ -205,7 +209,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     Rarr = radiation === nothing ? Array{T,4}(undef, 0, 0, 0, 0) : allocate(grid, NRAD)
     rw = radiation === nothing ? nothing : RadiationWorkspace(grid)
     fl = Floors(T(floors.rho), T(floors.pressure), T(floors.erad))
-    Simulation(grid, eos, radiation, reconstruction, integrator, boundaries,
+    Simulation(grid, eos, radiation, reconstruction, riemann, integrator, boundaries,
                radiation_boundaries, source, fl, T(cfl), T(cfl_radiation),
                Int(max_radiation_substeps), hydro, U, Rarr,
                HydroWorkspace(grid), rw, Diagnostics(), zero(T), zero(T), 0)
@@ -227,6 +231,7 @@ function Base.show(io::IO, sim::Simulation{T}) where {T}
     println(io, "  domain         : ", ntuple(d -> (g.xlo[d], g.xhi[d]), 3))
     println(io, "  eos            : ", sim.eos)
     println(io, "  reconstruction : ", sim.reconstruction)
+    println(io, "  riemann        : ", nameof(typeof(sim.riemann)))
     println(io, "  integrator     : ", sim.integrator)
     println(io, "  hydro          : ", sim.hydro_enabled)
     if has_radiation(sim)
@@ -321,7 +326,7 @@ function _hydro_sweep!(dU, sim::Simulation, ::Val{D}) where {D}
     hw = sim.hw
     g = sim.grid
     reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, NHYDRO)
-    hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, Val(D), g)
+    hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g)
     flux_divergence!(dU, hw.flux, Val(D), g, NHYDRO)
     return nothing
 end

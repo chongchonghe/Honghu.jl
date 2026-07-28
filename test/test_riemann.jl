@@ -6,7 +6,8 @@
                               (0.5, -1.3, 0.4, -0.9, 0.25))
         cs = sqrt(gam * p / rho)
         E = p / (gam - 1) + rho * (u^2 + v^2 + w^2) / 2
-        F = hllc(rho, u, v, w, p, cs, E, rho, u, v, w, p, cs, E, gam, 0.0, 0.0)
+        s0 = HydroState(rho, u, v, w, p, cs, E)
+        F = riemann_flux(HLLC(), s0, s0, gam, 0.0, 0.0)
         @test F[1] ≈ rho * u
         @test F[2] ≈ rho * u * u + p
         @test F[3] ≈ rho * u * v
@@ -24,11 +25,13 @@ end
     csR = sqrt(gam * pR / rhoR)
     EL = pL / (gam - 1) + rhoL * uL^2 / 2
     ER = pR / (gam - 1) + rhoR * uR^2 / 2
-    F = hllc(rhoL, uL, 0.0, 0.0, pL, csL, EL, rhoR, uR, 0.0, 0.0, pR, csR, ER, gam, 0.0, 0.0)
+    F = riemann_flux(HLLC(), HydroState(rhoL, uL, 0.0, 0.0, pL, csL, EL),
+                     HydroState(rhoR, uR, 0.0, 0.0, pR, csR, ER), gam, 0.0, 0.0)
     @test F[1] ≈ rhoL * uL
     @test F[2] ≈ rhoL * uL^2 + pL
     # mirror image: everything moves left, so F = F_R
-    F = hllc(rhoL, -uL, 0.0, 0.0, pL, csL, EL, rhoR, -uR, 0.0, 0.0, pR, csR, ER, gam, 0.0, 0.0)
+    F = riemann_flux(HLLC(), HydroState(rhoL, -uL, 0.0, 0.0, pL, csL, EL),
+                     HydroState(rhoR, -uR, 0.0, 0.0, pR, csR, ER), gam, 0.0, 0.0)
     @test F[1] ≈ -rhoR * uR
 end
 
@@ -40,7 +43,8 @@ end
     cs = sqrt(gam * p / rho)
     for u in (2.0, 5.0, 20.0)
         E = p / (gam - 1) + rho * u^2 / 2
-        F = hllc(rho, -u, 0.0, 0.0, p, cs, E, rho, u, 0.0, 0.0, p, cs, E, gam, 2u, 0.0)
+        F = riemann_flux(HLLC(), HydroState(rho, -u, 0.0, 0.0, p, cs, E),
+                         HydroState(rho, u, 0.0, 0.0, p, cs, E), gam, 2u, 0.0)
         @test F[1] ≈ 0.0 atol = 1e-12       # symmetric: no mass crosses
         @test F[2] >= 0.0                    # momentum flux is a pressure
         @test F[5] ≈ 0.0 atol = 1e-12       # and no energy crosses
@@ -57,7 +61,8 @@ end
     csR = sqrt(gam * p / rhoR)
     EL = p / (gam - 1) + rhoL * u^2 / 2
     ER = p / (gam - 1) + rhoR * u^2 / 2
-    F = hllc(rhoL, u, 0.0, 0.0, p, csL, EL, rhoR, u, 0.0, 0.0, p, csR, ER, gam, 0.0, 0.0)
+    F = riemann_flux(HLLC(), HydroState(rhoL, u, 0.0, 0.0, p, csL, EL),
+                     HydroState(rhoR, u, 0.0, 0.0, p, csR, ER), gam, 0.0, 0.0)
     # the contact moves right, so the upwind (left) state must be picked exactly
     @test F[1] ≈ rhoL * u
     @test F[2] ≈ rhoL * u^2 + p
@@ -109,4 +114,69 @@ end
     F = hll_radiation(er, Fx, Fy, Fz, er, Fx, Fy, Fz, c, chat, Val(1))
     @test F[1] ≈ (chat / c) * Fx
     @test F[2] ≈ chat * c * eddington_tensor(Fx / (c * er), Fy / (c * er), 0.0)[1, 1] * er
+end
+
+@testset "LLF (Rusanov)" begin
+    gam = 1.4
+    E(rho, u, p) = p / (gam - 1) + rho * u^2 / 2
+    st(rho, u, p) = HydroState(rho, u, 0.0, 0.0, p, sqrt(gam * p / rho), E(rho, u, p))
+
+    # consistency: on a uniform state the solver must return the physical flux
+    for (rho, u, p) in ((1.0, 0.0, 1.0), (2.0, 0.7, 3.0), (0.3, -1.2, 0.5))
+        s = st(rho, u, p)
+        F = riemann_flux(LLF(), s, s, gam, 0.0, 0.0)
+        @test F[1] ≈ rho * u
+        @test F[2] ≈ rho * u^2 + p
+        @test F[5] ≈ u * (E(rho, u, p) + p)
+    end
+
+    # supersonic flow is pure upwinding for HLLC; LLF still adds dissipation, so
+    # only the sign of the mass flux is shared
+    sL, sR = st(1.0, 5.0, 1.0), st(1.0, 5.0, 1.0)
+    @test riemann_flux(LLF(), sL, sR, gam, 0.0, 0.0)[1] > 0
+
+    # the defining difference: a stationary contact discontinuity carries no mass
+    # under HLLC, because it has a contact wave to sit on. LLF has no such wave
+    # and leaks mass across it, which is exactly why it smears contacts.
+    cL, cR = st(1.0, 0.0, 1.0), st(0.125, 0.0, 1.0)
+    @test abs(riemann_flux(HLLC(), cL, cR, gam, 0.0, 0.0)[1]) < 1e-14
+    @test abs(riemann_flux(LLF(), cL, cR, gam, 0.0, 0.0)[1]) > 0.1
+
+    # both are conservative: swapping the states and the sign of the velocity
+    # mirrors the flux
+    a, b = st(1.0, 0.3, 1.0), st(0.4, -0.2, 0.3)
+    am, bm = st(1.0, -0.3, 1.0), st(0.4, 0.2, 0.3)
+    F = riemann_flux(LLF(), a, b, gam, 0.0, 0.0)
+    G = riemann_flux(LLF(), bm, am, gam, 0.0, 0.0)
+    @test F[1] ≈ -G[1]
+    @test F[2] ≈ G[2]
+    @test F[5] ≈ -G[5]
+
+    # LLF ignores the carbuncle inputs, HLLC does not
+    @test riemann_flux(LLF(), a, b, gam, 0.0, 0.0) == riemann_flux(LLF(), a, b, gam, -1.0, -2.0)
+    @test riemann_flux(HLLC(), a, b, gam, 0.0, 0.0) != riemann_flux(HLLC(), a, b, gam, -1.0, -2.0)
+end
+
+@testset "solver choice reaches the solution" begin
+    # LLF is the more diffusive solver, and the contact is where it shows: it
+    # has no contact wave, so Sod's density plateau smears while the shock,
+    # which is self-steepening, survives.
+    err(solver) = begin
+        sim, tmax = P.sod_shock_tube(nx=128; riemann=solver)
+        run!(sim; tmax, verbose=false)
+        default_metrics(P.sod_shock_tube).l1_density(sim)
+    end
+    eh, el = err(HLLC()), err(LLF())
+    @test eh < el
+    @test el < 2.5 * eh          # worse, but not a different scheme
+
+    # and both stay positive without help from the floors
+    for solver in (HLLC(), LLF())
+        sim, tmax = P.sod_shock_tube(nx=128; riemann=solver)
+        run!(sim; tmax, verbose=false)
+        pr = primitives(sim)
+        @test all(pr[IRHO, :, 1, 1] .> 0)
+        @test all(pr[IPRE, :, 1, 1] .> 0)
+        @test nrepaired(sim) == 0
+    end
 end

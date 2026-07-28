@@ -1,7 +1,7 @@
 using Test
 using Hydro3D
 using Hydro3D: SVec, dot, norm, minmod, limit, ppm_edges, eddington_factor,
-               eddington_tensor, hllc, hll_radiation, cell_ranges, face_ranges,
+               eddington_tensor, hll_radiation, cell_ranges, face_ranges,
                NHYDRO, NRAD, IRHO, IVX, IPRE, IERAD, IFRX, IFRY, cons2prim, prim2cons,
                reconstruct!, required_ghosts, allocate, cellcenter, fill_ghosts!,
                variants, rows

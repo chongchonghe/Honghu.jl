@@ -45,7 +45,7 @@ end
                                                         Val(1), g, Hydro3D.NHYDRO), sim) < LIMIT
     end
     @test bytes_per_cell(() -> Hydro3D.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim,
-                                                     sim.eos, Val(1), g), sim) < LIMIT
+                                                     sim.eos, sim.riemann, Val(1), g), sim) < LIMIT
     @test bytes_per_cell(() -> Hydro3D.flux_divergence!(hw.dU, hw.flux, Val(1), g,
                                                         Hydro3D.NHYDRO), sim) < LIMIT
     @test bytes_per_cell(() -> Hydro3D.combine!(sim.U, 0.5, hw.U0, 0.5, sim.U, 0.1,

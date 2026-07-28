@@ -122,17 +122,25 @@ function prim2cons!(U::A, prim::A, eos::AbstractEOS, g::CartesianGrid{T}) where 
 end
 
 """
-    hydro_fluxes!(flux, qL, qR, prim, eos, Val(D), grid)
+    hydro_fluxes!(flux, qL, qR, prim, eos, solver, Val(D), grid)
 
-Solve the HLLC Riemann problem at every interface normal to direction `D` and
-store the resulting conservative flux.
+Solve the Riemann problem at every interface normal to direction `D` with
+`solver` (an [`AbstractRiemannSolver`](@ref)) and store the resulting
+conservative flux.
 
 If the reconstruction produced an inadmissible state (non-positive density or
 pressure, or a NaN) the interface falls back to the piecewise-constant state of
 the adjoining cell, which is guaranteed admissible because the floors have
 already been applied.
+
+The carbuncle inputs `du` and `dw` are computed for every solver, not gated on
+whether the chosen one consumes them. Quokka does the same
+(`hydro_system.hpp:1484-1498`), and reuses the intermediates for its velocity
+divergence; the reads are 18 per face in 3D and 2 in 1D, against a reconstruction
+and a Riemann solve.
 """
 function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
+                       solver::AbstractRiemannSolver,
                        ::Val{D}, g::CartesianGrid{T}) where {T,A<:AbstractArray{T,4},D}
     e1, e2, e3 = _shift(Val(D))
     s1 = _tshift1(Val(D))
@@ -200,8 +208,9 @@ function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
             end
             isfinite(dw) || (dw = zero(T))
 
-            F = hllc(rhoL, uL, vL, wL, pL, csL, EL,
-                     rhoR, uR, vR, wR, pR, csR, ER, gam, du, dw)
+            sL = HydroState(rhoL, uL, vL, wL, pL, csL, EL)
+            sR = HydroState(rhoR, uR, vR, wR, pR, csR, ER)
+            F = riemann_flux(solver, sL, sR, gam, du, dw)
 
             flux[IRHO, i, j, k] = F[1]
             flux[iu, i, j, k] = F[2]

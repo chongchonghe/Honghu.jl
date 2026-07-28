@@ -51,7 +51,8 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `variables.jl` | State-vector layout and pointwise conversions. |
 | `boundary.jl` | `BoundaryCondition` subtypes and ghost filling. |
 | `limiters.jl`, `reconstruction.jl` | Slope limiters; `PCM` / `PLM` / `PPM`. |
-| `riemann_hydro.jl` | The pointwise `hllc` solver, in canonical (normal = x) form. |
+| `riemann/state.jl` | `HydroState` (field names match `quokka::HydroState`), `AbstractRiemannSolver`, the `riemann_flux` generic, and the direction permutation helpers. |
+| `riemann/hllc.jl`, `riemann/llf.jl` | One solver per file, mirroring Quokka's `HLLC.hpp` / `LLF.hpp`. Pointwise, canonical (normal = x) form. |
 | `riemann_radiation.jl` | M1 closure, Eddington tensor, `hll_radiation`. |
 | `hydro_system.jl` | `Floors`, `cons2prim!`, the HLLC flux sweep, flux divergence, hydro CFL. |
 | `radiation_system.jl` | `RadiationPhysics`, state repair, the HLL flux sweep, radiation CFL. |
@@ -59,7 +60,9 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `integrators.jl` | SSP-RK tableaux and the IMEX PD-ARS constants. |
 | `simulation.jl` | `Simulation`, workspaces, right-hand sides, stage drivers, `run!`. |
 | `output.jl` | VTK, text line-outs, checkpoints. |
-| `plotting.jl` | `field` / `available_fields` / `coordinates`, plus the stubs and no-Plots fallbacks for the three plotting entry points. |
+| `plotting.jl` | `field` / `available_fields` / `coordinates`, plus the stubs and no-Plots fallbacks for the four plotting entry points. |
+| `metrics.jl` | `relative_l1` / `relative_l2` and the `default_metrics` generic. |
+| `compare.jl` | `compare`, `ComparisonTable`, and the table reader/writer. |
 | `problems/` | Built-in test problems and the exact Riemann solver. |
 
 `ext/Hydro3DPlotsExt.jl` sits outside `src/` and is loaded by Julia's extension mechanism when Plots is present.
