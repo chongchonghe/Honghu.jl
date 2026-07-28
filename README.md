@@ -200,6 +200,26 @@ Call any of them without Plots loaded and you get an error telling you to load i
 
 `docs/make_figures.jl` and `docs/make_animations.jl` regenerate everything shown above.
 
+## Layout
+
+```
+hydro3d.jl/
+  Project.toml   dependencies: Printf, Dates (both stdlibs); Plots is a weak dependency
+  README.md      this file
+  CLAUDE.md      invariants, performance traps, and a per-file guide to src/
+  logs.md        development log: what was asked for, what was built, why
+  src/           the package -- 28 files, one concern each
+    riemann/     one Riemann solver per file, mirroring Quokka's headers
+    problems/    built-in problems, exact solutions, per-problem metrics
+  ext/           plotting methods, loaded only when Plots is present
+  test/          644 tests in eleven files, plus benchmarks.jl
+  docs/          make_figures.jl, make_animations.jl, and the generated figures/
+  examples/      sod_1d, kelvin_helmholtz_2d, sedov_3d,
+                 marshak_wave, radiation_shadow, radiating_blast_3d
+```
+
+The include order in `src/Hydro3D.jl` is significant, because later files use types defined earlier. `CLAUDE.md` has the file-by-file table and the invariants each layer relies on.
+
 ## Extending
 
 The code is built around small, dispatch-based interfaces. To add your own piece of physics, define a type and a few methods:
