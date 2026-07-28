@@ -76,6 +76,10 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 
 **Momentum index.** The momentum component for direction `d` is at index `d+1` in *both* the hydro and the radiation state vector. `fill_ghosts!` relies on this to serve both systems with one implementation.
 
+**Conversion kernels are read-only.** `cons2prim!` and `rad_cons2prim!` only read the conserved state; projecting onto the admissible set is a separate operation, `enforce_floors!` / `enforce_rad_floors!` / `amend_rad_state!`. This mirrors Quokka's split between `EnforceLimits` and its `const`-qualified `ComputePrimVars`, and it is not stylistic: the two used to be fused, so *reading* a diagnostic field repaired the state being read, uncounted, and two runs differing only in plotting cadence could disagree. Cost of the split is ~3% of a step. `test_hydro.jl`'s "diagnostics do not perturb the state" is the guard. Never floor inside a conversion, an accessor, or `timestep`.
+
+**The state is admissible between steps.** `step!` and `set_initial_conditions!` both end with `enforce_state!`, so every diagnostic, every output writer and `timestep` can assume `U` and `R` are physical. Intermediate Runge-Kutta stages are *not* covered — that is why the right-hand sides still floor on entry. `set_initial_conditions!` must fill ghosts before enforcing; ghost cells are uninitialised memory until the boundary conditions have run once.
+
 **Direction permutation.** For a sweep along `D`, the canonical transverse directions are `_tdir1(Val(D))`, `_tdir2(Val(D))` in cyclic order (1→2,3; 2→3,1; 3→1,2). These are written out as literal methods rather than computed, so they constant-fold.
 
 ## Performance rules

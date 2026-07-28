@@ -94,52 +94,41 @@ components, which the caller usually wants anyway.
 end
 
 """
-    rad_cons2prim!(rprim, R, phys, grid, floors)
+    enforce_rad_floors!(R, phys, grid, floors) -> Int
 
-Fill the radiation primitives `(Erad, fx, fy, fz)` from the conserved state over
-the whole array, ghost cells included, repairing inadmissible states in `R` in
-place (see [`amend_rad`](@ref)). Returns the number of cells repaired.
+Project the radiation state onto the admissible set of the M1 closure over the
+whole array, ghost cells included (see [`amend_rad`](@ref)). Returns the number
+of cells repaired.
+
+The radiation counterpart of [`enforce_floors!`](@ref), and separate from
+[`rad_cons2prim!`](@ref) for the same reason.
 """
-function rad_cons2prim!(rprim::A, R::A, phys::RadiationPhysics{T}, g::CartesianGrid{T},
-                        floors::Floors{T}) where {T,A<:AbstractArray{T,4}}
+function enforce_rad_floors!(R::AbstractArray{T,4}, phys::RadiationPhysics{T},
+                             g::CartesianGrid{T}, floors::Floors{T}) where {T}
     n1, n2, n3 = g.dims
-    c = phys.c
-    nbad = Threads.Atomic{Int}(0)
-    threaded_jk(1:n2, 1:n3) do j, k
-        local bad = 0
-        @inbounds for i in 1:n1
-            er, Fx, Fy, Fz, fx, fy, fz, rep = amend_rad(R[IERAD, i, j, k], R[IFRX, i, j, k],
-                                                        R[IFRY, i, j, k], R[IFRZ, i, j, k],
-                                                        c, floors.erad)
-            if rep
-                R[IERAD, i, j, k] = er
-                R[IFRX, i, j, k] = Fx
-                R[IFRY, i, j, k] = Fy
-                R[IFRZ, i, j, k] = Fz
-                bad += 1
-            end
-            rprim[IERAD, i, j, k] = er
-            rprim[IFRX, i, j, k] = fx
-            rprim[IFRY, i, j, k] = fy
-            rprim[IFRZ, i, j, k] = fz
-        end
-        bad > 0 && Threads.atomic_add!(nbad, bad)
-    end
-    return nbad[]
+    _amend_range!(R, phys, floors, 1:n1, 1:n2, 1:n3)
 end
 
 """
-    amend_rad_state!(R, phys, grid, floors)
+    amend_rad_state!(R, phys, grid, floors) -> Int
 
-Repair the radiation state of the interior cells in place, without computing
-primitives. Used after the explicit transport stages of the IMEX scheme, whose
-output must be admissible before the implicit coupling solve runs.
+Repair the radiation state of the *interior* cells in place. Used after the
+explicit transport stages of the IMEX scheme, whose output must be admissible
+before the implicit coupling solve runs; the ghost cells are refilled from the
+boundary conditions before they are next read, so there is no point touching
+them here.
 """
 function amend_rad_state!(R::AbstractArray{T,4}, phys::RadiationPhysics{T},
                           g::CartesianGrid{T}, floors::Floors{T}) where {T}
+    _amend_range!(R, phys, floors, g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3])
+end
+
+function _amend_range!(R::AbstractArray{T,4}, phys::RadiationPhysics{T},
+                       floors::Floors{T}, ir, jr, kr) where {T}
     c = phys.c
-    ir = g.lo[1]:g.hi[1]
-    threaded_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]) do j, k
+    nbad = Threads.Atomic{Int}(0)
+    threaded_jk(jr, kr) do j, k
+        local bad = 0
         @inbounds for i in ir
             er, Fx, Fy, Fz, _, _, _, rep = amend_rad(R[IERAD, i, j, k], R[IFRX, i, j, k],
                                                      R[IFRY, i, j, k], R[IFRZ, i, j, k],
@@ -149,10 +138,40 @@ function amend_rad_state!(R::AbstractArray{T,4}, phys::RadiationPhysics{T},
                 R[IFRX, i, j, k] = Fx
                 R[IFRY, i, j, k] = Fy
                 R[IFRZ, i, j, k] = Fz
+                bad += 1
             end
         end
+        bad > 0 && Threads.atomic_add!(nbad, bad)
     end
-    return nothing
+    return nbad[]
+end
+
+"""
+    rad_cons2prim!(rprim, R, phys, grid)
+
+Fill the radiation primitives `(Erad, fx, fy, fz)` from the conserved state over
+the whole array, ghost cells included.
+
+`R` is **only read**; see [`cons2prim!`](@ref) for why. Run
+[`enforce_rad_floors!`](@ref) first if the state may be inadmissible — on an
+admissible state the reduced flux this computes automatically satisfies
+`|f| < 1`.
+"""
+function rad_cons2prim!(rprim::A, R::A, phys::RadiationPhysics{T},
+                        g::CartesianGrid{T}) where {T,A<:AbstractArray{T,4}}
+    n1, n2, n3 = g.dims
+    c = phys.c
+    threaded_jk(1:n2, 1:n3) do j, k
+        @inbounds for i in 1:n1
+            er = R[IERAD, i, j, k]
+            ce = one(T) / (c * er)
+            rprim[IERAD, i, j, k] = er
+            rprim[IFRX, i, j, k] = R[IFRX, i, j, k] * ce
+            rprim[IFRY, i, j, k] = R[IFRY, i, j, k] * ce
+            rprim[IFRZ, i, j, k] = R[IFRZ, i, j, k] * ce
+        end
+    end
+    return rprim
 end
 
 """

@@ -239,11 +239,11 @@ function set_initial_conditions!(f::F, sim::Simulation{T}) where {F,T}
             sim.R[IFRZ, i, j, k] = T(_field(s, Val(:Fz), z0))
         end
     end
+    # Ghosts first: `enforce_state!` sweeps the whole array, and until the
+    # boundary conditions have run the ghost cells hold uninitialised memory.
     fill_ghosts!(U, sim.boundaries, g, sim.t)
-    if has_radiation(sim)
-        fill_ghosts!(sim.R, sim.radiation_boundaries, g, sim.t)
-        amend_rad_state!(sim.R, sim.radiation, g, sim.floors)
-    end
+    has_radiation(sim) && fill_ghosts!(sim.R, sim.radiation_boundaries, g, sim.t)
+    enforce_state!(sim)
     return sim
 end
 
@@ -268,7 +268,8 @@ directional sweep per active dimension.
 function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
     g = sim.grid
     fill_ghosts!(U, sim.boundaries, g, sim.t)
-    sim.nrepaired += cons2prim!(sim.hw.prim, U, sim.eos, g, sim.floors)
+    sim.nrepaired += enforce_floors!(U, sim.eos, g, sim.floors)
+    cons2prim!(sim.hw.prim, U, sim.eos, g)
     fill!(dU, zero(T))
     g.active[1] && _hydro_sweep!(dU, sim, Val(1))
     g.active[2] && _hydro_sweep!(dU, sim, Val(2))
@@ -295,7 +296,8 @@ solver always satisfies `E > 0` and `|F| < cE`.
 function rad_rhs!(dR::Array{T,4}, R::Array{T,4}, sim::Simulation{T}, t::T) where {T}
     g = sim.grid
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
-    sim.nrepaired += rad_cons2prim!(sim.rw.prim, R, sim.radiation, g, sim.floors)
+    sim.nrepaired += enforce_rad_floors!(R, sim.radiation, g, sim.floors)
+    rad_cons2prim!(sim.rw.prim, R, sim.radiation, g)
     fill!(dR, zero(T))
     g.active[1] && _rad_sweep!(dR, R, sim, Val(1))
     g.active[2] && _rad_sweep!(dR, R, sim, Val(2))
@@ -389,7 +391,9 @@ more than `sim.max_radiation_substeps` radiation substeps.
 function timestep(sim::Simulation{T}) where {T}
     dt = T(Inf)
     if sim.hydro_enabled
-        cons2prim!(sim.hw.prim, sim.U, sim.eos, sim.grid, sim.floors)
+        # `sim.U` is admissible here: `step!` and `set_initial_conditions!` both
+        # leave it that way, so this conversion needs no floors of its own.
+        cons2prim!(sim.hw.prim, sim.U, sim.eos, sim.grid)
         dt = hydro_timestep(sim.hw.prim, sim.eos, sim.grid, sim.cfl)
     end
     if has_radiation(sim)
@@ -408,15 +412,40 @@ end
     step!(sim, dt = timestep(sim))
 
 Advance the simulation by one step. Returns the step size taken.
+
+The hydrodynamic and radiation subsystems are advanced in sequence, which is
+Lie (first-order) operator splitting -- see the note on splitting error in the
+README. The step ends by projecting the state back onto the admissible set, so
+that between steps `sim.U` and `sim.R` are always physical and every diagnostic
+can read them without repairing anything.
 """
 function step!(sim::Simulation{T}, dt::Real=timestep(sim)) where {T}
     dtT = T(dt)
     sim.hydro_enabled && advance_hydro!(sim, dtT)
     has_radiation(sim) && advance_radiation!(sim, dtT)
+    enforce_state!(sim)
     sim.t += dtT
     sim.dt = dtT
     sim.step += 1
     return dtT
+end
+
+"""
+    enforce_state!(sim) -> Int
+
+Project both subsystems onto their admissible sets and accumulate the repair
+count. Called at the end of every step and after the initial conditions, which
+is what lets the conversion kernels and every diagnostic path stay read-only.
+
+The analogue of Quokka's `EnforceLimits`, called from the same place in the
+driver.
+"""
+function enforce_state!(sim::Simulation)
+    n = 0
+    sim.hydro_enabled && (n += enforce_floors!(sim.U, sim.eos, sim.grid, sim.floors))
+    has_radiation(sim) && (n += amend_rad_state!(sim.R, sim.radiation, sim.grid, sim.floors))
+    sim.nrepaired += n
+    return n
 end
 
 """
@@ -535,10 +564,14 @@ end
 
 A fresh `(NHYDRO, nx, ny, nz)` array of interior primitive variables
 `(rho, vx, vy, vz, p)`. Convenience for analysis and plotting.
+
+Does not modify `sim`. This is load-bearing, not incidental: it used to apply
+the positivity floors to `sim.U` as a side effect, so a run that was plotted
+every ten steps and one that was not could quietly disagree.
 """
 function primitives(sim::Simulation{T}) where {T}
     g = sim.grid
-    cons2prim!(sim.hw.prim, sim.U, sim.eos, g, sim.floors)
+    cons2prim!(sim.hw.prim, sim.U, sim.eos, g)
     sim.hw.prim[:, g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]]
 end
 

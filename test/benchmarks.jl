@@ -45,12 +45,12 @@ end
 function bench_kernels(n=64)
     sim = setup(n; radiation=true)
     hw, rw, g = sim.hw, sim.rw, sim.grid
-    Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g, sim.floors)
-    Hydro3D.rad_cons2prim!(rw.prim, sim.R, sim.radiation, g, sim.floors)
+    Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g)
+    Hydro3D.rad_cons2prim!(rw.prim, sim.R, sim.radiation, g)
     cells = prod(g.n)
 
     kernels = (
-        ("cons2prim", () -> Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g, sim.floors)),
+        ("cons2prim", () -> Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g)),
         ("reconstruct PLM", () -> Hydro3D.reconstruct!(hw.qL, hw.qR, hw.prim, PLM(), Val(1), g, 5)),
         ("reconstruct PPM", () -> Hydro3D.reconstruct!(hw.qL, hw.qR, hw.prim, PPM(), Val(1), g, 5)),
         ("HLLC sweep", () -> Hydro3D.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, Val(1), g)),

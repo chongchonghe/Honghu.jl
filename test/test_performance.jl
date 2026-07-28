@@ -34,9 +34,11 @@ end
     end
     hw = sim.hw
     g = sim.grid
-    Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g, sim.floors)
+    Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g)
 
-    @test bytes_per_cell(() -> Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g, sim.floors),
+    @test bytes_per_cell(() -> Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g),
+                         sim) < LIMIT
+    @test bytes_per_cell(() -> Hydro3D.enforce_floors!(sim.U, sim.eos, g, sim.floors),
                          sim) < LIMIT
     for recon in (PCM(), PLM(), PPM())
         @test bytes_per_cell(() -> Hydro3D.reconstruct!(hw.qL, hw.qR, hw.prim, recon,
@@ -62,9 +64,11 @@ end
     end
     rw = sim.rw
     g = sim.grid
-    Hydro3D.rad_cons2prim!(rw.prim, sim.R, rad, g, sim.floors)
+    Hydro3D.rad_cons2prim!(rw.prim, sim.R, rad, g)
 
-    @test bytes_per_cell(() -> Hydro3D.rad_cons2prim!(rw.prim, sim.R, rad, g, sim.floors),
+    @test bytes_per_cell(() -> Hydro3D.rad_cons2prim!(rw.prim, sim.R, rad, g),
+                         sim) < LIMIT
+    @test bytes_per_cell(() -> Hydro3D.enforce_rad_floors!(sim.R, rad, g, sim.floors),
                          sim) < LIMIT
     @test bytes_per_cell(() -> Hydro3D.reconstruct!(rw.qL, rw.qR, rw.prim, PPM(), Val(1),
                                                     g, Hydro3D.NRAD), sim) < LIMIT

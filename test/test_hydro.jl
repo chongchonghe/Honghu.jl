@@ -108,6 +108,48 @@ end
     @test sim.nrepaired == 0
 end
 
+@testset "diagnostics do not perturb the state" begin
+    # `cons2prim!` used to enforce the floors on `U` in place, so *reading* a
+    # field repaired the state being read -- silently, and without counting the
+    # repairs. Two runs that differed only in how often they were plotted could
+    # then disagree. Cells below the floors are what makes this observable, so
+    # the state deliberately contains some.
+    mk() = begin
+        s = Simulation(n=(8, 1, 1), floors=Floors(rho=1e-3, pressure=1e-3))
+        set_initial_conditions!(s) do x, y, z
+            x > 0.75 ? (rho=1e-8, p=1e-8) : (rho=1.0, p=1.0)
+        end
+        s
+    end
+
+    sim = mk()
+    step!(sim)                       # a state the floors have already touched
+    U0, R0, n0 = copy(sim.U), copy(sim.R), sim.nrepaired
+
+    for f in (s -> primitives(s), s -> field(s, :density), s -> field(s, :pressure),
+              s -> field(s, :temperature), s -> field(s, :mach), s -> gas_temperature(s),
+              s -> timestep(s), s -> conserved_totals(s))
+        f(sim)
+    end
+    mktempdir() do dir
+        write_vtk(sim, joinpath(dir, "snap"))
+        write_line(sim, joinpath(dir, "line.txt"); dir=1)
+    end
+
+    @test sim.U == U0                # bit-identical, not merely close
+    @test sim.R == R0
+    @test sim.nrepaired == n0
+
+    # ... and the trajectory itself is independent of how often you looked
+    a, b = mk(), mk()
+    for _ in 1:20
+        step!(a)
+        step!(b)
+        field(b, :density)           # b is "plotted" every step
+    end
+    @test a.U == b.U
+end
+
 @testset "reflecting wall" begin
     # a symmetric problem in a reflecting box must stay symmetric
     sim = Simulation(n=(64, 1, 1), boundaries=Boundaries(Reflecting()))

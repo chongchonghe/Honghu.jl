@@ -20,16 +20,24 @@ function Floors(; rho=1e-30, pressure=1e-30, erad=1e-30)
 end
 
 """
-    cons2prim!(prim, U, eos, grid, floors)
+    enforce_floors!(U, eos, grid, floors) -> Int
 
-Fill `prim = (rho, vx, vy, vz, p)` from the conserved state `U` over the whole
-array, ghost cells included, and enforce `floors` on `U` in place.
+Project the conserved gas state onto the admissible set, over the whole array,
+ghost cells included. Cells below `floors.rho` are reset to a quiescent floor
+state; cells whose internal energy is below `floors.pressure/(gamma-1)` keep
+their momentum and have only the thermal part reset.
 
-Returns the number of cells that had to be floored, which the driver reports so
-that a silently unphysical run is visible.
+Returns the number of cells repaired, which the driver accumulates so that a
+silently unphysical run is visible.
+
+This is deliberately a *separate* operation from [`cons2prim!`](@ref), matching
+Quokka's split between `EnforceLimits` and its `const`-qualified
+`ComputePrimVars`. The two used to be fused, which meant that reading a
+diagnostic field silently mutated the state being diagnosed: results depended on
+how often you looked, and the repairs went uncounted. Keep them apart.
 """
-function cons2prim!(prim::A, U::A, eos::AbstractEOS, g::CartesianGrid{T},
-                    floors::Floors{T}) where {T,A<:AbstractArray{T,4}}
+function enforce_floors!(U::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGrid{T},
+                         floors::Floors{T}) where {T}
     n1, n2, n3 = g.dims
     nbad = Threads.Atomic{Int}(0)
     eint_min = internal_energy(eos, floors.rho, floors.pressure)
@@ -52,22 +60,48 @@ function cons2prim!(prim::A, U::A, eos::AbstractEOS, g::CartesianGrid{T},
             vy = U[IMY, i, j, k] * inv_rho
             vz = U[IMZ, i, j, k] * inv_rho
             ekin = rho * (vx * vx + vy * vy + vz * vz) / 2
-            eint = U[IEGAS, i, j, k] - ekin
             emin = internal_energy(eos, rho, floors.pressure)
-            if !(eint > emin)
-                eint = emin
-                U[IEGAS, i, j, k] = ekin + eint
+            if !(U[IEGAS, i, j, k] - ekin > emin)
+                U[IEGAS, i, j, k] = ekin + emin
                 bad += 1
             end
+        end
+        bad > 0 && Threads.atomic_add!(nbad, bad)
+    end
+    return nbad[]
+end
+
+"""
+    cons2prim!(prim, U, eos, grid)
+
+Fill `prim = (rho, vx, vy, vz, p)` from the conserved state `U` over the whole
+array, ghost cells included.
+
+`U` is **only read**. Every caller — the right-hand side, `timestep`, and every
+diagnostic and plotting path — gets the same guarantee, so looking at a
+simulation cannot change it. Admissibility is the caller's job, via
+[`enforce_floors!`](@ref); on a state that has not been floored this returns
+whatever the arithmetic gives, including negative pressures.
+"""
+function cons2prim!(prim::A, U::A, eos::AbstractEOS,
+                    g::CartesianGrid{T}) where {T,A<:AbstractArray{T,4}}
+    n1, n2, n3 = g.dims
+    threaded_jk(1:n2, 1:n3) do j, k
+        @inbounds for i in 1:n1
+            rho = U[IRHO, i, j, k]
+            inv_rho = one(T) / rho
+            vx = U[IMX, i, j, k] * inv_rho
+            vy = U[IMY, i, j, k] * inv_rho
+            vz = U[IMZ, i, j, k] * inv_rho
+            eint = U[IEGAS, i, j, k] - rho * (vx * vx + vy * vy + vz * vz) / 2
             prim[IRHO, i, j, k] = rho
             prim[IVX, i, j, k] = vx
             prim[IVY, i, j, k] = vy
             prim[IVZ, i, j, k] = vz
             prim[IPRE, i, j, k] = pressure(eos, rho, eint)
         end
-        bad > 0 && Threads.atomic_add!(nbad, bad)
     end
-    return nbad[]
+    return prim
 end
 
 """
