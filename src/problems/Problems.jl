@@ -45,6 +45,7 @@ using ..Hydro3D: SVec, AbstractClosure
 include("exact.jl")
 include("hydro.jl")
 include("radiation.jl")
+include("metrics.jl")     # needs the problem functions it dispatches on
 
 export sod_shock_tube, smooth_advection, kelvin_helmholtz, sedov_blast
 export radiation_streaming, radiation_diffusion, matter_coupling

@@ -265,9 +265,13 @@ end
         Tr = radiation_temperature(sim)[:, 1, 1]
         prim = primitives(sim)
 
-        # relative L1 error in the radiation temperature, Quokka's metric
-        push!(errs, sum(abs, P.interpolate_to(xe, x, Tr) .- Tre) / sum(abs, Tre))
-        push!(spikes, maximum(Tg))
+        # Quokka's metrics, from the one place they are defined, so that the
+        # test, the verification figure and `compare` cannot drift apart
+        m = default_metrics(P.radhydro_shock)
+        push!(errs, m.l1_Trad(sim))
+        push!(spikes, m.spike(sim))
+        @test m.spike(sim) == maximum(Tg)
+        @test m.l1_Trad(sim) ≈ relative_l1(P.interpolate_to(xe, x, Tr), Tre)
 
         # the scheme must hold this together without help from the floors
         @test nrepaired(sim) == 0

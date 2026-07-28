@@ -17,8 +17,19 @@ kept at full resolution across the Zel'dovich spike.
 
 The solution is derived under the Eddington (P1) approximation, which is why
 `radhydro_shock` runs with [`EddingtonClosure`](@ref).
+
+The table is parsed once and cached; a convergence study scoring a dozen runs
+against it should not re-read 60 kB of text a dozen times. The returned arrays
+are shared, so do not mutate them.
 """
 function radhydro_shock_exact()
+    isassigned(_LE_SHOCK_CACHE) || (_LE_SHOCK_CACHE[] = _read_le_shock())
+    return _LE_SHOCK_CACHE[]
+end
+
+const _LE_SHOCK_CACHE = Ref{NTuple{5,Vector{Float64}}}()
+
+function _read_le_shock()
     x = Float64[]
     rho = Float64[]
     v = Float64[]

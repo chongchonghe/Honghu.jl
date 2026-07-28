@@ -55,16 +55,13 @@ function figure_convergence(ns=(16, 32, 64, 128, 256))
     schemes = ((PCM(), "PCM", 1), (PLM(), "PLM", 2), (PPM(), "PPM", 3))
     pl = plot(; xscale=:log10, yscale=:log10, xlabel="cells", ylabel="L1 density error",
               legend=:bottomleft, title="Convergence on smooth advection")
+    l1 = default_metrics(P.smooth_advection).l1_density
     for (i, (recon, name, _)) in enumerate(schemes)
         errs = Float64[]
         for nx in ns
             sim, tmax = P.smooth_advection(; nx, reconstruction=recon)
             run!(sim; tmax, verbose=false)
-            pr = primitives(sim)
-            g = sim.grid
-            e = sum(abs(pr[1, k, 1, 1] - (1 + 0.5 * sinpi(2 * ((k - 0.5) * g.dx[1]))))
-                    for k in 1:nx) / nx
-            push!(errs, e)
+            push!(errs, l1(sim))
         end
         slope = log2(errs[end-1] / errs[end])
         plot!(pl, collect(ns), errs; marker=:circle, ms=4, c=i, lw=2,
@@ -124,7 +121,7 @@ function figure_radshock(nx=256)
     x = coordinates(g, 1)
     Tg = gas_temperature(sim)[:, 1, 1]
     Tr = radiation_temperature(sim)[:, 1, 1]
-    err = sum(abs, P.interpolate_to(xe, x, Tr) .- Tre) / sum(abs, Tre)
+    err = default_metrics(P.radhydro_shock).l1_Trad(sim)
 
     full = plot(xe, Tme; lw=2, c=:black, label="T_matter, semi-analytic",
                 xlabel="x", ylabel="temperature", legend=:topleft)

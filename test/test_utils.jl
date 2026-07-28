@@ -72,3 +72,43 @@ end
     @test minmod(2.0, -3.0) == 0.0
     @test minmod(1.0, 2.0, 3.0) == 1.0
 end
+
+@testset "metrics" begin
+    @test relative_l1([1.0, 2.0], [1.0, 2.0]) == 0.0
+    @test relative_l1([2.0, 3.0], [1.0, 2.0]) ≈ 2 / 3
+    @test relative_l2([1.0, 2.0], [1.0, 2.0]) == 0.0
+    @test relative_l2([0.0, 0.0], [3.0, 4.0]) ≈ 1.0
+    @test_throws DimensionMismatch relative_l1([1.0], [1.0, 2.0])
+    @test_throws ArgumentError relative_l1([1.0], [0.0])
+
+    # Every problem with a reference solution scores itself, and the numbers are
+    # the ones the test suite and the figures already quote.
+    scored = ((P.sod_shock_tube, (nx=64,)), (P.smooth_advection, (nx=32,)),
+              (P.radiation_diffusion, (nx=32,)), (P.radiation_streaming, (nx=64,)),
+              (P.radhydro_shock, (nx=64,)), (P.sedov_blast, (n=16,)))
+    for (f, kw) in scored
+        @test Hydro3D.has_default_metrics(f)
+        sim, tmax = f(; kw...)
+        run!(sim; tmax, verbose=false)
+        m = default_metrics(f)
+        @test !isempty(m)
+        @test all(isfinite(g(sim)) && g(sim) >= 0 for g in values(m))
+    end
+
+    # a problem with no reference solution says so rather than inventing one
+    @test !Hydro3D.has_default_metrics(P.kelvin_helmholtz)
+    @test_throws ArgumentError default_metrics(P.kelvin_helmholtz)
+
+    # the metric must fall with resolution, or it is not measuring the error
+    l1 = default_metrics(P.smooth_advection).l1_density
+    errs = map((32, 64, 128)) do nx
+        sim, tmax = P.smooth_advection(; nx, reconstruction=PLM())
+        run!(sim; tmax, verbose=false)
+        l1(sim)
+    end
+    @test errs[1] > errs[2] > errs[3]
+    @test log2(errs[2] / errs[3]) > 1.8            # PLM is second order
+
+    # the vendored reference table is parsed once and shared
+    @test P.radhydro_shock_exact()[1] === P.radhydro_shock_exact()[1]
+end
