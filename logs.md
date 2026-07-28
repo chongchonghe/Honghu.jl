@@ -121,7 +121,7 @@ The example was rebuilt gas-dominated, it now prints both governing ratios befor
 
 ## Deliberately not included
 
-No mesh refinement, MPI or GPU. Grey radiation only -- no multigroup, dust, chemistry or self-gravity. No dual-energy formalism (Quokka carries `Eint` as a separate conserved variable; here it is recovered as $E_{\rm tot} - E_{\rm kin}$, which is enough without AMR). No LLF/Rusanov fallback solver, since HLLC and HLL were what was asked for.
+No mesh refinement, MPI or GPU. Grey radiation only -- no multigroup, dust, chemistry or self-gravity. No dual-energy formalism (Quokka carries `Eint` as a separate conserved variable; here it is recovered as $E_{\rm tot} - E_{\rm kin}$, which is enough without AMR). (LLF was added later, in the review follow-up below.)
 
 ## Follow-up: plotting, figures and benchmarks
 
@@ -171,6 +171,49 @@ The test asserts more than the error norm, because the norm alone would pass on 
 
 The suite is now 454 tests in about 12 s.
 
+## Follow-up: architecture review, and the bench it turned this into
+
+The user had a second agent review the code for usability and extensibility under a stated premise: *this exists to prototype algorithms and test problems for Quokka.* Its five findings were verified one at a time against the source before anything was changed. All five held; three of its supporting claims did not.
+
+The premise mattered more than the findings. Since AMReX abstracts away the parallel, AMR and GPU work, a scheme prototyped here transliterates to Quokka almost line by line — which makes **structural fidelity to Quokka a design goal**, not a nicety. Every decision below was checked against `../quokka` first.
+
+| Step | Change |
+|:---|:---|
+| 1 | `test/test_extensions.jl`: a toy subtype of all eight `AbstractX`, asserting *equivalence* (matches a built-in) and *sensitivity* (a different setting gives a different answer). The second half is what catches a dead extension point |
+| 2 | Split flooring out of the conversion kernels, as Quokka splits `EnforceLimits` from its `const ComputePrimVars`. Reading a field used to repair the state being read, uncounted |
+| 3 | `Diagnostics` on the simulation: Newton statistics and floor counts, previously computed and discarded |
+| 4 | `closure`, `beta_order`, `chat_factor` as named keywords on the radiation problems |
+| 5 | `relative_l1` and `default_metrics(problem)` — the error was hand-written in three places |
+| 6 | `compare(problem, variants; sizes)` → a provenance-stamped table on disk → `plotcompare` redraws from the file |
+| 7 | `Simulation(; riemann = HLLC())`, plus `LLF` transliterated from `LLF.hpp` |
+| 8 | `radiation_reconstruction`, `FunctionBC(f)`, and the first-order operator split documented |
+| 9 | `strang_sources`, the transliteration of `addStrangSplitSources` |
+
+**Where the review was wrong.** Its "prerequisite refactor" of ~150 duplicated lines is ~64 across all six definitions, and they are not interchangeable — so it was skipped. Its warning that a state struct would break the allocation bound is false in Julia: 0.1713 B/cell, bitwise-identical results. And gating `du`/`dw` on a solver trait would *diverge* from Quokka, which computes them unconditionally and reuses them.
+
+**Two bugs found by surfacing things.** Reporting the Newton statistics immediately showed a mean of 4.95 against a max of 3 — they had been counted per outer iteration and per cell respectively. And a regenerated `shadow.png` caught a reciprocal-multiply I had introduced in `rad_cons2prim!`, which had grown to $2.5\times10^{-7}$ in the total radiation energy over 2800 steps.
+
+The whole branch is a **bitwise no-op on the physics** except where a change was intended, verified by hashing `U` and `R` against the previous code on Sod, Kelvin-Helmholtz, the radiative shock, Marshak, diffusion and the shadow. Cost of the read-only split is ~3% of a step.
+
+The experiment this was all for, now one line:
+
+```julia
+compare(P.radhydro_shock, (P1 = (closure = EddingtonClosure(),),
+                           M1 = (closure = LevermoreClosure(),)); sizes = (64, 128, 256))
+```
+
+| cells | P1 rel $L_1$ | M1 rel $L_1$ |
+|---:|---:|---:|
+| 64 | 0.0062 | 0.0167 |
+| 128 | 0.0041 | 0.0056 |
+| 256 | 0.0019 | 0.0108 |
+
+M1 is non-monotone, correctly: refinement converges to the M1 answer while the reference is P1-derived. `plotcompare` declines to quote a convergence rate for a metric that does not fall monotonically, and puts non-error metrics such as the spike height on a linear axis.
+
+Deferred deliberately: gravity itself, self-gravity, a subsystem protocol, multigroup, a pluggable radiation solver (Quokka has none either), and Strang splitting of hydro against radiation.
+
+The suite is now 644 tests in about 20 s.
+
 ## Commits
 
 ```
@@ -185,7 +228,7 @@ The repository was initialised in this session and has no remote, so there is no
 
 ```
 hydro3d.jl/
-  Project.toml          only dependency: Printf
+  Project.toml          dependencies: Printf, Dates (both stdlibs)
   README.md             what it solves, how to run it, verification figures
   CLAUDE.md             invariants, performance traps, where things live
   logs.md               this file
@@ -203,10 +246,10 @@ hydro3d.jl/
     opacity.jl          AbstractOpacity and three laws
     grid.jl             CartesianGrid, sweep ranges, threading helpers
     variables.jl        state layout, pointwise conversions
-    boundary.jl         Periodic / Outflow / Reflecting / Fixed
+    boundary.jl         Periodic / Outflow / Reflecting / Fixed / FunctionBC
     limiters.jl         MinMod / MC / VanLeer / Sweby
     reconstruction.jl   PCM / PLM / PPM
-    riemann_hydro.jl    hllc
+    riemann/            HydroState, AbstractRiemannSolver; hllc.jl, llf.jl
     riemann_radiation.jl M1 closure, Eddington tensor, hll_radiation
     hydro_system.jl     Floors, cons2prim!, HLLC sweep, hydro CFL
     radiation_system.jl RadiationPhysics, state repair, HLL sweep, radiation CFL
@@ -215,8 +258,10 @@ hydro3d.jl/
     simulation.jl       Simulation, workspaces, RHS, stage drivers, run!
     output.jl           VTK, text line-outs, checkpoints
     plotting.jl         field extraction, plotting stubs and fallbacks
-    problems/           built-in problems and the exact Riemann solver
-  test/                 405 tests in nine files, plus benchmarks.jl
+    metrics.jl          relative_l1 / relative_l2, the default_metrics generic
+    compare.jl          compare, ComparisonTable, table reader/writer
+    problems/           built-in problems, exact solutions, per-problem metrics
+  test/                 644 tests in eleven files, plus benchmarks.jl
   examples/             sod_1d, kelvin_helmholtz_2d, sedov_3d,
                         marshak_wave, radiation_shadow, radiating_blast_3d
 ```
