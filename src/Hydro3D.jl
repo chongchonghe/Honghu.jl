@@ -86,7 +86,7 @@ export MinMod, MonotonizedCentral, VanLeer, Sweby
 export ForwardEuler, SSPRK2, SSPRK3
 
 # boundaries
-export Boundaries, Periodic, Outflow, Reflecting, Fixed
+export Boundaries, Periodic, Outflow, Reflecting, Fixed, FunctionBC
 
 # output
 export write_vtk, write_line, save_checkpoint, load_checkpoint!

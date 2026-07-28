@@ -143,7 +143,10 @@ A three-dimensional (radiation-)hydrodynamics simulation.
 
 # Numerics
   - `reconstruction = PPM()` : [`PCM`](@ref), [`PLM`](@ref) or [`PPM`](@ref).
-    Sets the ghost-cell width.
+  - `radiation_reconstruction = reconstruction` : reconstruction for the
+    radiation moments. "PPM hydro with PLM radiation" is a standard pairing:
+    the M1 system is stiffer and the extra order buys less there. The
+    ghost-cell width is taken from whichever needs more.
   - `riemann = HLLC()` : interface flux solver, [`HLLC`](@ref) or [`LLF`](@ref).
   - `integrator = SSPRK3()`  : explicit integrator for the hydro subsystem.
   - `boundaries = Boundaries(Outflow())`, `radiation_boundaries = boundaries`.
@@ -163,11 +166,13 @@ run!(sim, tmax = 0.5)
 ```
 """
 mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
-                          RS<:AbstractRiemannSolver,IN<:AbstractIntegrator,BH,BR,SRC,RW}
+                          RR<:AbstractReconstruction,RS<:AbstractRiemannSolver,
+                          IN<:AbstractIntegrator,BH,BR,SRC,RW}
     const grid::CartesianGrid{T}
     const eos::E
     const radiation::RP
     const reconstruction::RC
+    const radiation_reconstruction::RR
     const riemann::RS
     const integrator::IN
     const boundaries::BH
@@ -195,6 +200,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     source=nothing,
                     floors::Floors=Floors(),
                     reconstruction::AbstractReconstruction=PPM(),
+                    radiation_reconstruction::AbstractReconstruction=reconstruction,
                     riemann::AbstractRiemannSolver=HLLC(),
                     integrator::AbstractIntegrator=SSPRK3(),
                     boundaries::Boundaries=Boundaries(Outflow()),
@@ -204,12 +210,15 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     T::Type{<:AbstractFloat}=Float64)
     hydro || radiation !== nothing ||
         throw(ArgumentError("nothing to evolve: enable hydro, radiation, or both"))
-    grid = CartesianGrid(; n, xlo, xhi, nghost=required_ghosts(reconstruction), T)
+    ng = max(required_ghosts(reconstruction),
+             radiation === nothing ? 0 : required_ghosts(radiation_reconstruction))
+    grid = CartesianGrid(; n, xlo, xhi, nghost=ng, T)
     U = allocate(grid, NHYDRO)
     Rarr = radiation === nothing ? Array{T,4}(undef, 0, 0, 0, 0) : allocate(grid, NRAD)
     rw = radiation === nothing ? nothing : RadiationWorkspace(grid)
     fl = Floors(T(floors.rho), T(floors.pressure), T(floors.erad))
-    Simulation(grid, eos, radiation, reconstruction, riemann, integrator, boundaries,
+    Simulation(grid, eos, radiation, reconstruction, radiation_reconstruction,
+               riemann, integrator, boundaries,
                radiation_boundaries, source, fl, T(cfl), T(cfl_radiation),
                Int(max_radiation_substeps), hydro, U, Rarr,
                HydroWorkspace(grid), rw, Diagnostics(), zero(T), zero(T), 0)
@@ -230,7 +239,9 @@ function Base.show(io::IO, sim::Simulation{T}) where {T}
     println(io, "  grid           : ", g.n, "  (", ndim(g), "D, ", g.ng, " ghost cells)")
     println(io, "  domain         : ", ntuple(d -> (g.xlo[d], g.xhi[d]), 3))
     println(io, "  eos            : ", sim.eos)
-    println(io, "  reconstruction : ", sim.reconstruction)
+    println(io, "  reconstruction : ", sim.reconstruction,
+            has_radiation(sim) && sim.radiation_reconstruction !== sim.reconstruction ?
+            " (gas), $(sim.radiation_reconstruction) (radiation)" : "")
     println(io, "  riemann        : ", nameof(typeof(sim.riemann)))
     println(io, "  integrator     : ", sim.integrator)
     println(io, "  hydro          : ", sim.hydro_enabled)
@@ -353,7 +364,7 @@ end
 function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}) where {D}
     rw = sim.rw
     g = sim.grid
-    reconstruct!(rw.qL, rw.qR, rw.prim, sim.reconstruction, Val(D), g, NRAD)
+    reconstruct!(rw.qL, rw.qR, rw.prim, sim.radiation_reconstruction, Val(D), g, NRAD)
     rad_fluxes!(rw.flux, rw.qL, rw.qR, R, sim.radiation, Val(D), g)
     flux_divergence!(dR, rw.flux, Val(D), g, NRAD)
     return nothing

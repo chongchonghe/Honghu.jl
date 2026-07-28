@@ -233,6 +233,7 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 - Grey (single-group) radiation. No multigroup, dust, chemistry, or self-gravity.
 - Shared-memory threading only, so problem sizes are bounded by one node's memory.
 - A reduced speed of light rescales the radiation diffusion coefficient by $\hat{c}/c$; use $\hat{c}=c$ when the static diffusion limit matters quantitatively.
+- **The hydrodynamics–radiation split is first order in time.** Each subsystem is second or third order on its own — SSP-RK3 for the Euler equations, the second-order IMEX PD-ARS scheme for radiation — but `step!` advances one and then the other, which is Lie splitting and contributes an $O(\Delta t)$ error. This is the same split Quokka uses, and it is invisible whenever the radiation is subcycled hard enough that the splitting error is below the spatial error, which is the usual case. Strang splitting the two subsystems would fix it and is not implemented; *source terms* are already Strang-split (see [`strang_sources`](#source-terms)).
 
 ## References
 

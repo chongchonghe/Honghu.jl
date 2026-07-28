@@ -8,7 +8,7 @@
     BoundaryCondition
 
 Supertype for boundary conditions. Built-in conditions are [`Periodic`](@ref),
-[`Outflow`](@ref), [`Reflecting`](@ref) and [`Fixed`](@ref).
+[`Outflow`](@ref), [`Reflecting`](@ref), [`Fixed`](@ref) and [`FunctionBC`](@ref).
 
 To add your own, define
 
@@ -59,6 +59,29 @@ end
 
 Fixed(state::Tuple) = Fixed(SVec(promote(float.(state)...)))
 Fixed(state::AbstractVector) = Fixed(Tuple(state))
+
+"""
+    FunctionBC(f)
+
+Hold the ghost cells at a *conserved* state computed from position and time,
+`f(x, y, z, t) -> NTuple` or `SVec` of length `NHYDRO` (hydro boundaries) or
+`NRAD` (radiation boundaries).
+
+The time-dependent counterpart of [`Fixed`](@ref), which ignores the `t` it is
+handed. Covers a driven inflow, a source that switches on, or a boundary profile
+that varies across the face:
+
+```julia
+# a beam whose intensity ramps up over one light-crossing time
+FunctionBC((x, y, z, t) -> (min(t, 1.0), 0.999 * min(t, 1.0), 0.0, 0.0))
+```
+
+`f` is called once per ghost cell per fill, so it should be cheap, but it is not
+in the cell loop and need not be allocation-free.
+"""
+struct FunctionBC{F} <: BoundaryCondition
+    f::F
+end
 
 """
     Boundaries(x, y, z)
@@ -150,6 +173,28 @@ function fill_face!(A::AbstractArray{T,4}, ::Reflecting, g::CartesianGrid, dir::
         d = _slab(A, dir, dst)
         copyto!(d, _slab(A, dir, src))
         @views d[nflip, :, :] .= .-d[nflip, :, :]
+    end
+    return nothing
+end
+
+function fill_face!(A::AbstractArray{T,4}, bc::FunctionBC, g::CartesianGrid, dir::Int,
+                    side::Int, t) where {T}
+    nv = size(A, 1)
+    others = dir == 1 ? (2, 3) : dir == 2 ? (1, 3) : (1, 2)
+    for m in 1:g.ng[dir]
+        idx = side == 1 ? g.lo[dir] - m : g.hi[dir] + m
+        for kk in 1:g.dims[others[2]], jj in 1:g.dims[others[1]]
+            sub = ntuple(3) do d
+                d == dir ? idx : (d == others[1] ? jj : kk)
+            end
+            x, y, z = cellcenter(g, sub[1], sub[2], sub[3])
+            s = bc.f(x, y, z, t)
+            length(s) == nv ||
+                throw(DimensionMismatch("FunctionBC returned $(length(s)) components but the state has $nv"))
+            @inbounds for n in 1:nv
+                A[n, sub[1], sub[2], sub[3]] = T(s[n])
+            end
+        end
     end
     return nothing
 end
