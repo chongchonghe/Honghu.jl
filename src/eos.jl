@@ -13,12 +13,23 @@ A concrete subtype `E` must implement
   - [`pressure`](@ref)`(eos, rho, eint)`
   - [`internal_energy`](@ref)`(eos, rho, p)`
   - [`soundspeed`](@ref)`(eos, rho, p)`
+  - [`adiabatic_index`](@ref)`(eos)`
   - [`temperature`](@ref)`(eos, rho, eint)`
   - [`eint_from_temperature`](@ref)`(eos, rho, T)`
   - [`heat_capacity`](@ref)`(eos, rho, T)`
 
-Only the first three are needed for pure hydrodynamics; the rest are used by the
-radiation-matter coupling.
+Only the first four are needed for pure hydrodynamics; the rest are used by the
+radiation-matter coupling. `test/test_extensions.jl` pins this list: it defines
+an EOS implementing exactly these methods and runs a simulation with it.
+
+!!! warning "The built-in HLLC solver assumes a gamma-law gas"
+    [`hllc`](@ref) uses `adiabatic_index(eos)` as a scalar in the Roe-averaged
+    sound speed and in Rider's wave-speed correction, so it is *structurally* a
+    gamma-law solver. Defining `adiabatic_index` on a genuinely non-ideal EOS
+    silences the `MethodError` and then silently uses an effective constant
+    gamma, which is worse than failing. Such an EOS needs its own
+    [`AbstractRiemannSolver`](@ref); [`LLF`](@ref) is a good starting point,
+    since it needs only the sound speed.
 """
 abstract type AbstractEOS end
 
