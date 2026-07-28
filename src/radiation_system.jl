@@ -164,11 +164,15 @@ function rad_cons2prim!(rprim::A, R::A, phys::RadiationPhysics{T},
     threaded_jk(1:n2, 1:n3) do j, k
         @inbounds for i in 1:n1
             er = R[IERAD, i, j, k]
-            ce = one(T) / (c * er)
+            # Divide rather than multiply by a reciprocal. The two differ in the
+            # last bit, and this kernel is memory-bound, so the two saved
+            # divisions buy nothing while the changed bits would make every
+            # radiation result differ from the pre-split code for no reason.
+            ce = c * er
             rprim[IERAD, i, j, k] = er
-            rprim[IFRX, i, j, k] = R[IFRX, i, j, k] * ce
-            rprim[IFRY, i, j, k] = R[IFRY, i, j, k] * ce
-            rprim[IFRZ, i, j, k] = R[IFRZ, i, j, k] * ce
+            rprim[IFRX, i, j, k] = R[IFRX, i, j, k] / ce
+            rprim[IFRY, i, j, k] = R[IFRY, i, j, k] / ce
+            rprim[IFRZ, i, j, k] = R[IFRZ, i, j, k] / ce
         end
     end
     return rprim
