@@ -5,8 +5,8 @@ A three-dimensional radiation-hydrodynamics code in pure Julia.
 
 The Euler equations are solved with an unsplit finite-volume method-of-lines
 scheme: piecewise-constant, -linear or -parabolic reconstruction of the
-primitive variables, an HLLC Riemann solver, and a strong-stability-preserving
-Runge-Kutta integrator.
+primitive variables, a choice of Riemann solver (HLLC or LLF), and a
+strong-stability-preserving Runge-Kutta integrator.
 
 Radiation is treated with the grey two-moment (M1) approximation. Transport uses
 an HLL solver built on the M1 closure, and the stiff matter-radiation coupling
@@ -73,6 +73,7 @@ include("problems/Problems.jl")
 export CartesianGrid, Simulation, set_initial_conditions!, run!, step!, timestep
 export conserved_totals, primitives, gas_temperature, radiation_temperature
 export Diagnostics, reset_diagnostics!, nrepaired
+export SourceOrder, SourceForward, SourceReverse
 
 # physics
 export IdealGas, cv_from_mu, RadiationPhysics, Floors

@@ -4,12 +4,12 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Overview
 
-Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with an HLLC method-of-lines scheme and grey two-moment (M1) radiation with an HLL solver and an IMEX PD-ARS integrator. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `../quokka` and is the reference to check against when a numerical detail is in doubt.
+Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with a method-of-lines scheme (HLLC or LLF) and grey two-moment (M1) radiation with an HLL solver and an IMEX PD-ARS integrator. It exists as a bench for prototyping algorithms and test problems destined for Quokka, so structural fidelity to Quokka is a design goal: a kernel written here should transliterate across, and back. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `../quokka` and is the reference to check against when a numerical detail is in doubt.
 
 ## Commands
 
 ```bash
-julia --project=. -t 4 test/runtests.jl             # full suite, ~12 s, 454 tests
+julia --project=. -t 4 test/runtests.jl             # full suite, ~20 s, 644 tests
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw docs/figures/
 julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a figure)
 julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
@@ -28,7 +28,7 @@ Prefer building example figures out of `plotstate` / `plotpanels` rather than ra
 
 ## Dependencies
 
-The runtime dependency list is `Printf` and nothing else, and it should stay that way. That is a design property, not an accident: this code is meant to run on nodes where a large dependency tree is a liability. Two things that would normally be a package are written in-tree instead — `src/staticvec.jl` (a fixed-size vector) and the VTK writer in `src/output.jl`.
+The runtime dependency list is `Printf` and `Dates` and nothing else, and it should stay that way. Both are Julia stdlibs -- nothing to download, no dependency tree; `Dates` is used only for the provenance timestamp in a comparison table. That is a design property, not an accident: this code is meant to run on nodes where a large dependency tree is a liability. Two things that would normally be a package are written in-tree instead — `src/staticvec.jl` (a fixed-size vector) and the VTK writer in `src/output.jl`.
 
 Anything that is not needed to *solve* goes in a weak dependency or a test extra:
 
@@ -54,7 +54,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `riemann/state.jl` | `HydroState` (field names match `quokka::HydroState`), `AbstractRiemannSolver`, the `riemann_flux` generic, and the direction permutation helpers. |
 | `riemann/hllc.jl`, `riemann/llf.jl` | One solver per file, mirroring Quokka's `HLLC.hpp` / `LLF.hpp`. Pointwise, canonical (normal = x) form. |
 | `riemann_radiation.jl` | M1 closure, Eddington tensor, `hll_radiation`. |
-| `hydro_system.jl` | `Floors`, `cons2prim!`, the HLLC flux sweep, flux divergence, hydro CFL. |
+| `hydro_system.jl` | `Floors`, `cons2prim!` / `enforce_floors!`, the flux sweep, flux divergence, hydro CFL. |
 | `radiation_system.jl` | `RadiationPhysics`, state repair, the HLL flux sweep, radiation CFL. |
 | `source_terms.jl` | The implicit matter-radiation coupling — the hardest file. |
 | `integrators.jl` | SSP-RK tableaux and the IMEX PD-ARS constants. |
@@ -75,7 +75,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 
 **Degenerate directions.** `n[d] == 1` means direction `d` is inactive: zero ghost cells, skipped sweeps, no boundary condition needed. Anything that indexes `j±1` must check `grid.active[d]` first, or it will read out of bounds.
 
-**Ghost width.** `nghost = required_ghosts(reconstruction)`, minimum 2. The minimum-2 rule exists so the reconstruction sweep can write `qL` at cell `hi+1` without leaving the array; PCM does not need the extra cell but gets it anyway.
+**Ghost width.** `nghost = max(required_ghosts(reconstruction), required_ghosts(radiation_reconstruction))`, minimum 2. The minimum-2 rule exists so the reconstruction sweep can write `qL` at cell `hi+1` without leaving the array; PCM does not need the extra cell but gets it anyway.
 
 **Momentum index.** The momentum component for direction `d` is at index `d+1` in *both* the hydro and the radiation state vector. `fill_ghosts!` relies on this to serve both systems with one implementation.
 
@@ -117,6 +117,19 @@ Structure, and why each piece is there:
 - Floors are applied at the end by moving energy between `Eint` and `Erad`, so total energy is still conserved.
 
 Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`, which takes one step a hundred million times longer than the coupling time, and `radhydro_shock`, the Lowrie & Edwards Mach 3 radiative shock. The second is the sensitive one -- its Zel'dovich spike only appears if the velocity-dependent coupling terms, the implicit solve and the shock capturing are all correct together, so it is the test that will catch a subtle regression here.
+
+## Source terms
+
+Two hooks, and they are not interchangeable.
+
+`source` is a *radiation* energy source, consumed inside `radiation_source_step!` so that a stiff emission term is handled implicitly along with the rest of the coupling. `strang_sources` is the general operator-split hook, `f(sim, t, dt, order)`, applied at `dt/2` either side of the advance — the transliteration of Quokka's `addStrangSplitSources`, called from the same two places in the driver and with the same halved step.
+
+Nothing is built on `strang_sources`. It is there so that gravity, cooling or driving can be added without editing `step!`, which is what the review of this code identified as the ceiling on "algorithm experimentation".
+
+Two properties the tests pin, and that a change here must keep:
+
+- The two half-steps are the trapezoid rule in time, so a source with a linear `a(t)` is integrated *exactly* and anything else is second order. A single full-step kick would be first order and the convergence test would catch it.
+- `apply_strang_sources!` calls `enforce_state!` after the hook. A user source can push a cell out of the admissible set, and with hydrodynamics disabled the radiation coupling reads `U` before any right-hand side would floor it.
 
 ## Closures
 

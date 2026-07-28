@@ -81,6 +81,20 @@ function Base.show(io::IO, d::Diagnostics)
 end
 
 """
+    SourceOrder
+
+Which half of the Strang-split source step is running: `SourceForward` before
+the advance, `SourceReverse` after it.
+
+The order matters only when several source terms are applied in sequence and do
+not commute -- reversing the sequence on the second half-step is what keeps the
+pair second order. A single source term can ignore it.
+
+Quokka's `enum class SourceOrder { forward, reverse }`.
+"""
+@enum SourceOrder SourceForward SourceReverse
+
+"""
     HydroWorkspace{T}
 
 Scratch arrays for the hydrodynamic sweeps. Allocated once per simulation.
@@ -137,8 +151,13 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     two-moment radiation module.
   - `hydro = true` : evolve the Euler equations. Set to `false` for static
     radiation tests; this also freezes the gas momentum in the coupling.
-  - `source = nothing` : callable `source(x, y, z, t)` returning a radiation
-    energy source density (energy per volume per time).
+  - `source = nothing` : callable `source(x, y, z, t)` returning a *radiation*
+    energy source density (energy per volume per time), applied inside the
+    implicit coupling. For anything else -- gravity, driving, cooling -- use
+    `strang_sources`.
+  - `strang_sources = nothing` : callable `f(sim, t, dt, order)` applied at
+    `dt/2` before the advance and `dt/2` after it, mutating `sim.U` and `sim.R`
+    in place. See [`SourceOrder`](@ref).
   - `floors = Floors()` : positivity floors.
 
 # Numerics
@@ -167,7 +186,7 @@ run!(sim, tmax = 0.5)
 """
 mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
                           RR<:AbstractReconstruction,RS<:AbstractRiemannSolver,
-                          IN<:AbstractIntegrator,BH,BR,SRC,RW}
+                          IN<:AbstractIntegrator,BH,BR,SRC,SS,RW}
     const grid::CartesianGrid{T}
     const eos::E
     const radiation::RP
@@ -178,6 +197,7 @@ mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
     const boundaries::BH
     const radiation_boundaries::BR
     const source::SRC
+    const strang_sources::SS
     const floors::Floors{T}
     const cfl::T
     const cfl_radiation::T
@@ -198,6 +218,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     radiation=nothing,
                     hydro::Bool=true,
                     source=nothing,
+                    strang_sources=nothing,
                     floors::Floors=Floors(),
                     reconstruction::AbstractReconstruction=PPM(),
                     radiation_reconstruction::AbstractReconstruction=reconstruction,
@@ -219,7 +240,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     fl = Floors(T(floors.rho), T(floors.pressure), T(floors.erad))
     Simulation(grid, eos, radiation, reconstruction, radiation_reconstruction,
                riemann, integrator, boundaries,
-               radiation_boundaries, source, fl, T(cfl), T(cfl_radiation),
+               radiation_boundaries, source, strang_sources, fl, T(cfl), T(cfl_radiation),
                Int(max_radiation_substeps), hydro, U, Rarr,
                HydroWorkspace(grid), rw, Diagnostics(), zero(T), zero(T), 0)
 end
@@ -507,14 +528,62 @@ can read them without repairing anything.
 """
 function step!(sim::Simulation{T}, dt::Real=timestep(sim)) where {T}
     dtT = T(dt)
+    half = dtT / 2
+    apply_strang_sources!(sim, sim.t, half, SourceForward)
     sim.hydro_enabled && advance_hydro!(sim, dtT)
     has_radiation(sim) && advance_radiation!(sim, dtT)
+    apply_strang_sources!(sim, sim.t + dtT, half, SourceReverse)
     enforce_state!(sim)
     sim.t += dtT
     sim.dt = dtT
     sim.step += 1
     sim.diag.steps += 1
     return dtT
+end
+
+"""
+    apply_strang_sources!(sim, t, dt, order) -> sim
+
+Apply the user's operator-split source terms over `dt`, which is *half* the
+step: [`step!`](@ref) calls this once before the advance with `SourceForward`
+and once after with `SourceReverse`, which is what makes the pair second order.
+
+The Julia counterpart of Quokka's `addStrangSplitSources`, called from the same
+two places in the driver and with the same halved step.
+
+The hook mutates `sim.U` and `sim.R` directly, so it has the grid, the equation
+of state and the radiation parameters to hand. It is called once per half-step,
+not once per cell, so it need not be allocation-free -- but a loop *inside* it
+is in the hot path, and the boxing trap described in CLAUDE.md applies there.
+
+```julia
+# constant gravity along -y, as a momentum and energy kick
+function gravity!(sim, t, dt, order)
+    g = sim.grid
+    for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
+        rho = sim.U[Hydro3D.IRHO, i, j, k]
+        dp = -0.1 * rho * dt
+        sim.U[Hydro3D.IEGAS, i, j, k] +=
+            dp * (sim.U[Hydro3D.IMY, i, j, k] + dp / 2) / rho
+        sim.U[Hydro3D.IMY, i, j, k] += dp
+    end
+end
+Simulation(n = (64, 64, 1), strang_sources = gravity!)
+```
+
+Nothing is implemented on top of this hook: no gravity, no cooling, no driving.
+It exists so that adding one does not mean editing `step!`.
+"""
+@inline function apply_strang_sources!(sim::Simulation{T}, t::T, dt::T,
+                                       order::SourceOrder) where {T}
+    f = sim.strang_sources
+    if f !== nothing
+        f(sim, t, dt, order)
+        # A user source can push a cell out of the admissible set, and the
+        # radiation coupling reads `U` before any right-hand side would floor it.
+        enforce_state!(sim)
+    end
+    return sim
 end
 
 """

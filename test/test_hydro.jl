@@ -200,3 +200,105 @@ end
         @test e < 0.2
     end
 end
+
+@testset "Strang-split source terms" begin
+    # The operator-split source hook, transliterated from Quokka's
+    # `addStrangSplitSources`: called at dt/2 before the advance and dt/2 after.
+    # Nothing is built on it yet, so these tests define what it promises.
+    using Hydro3D: IMY, IEGAS
+
+    "Uniform acceleration -a(t) along y, applied as a momentum and energy kick."
+    function kick(a)
+        (sim, t, dt, order) -> begin
+            g = sim.grid
+            for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
+                rho = sim.U[IRHO, i, j, k]
+                dp = -a(t) * rho * dt
+                sim.U[IEGAS, i, j, k] += dp * (sim.U[IMY, i, j, k] + dp / 2) / rho
+                sim.U[IMY, i, j, k] += dp
+            end
+        end
+    end
+
+    mean_vy(sim) = conserved_totals(sim).momentum[2] / conserved_totals(sim).mass
+
+    @testset "call protocol" begin
+        seen = Tuple{Float64,Float64,SourceOrder}[]
+        rec = (sim, t, dt, order) -> push!(seen, (t, dt, order))
+        sim = Simulation(n=(8, 8, 1), boundaries=Boundaries(Periodic()), strang_sources=rec)
+        set_initial_conditions!(sim) do x, y, z
+            (rho=1.0, p=1.0)
+        end
+        t0 = sim.t
+        dt = step!(sim, 0.01)
+
+        @test length(seen) == 2
+        @test seen[1][3] === SourceForward && seen[2][3] === SourceReverse
+        @test seen[1][2] ≈ dt / 2 && seen[2][2] ≈ dt / 2      # each half the step
+        @test seen[1][1] ≈ t0                                 # forward at t
+        @test seen[2][1] ≈ t0 + dt                            # reverse at t + dt
+        # and nothing runs when no hook is given
+        plain = Simulation(n=(8, 8, 1), boundaries=Boundaries(Periodic()))
+        @test plain.strang_sources === nothing
+    end
+
+    @testset "constant acceleration is exact" begin
+        sim = Simulation(n=(8, 8, 1), boundaries=Boundaries(Periodic()),
+                         strang_sources=kick(t -> 1.0))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=1.0, p=1.0)
+        end
+        run!(sim; tmax=0.5, verbose=false)
+        @test mean_vy(sim) ≈ -sim.t rtol = 1e-12
+        @test nrepaired(sim) == 0
+    end
+
+    @testset "time-dependent acceleration is second order" begin
+        # Strang splitting evaluates the source at t and t + dt, which is the
+        # trapezoid rule: exact for a linear a(t), second order for anything
+        # else. Lie splitting -- one full-step kick -- would be first order, so
+        # this is the assertion that the halves are really placed either side of
+        # the advance.
+        exact = -0.5^3 / 3                                    # -int_0^T t^2 dt
+        err(nsteps) = begin
+            sim = Simulation(n=(8, 8, 1), boundaries=Boundaries(Periodic()),
+                             strang_sources=kick(t -> t^2))
+            set_initial_conditions!(sim) do x, y, z
+                (rho=1.0, p=1.0)
+            end
+            for _ in 1:nsteps
+                step!(sim, 0.5 / nsteps)
+            end
+            abs(mean_vy(sim) - exact)
+        end
+        e1, e2 = err(10), err(20)
+        @test e1 < 1e-3
+        @test log2(e1 / e2) > 1.8
+
+        # a linear a(t) is integrated exactly by the trapezoid rule
+        sim = Simulation(n=(8, 8, 1), boundaries=Boundaries(Periodic()),
+                         strang_sources=kick(t -> t))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=1.0, p=1.0)
+        end
+        for _ in 1:4
+            step!(sim, 0.125)
+        end
+        @test mean_vy(sim) ≈ -0.5^2 / 2 rtol = 1e-12
+    end
+
+    @testset "energy bookkeeping" begin
+        # the kick above adds exactly the work done, so a free-falling uniform
+        # box keeps E_total - (kinetic energy it gained) unchanged
+        sim = Simulation(n=(8, 8, 1), boundaries=Boundaries(Periodic()),
+                         strang_sources=kick(t -> 1.0))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=1.0, p=1.0)
+        end
+        e0 = conserved_totals(sim).energy_gas
+        run!(sim; tmax=0.4, verbose=false)
+        tot = conserved_totals(sim)
+        ekin = 0.5 * tot.mass * mean_vy(sim)^2
+        @test tot.energy_gas - ekin ≈ e0 rtol = 1e-10
+    end
+end

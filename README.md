@@ -211,7 +211,31 @@ Hydro3D.flux_mean_opacity(op::KramersOpacity, rho, T) = Hydro3D.planck_opacity(o
 Hydro3D.energy_mean_opacity(op::KramersOpacity, rho, T) = Hydro3D.planck_opacity(op, rho, T)
 ```
 
-The same pattern works for `AbstractEOS`, `AbstractLimiter`, `AbstractReconstruction`, `AbstractIntegrator` and `BoundaryCondition`. See `CLAUDE.md` for the layout of the source tree and the invariants each layer relies on.
+The same pattern works for `AbstractEOS`, `AbstractOpacity`, `AbstractLimiter`, `AbstractReconstruction`, `AbstractIntegrator`, `AbstractRiemannSolver`, `AbstractClosure` and `BoundaryCondition`. `test/test_extensions.jl` defines a toy subtype of every one of them and runs a simulation with it, so it doubles as copy-paste documentation of exactly which methods each interface needs.
+
+## Source terms
+
+Two hooks, for two different jobs.
+
+`source = f(x, y, z, t)` returns a **radiation** energy source density and is applied inside the implicit matter–radiation coupling, where a stiff emission term belongs. It is the right place for a star's luminosity spread over a cell.
+
+`strang_sources = f(sim, t, dt, order)` is the general operator-split hook, applied at $\Delta t/2$ before the advance and $\Delta t/2$ after it, mutating `sim.U` and `sim.R` in place. This is Quokka's `addStrangSplitSources`, called from the same two places in the driver, and it is where gravity, external driving and cooling go. The two half-steps make it second order: the pair is the trapezoid rule in time, so a source with a linear time dependence is integrated exactly.
+
+```julia
+function gravity!(sim, t, dt, order)
+    g = sim.grid
+    for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
+        rho = sim.U[Hydro3D.IRHO, i, j, k]
+        dp = -9.8 * rho * dt
+        sim.U[Hydro3D.IEGAS, i, j, k] += dp * (sim.U[Hydro3D.IMY, i, j, k] + dp / 2) / rho
+        sim.U[Hydro3D.IMY, i, j, k] += dp
+    end
+end
+
+Simulation(n = (64, 64, 1), strang_sources = gravity!)
+```
+
+Nothing is built on this hook — no gravity, no cooling, no driving are shipped. It exists so that adding one does not mean editing `step!`. `order` is `SourceForward` or `SourceReverse`, and matters only if you apply several non-commuting terms in sequence.
 
 ## Units
 
