@@ -153,20 +153,30 @@ animate_run(sim; tmax, var = :density, filename = "kh.gif")
 function animate_run end
 
 """
-    plotcompare(table_or_path; metric = nothing, kwargs...)
+    plotcompare(table_or_path...; metric = nothing, kwargs...)
 
-Plot a [`ComparisonTable`](@ref): each metric against resolution, one line per
-variant, on log-log axes with the measured convergence rate in the legend.
+Plot one or more [`ComparisonTable`](@ref)s: each metric against resolution, one
+line per variant, on log-log axes with the measured convergence rate in the
+legend.
 
-Accepts a table or the path to one written by [`compare`](@ref), so a figure can
-be redrawn from stored numbers without re-running any simulation:
+Accepts tables or the paths to tables written by [`compare`](@ref), so a figure
+can be redrawn from stored numbers without re-running any simulation:
 
 ```julia
 using Plots, Hydro3D
 plotcompare("radhydro_shock_compare.txt")
 ```
 
-Pass `metric` to draw one panel instead of all of them.
+Give it several tables to put the same schemes on different problems side by
+side, each panel labelled with its problem. That comparison is the point --
+one problem gives a ranking, two tell you whether the ranking means anything:
+
+```julia
+plotcompare("sod_shock_tube_riemann_compare.txt",
+            "smooth_advection_riemann_compare.txt")
+```
+
+Pass `metric` to draw one panel per table instead of all of them.
 
 **Requires `using Plots`.**
 """

@@ -103,4 +103,89 @@
         @test t[:spike][1] > 3.9
     end
 
+    @testset "sweeping one keyword" begin
+        t = compare(P.sod_shock_tube, :riemann, (HLLC(), LLF());
+                    sizes=(32, 64), path=nothing, verbose=false)
+        # the scheme names itself; no label written by hand
+        @test variants(t) == ["HLLC", "LLF"]
+        @test all(t[:l1_density, "HLLC"] .< t[:l1_density, "LLF"])   # at both sizes
+
+        # equivalent to spelling the variants out
+        g = compare(P.sod_shock_tube,
+                    (HLLC=(riemann=HLLC(),), LLF=(riemann=LLF(),));
+                    sizes=(32, 64), path=nothing, verbose=false)
+        @test t[:l1_density] == g[:l1_density]
+
+        # a value with fields still labels itself distinguishably
+        u = compare(P.smooth_advection, :reconstruction, (PLM(MinMod()), PLM(VanLeer()));
+                    sizes=(32,), path=nothing, verbose=false)
+        @test length(variants(u)) == 2
+        @test all(startswith("PLM"), variants(u))
+        # numbers label themselves rather than their type
+        v = compare(P.smooth_advection, :cfl, (0.2, 0.4); sizes=(32,), path=nothing,
+                    verbose=false)
+        @test variants(v) == ["0.2", "0.4"]
+    end
+
+    @testset "two sweeps of one problem do not overwrite each other" begin
+        mktempdir() do dir
+            compare(P.sod_shock_tube, :riemann, (HLLC(), LLF()); sizes=(32,),
+                    outdir=dir, verbose=false)
+            compare(P.sod_shock_tube, :reconstruction, (PCM(), PLM()); sizes=(32,),
+                    outdir=dir, verbose=false)
+            @test isfile(joinpath(dir, "sod_shock_tube_riemann_compare.txt"))
+            @test isfile(joinpath(dir, "sod_shock_tube_reconstruction_compare.txt"))
+        end
+    end
+
+    @testset "duplicate labels are refused" begin
+        # two variants sharing a label would merge silently when the table is
+        # sliced, and the merged rows would then be fitted as a size sweep
+        @test_throws ArgumentError compare(P.sod_shock_tube,
+                                           ["a" => (;), "a" => (reconstruction=PCM(),)];
+                                           sizes=(32,), path=nothing, verbose=false)
+    end
+
+    @testset "wall_s is not a compilation timing" begin
+        # Without a warm-up the first run of each variant carries a few hundred
+        # milliseconds of Julia compilation, which made a 64-cell run look 550x
+        # slower than it is and slower than the same variant at 512 cells --
+        # inverting the one column that answers "what did this cost". Eight
+        # times the cells and eight times the steps is a wide enough margin
+        # that millisecond timer noise cannot flip it.
+        t = compare(P.sod_shock_tube, :riemann, (HLLC(),); sizes=(64, 512),
+                    path=nothing, verbose=false)
+        w = t[:wall_s, "HLLC"]
+        @test w[2] > 4 * w[1]
+    end
+
+    @testset "scores are told apart from bookkeeping" begin
+        t = compare(P.radhydro_shock, (P1=(;),); sizes=(32, 64), path=nothing,
+                    verbose=false)
+        @test Hydro3D.metric_columns(t) == ["l1_Trad", "spike"]
+        @test !any(in(Hydro3D.BOOKKEEPING), Hydro3D.metric_columns(t))
+        # `l1_Trad` falls under refinement; `spike` converges to 4.26, so a
+        # log-log slope through it would be meaningless
+        @test Hydro3D.is_error_metric(t, "l1_Trad")
+        @test !Hydro3D.is_error_metric(t, "spike")
+
+        # the rate table prints for the error and not for the spike
+        s = sprint(show, MIME("text/plain"), t)
+        @test occursin("convergence rate", s)
+        @test occursin("l1_Trad", s)
+        # ... and all-zero bookkeeping columns collapse to a note
+        h = compare(P.sod_shock_tube, (base=(;),); sizes=(32,), path=nothing,
+                    verbose=false)
+        @test all(h[:newton_max] .== 0)
+        @test occursin("zero for every run", sprint(show, MIME("text/plain"), h))
+    end
+
+    @testset "a column can be sliced by variant" begin
+        t = compare(P.smooth_advection, :reconstruction, (PCM(), PLM());
+                    sizes=(64, 32), path=nothing, verbose=false)      # out of order
+        @test t[:size, "PCM"] == [32.0, 64.0]                         # sorted by size
+        @test all(t[:l1_density, "PLM"] .< t[:l1_density, "PCM"])
+        @test_throws ArgumentError t[:l1_density, "PPM"]
+    end
+
 end

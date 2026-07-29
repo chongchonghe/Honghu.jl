@@ -214,6 +214,24 @@ Deferred deliberately: gravity itself, self-gravity, a subsystem protocol, multi
 
 The suite is now 644 tests in about 20 s.
 
+## Comparison ergonomics
+
+> Write an example script to test various schemes. For example, compare HLLC and Lax-Friedrichs with one of the test problems, using the architecture you wrote. In the process, refine the architecture to make this comparison process more user-friendly.
+
+Writing `examples/compare_schemes.jl` surfaced five things wrong with `compare`, four of them only visible from the outside:
+
+- **`wall_s` was measuring the Julia compiler.** Each variant has its own concrete `Simulation` type, so the first run of each paid ~290 ms of compilation out of a 291 ms measurement — reporting a 64-cell run as 550× slower than it is, and slower than the same variant at 512 cells. Each variant now gets a discarded one-step warm-up first.
+- **Naming the scheme three times.** `(HLLC = (riemann = HLLC(),), ...)` became `compare(problem, :riemann, (HLLC(), LLF()))`, with the value labelling its own rows.
+- **Two sweeps of one problem overwrote each other's table**, silently. The one-keyword form names the key in the file.
+- **Duplicate labels merged silently** when the table was sliced, and the merged rows were then fitted as if they were a size sweep. Refused now.
+- **The convergence rate had to be fitted by hand** after reading the table, and four all-zero Newton and floor columns crowded out the metric. `show` prints the rates and collapses the zeros to one line.
+
+`plotcompare` takes several tables now, and the rule for *is this metric an error* moved out of the plotting extension into `compare.jl`, where `show` and the plot can share one definition. Ordering by size moved in with it — the old rule read the rows unsorted.
+
+What the example finds: HLLC's $L_1$ density error is 75–80 % of LLF's at every resolution on the Sod tube, but 77 % → 89 % and closing on smooth advection. The extra dissipation is spent on the contact discontinuity, which refinement cannot recover; in smooth flow the reconstruction error dominates and the solver stops mattering. One problem gives a ranking, two say whether it means anything.
+
+665 tests, about 25 s.
+
 ## Commits
 
 ```

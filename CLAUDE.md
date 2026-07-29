@@ -9,7 +9,7 @@ Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler 
 ## Commands
 
 ```bash
-julia --project=. -t 4 test/runtests.jl             # full suite, ~20 s, 644 tests
+julia --project=. -t 4 test/runtests.jl             # full suite, ~25 s, 665 tests
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw docs/figures/
 julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a figure)
 julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
