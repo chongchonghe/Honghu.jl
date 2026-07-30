@@ -232,6 +232,25 @@ What the example finds: HLLC's $L_1$ density error is 75–80 % of LLF's at ever
 
 665 tests, about 25 s.
 
+## Inverting the comparison harness
+
+> Reflect on this compare scheme design: is it really good design, or is it over-engineering? Many times we want to compare things that are not named, or not passed to the simulation class, or perhaps just represent a difference in a runtime parameter.
+
+A fair challenge, and mostly right. The concept was not over-engineered — it deduplicates a loop that had been written by hand in three places — but one assumption in the interface was: *a variant is a set of keyword arguments to a problem factory*. That assumption was load-bearing for about sixty lines of scaffolding, most visibly `_size_key`, which guessed whether a factory spelled resolution `nx` or `n` by introspecting `Base.kwarg_decl`, a Julia internal, inside a try/catch. It also excluded exactly the cases named above: a different initial condition lives inside the factory's closure and no keyword can reach it.
+
+The proposed fix — compare two `Simulation` instances — hits a wall. Every configuration field of `Simulation` is `const`, including `grid`, so an instance pins its resolution and cannot be swept. And single-resolution rankings mislead: this session's own example has HLLC's error at 77 % of LLF's on smooth advection at 64 cells, drifting to 89 % by 512. At 64 cells alone you would conclude the solver matters there. It does not.
+
+So the layering was inverted rather than the API replaced. A variant is now a **builder**, `size -> (sim, tmax)` — the contract the problem factories already satisfy — and the keyword forms are sugar over it. A builder is arbitrary code, so a variant can differ in anything at all. Prebuilt simulations are accepted too, as the degenerate no-sweep case.
+
+The introspection was removed by fixing its cause instead of routing around it: every problem now takes `n` for resolution, `nx` surviving as a human-facing alias. That exposed two factories the guess had been getting wrong anyway — `matter_coupling` had no size keyword at all, and `radiation_shadow`'s `n` is a *pair*, so a scalar would have silently produced a square grid on a 1 × 0.4 domain. Both are fixed; the shadow now takes a scalar as its x resolution and derives `ny = 2nx/5`, which makes it refinable for the first time.
+
+Two things that fell out of the change:
+
+- Warming up a prebuilt simulation would *consume* the run being measured, so it warms a throwaway `deepcopy`. Without that the first instance variant carried its type's compilation and showed 0.33 s against 0.006 s — the same distortion the builder path already guards against.
+- A one-resolution table has nothing to put on a log-log axis, so `plotcompare` draws a bar chart rather than a lone marker per series on an axis implying a trend nobody measured.
+
+All ten figures in `docs/figures/` regenerate bit-identically, so the factory standardisation is a no-op on the physics. 688 tests.
+
 ## Commits
 
 ```

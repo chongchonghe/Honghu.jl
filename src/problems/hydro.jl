@@ -1,13 +1,13 @@
 # Standard hydrodynamic verification problems.
 
 """
-    sod_shock_tube(; nx = 256, gamma = 1.4, kwargs...) -> (sim, tmax)
+    sod_shock_tube(; n = 256, gamma = 1.4, kwargs...) -> (sim, tmax)
 
 The Sod (1978) shock tube in 1D: `(rho, p) = (1, 1)` for `x < 0.5` and
 `(0.125, 0.1)` for `x > 0.5`, at rest, with outflow boundaries. Compare the
 result at `tmax = 0.2` against [`sod_exact`](@ref).
 """
-function sod_shock_tube(; nx::Integer=256, gamma=1.4, kwargs...)
+function sod_shock_tube(; n::Integer=256, nx::Integer=n, gamma=1.4, kwargs...)
     sim = Simulation(; n=(nx, 1, 1), xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                      eos=IdealGas(; gamma), boundaries=Boundaries(Outflow()), kwargs...)
     set_initial_conditions!(sim) do x, y, z
@@ -17,7 +17,7 @@ function sod_shock_tube(; nx::Integer=256, gamma=1.4, kwargs...)
 end
 
 """
-    smooth_advection(; nx = 64, amplitude = 0.5, velocity = 1.0, gamma = 5/3, kwargs...)
+    smooth_advection(; n = 64, amplitude = 0.5, velocity = 1.0, gamma = 5/3, kwargs...)
         -> (sim, tmax)
 
 A smooth density perturbation `rho = 1 + A sin(2πx)` advected at constant
@@ -26,7 +26,8 @@ solution equals the initial condition exactly, which makes this the convergence
 test of the code: the L1 error should fall like `dx^p` with `p` set by the
 reconstruction.
 """
-function smooth_advection(; nx::Integer=64, amplitude=0.5, velocity=1.0, gamma=5 / 3, kwargs...)
+function smooth_advection(; n::Integer=64, nx::Integer=n, amplitude=0.5, velocity=1.0,
+                          gamma=5 / 3, kwargs...)
     sim = Simulation(; n=(nx, 1, 1), xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                      eos=IdealGas(; gamma), boundaries=Boundaries(Periodic()), kwargs...)
     set_initial_conditions!(sim) do x, y, z

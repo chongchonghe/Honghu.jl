@@ -181,10 +181,37 @@ end
 
 _fmt(v::Float64) = isinteger(v) && abs(v) < 1e15 ? string(Int(v)) : @sprintf("%.4g", v)
 
-# --- running -----------------------------------------------------------------
+# --- variants ----------------------------------------------------------------
+#
+# Everything the harness runs is a *builder*: a function of resolution returning
+# `(sim, tmax)`, which is the contract the problem factories already satisfy.
+# Keyword variants and prebuilt simulations are sugar that lowers to one.
+#
+# The point of putting the builder underneath rather than the keywords is that
+# the harness then never has to know *how* two variants differ. A variant can be
+# a different initial condition, a different geometry, or a code path that is
+# not a keyword of `Simulation` at all -- none of which the earlier
+# keywords-only design could express.
+
+# A prebuilt simulation is a builder that ignores the size, because its grid is
+# fixed at construction (every configuration field of `Simulation` is `const`).
+# It carries no suggested stopping time, hence the `nothing`, which the runner
+# turns into a request for an explicit `tmax`.
+_as_builder(v::Simulation) = _ -> (v, nothing)
+_as_builder(v) = v
+
+_as_builder(v::NamedTuple) = throw(ArgumentError(
+    "compare: a NamedTuple of keywords needs a problem to pass them to -- use " *
+    "`compare(problem, variants)`, or give a builder `sz -> (sim, tmax)`"))
+
+# With a problem in hand, a NamedTuple is that problem's keywords. Every
+# built-in problem takes `n` for resolution, so nothing has to introspect the
+# factory to find out what it calls it.
+_as_builder(problem, v::NamedTuple) = sz -> problem(; n=sz, v...)
+_as_builder(::Any, v) = _as_builder(v)
 
 # Variants may be given as a NamedTuple of NamedTuples, which labels itself, or
-# as anything iterable of `label => kwargs` pairs when the labels need to be
+# as anything iterable of `label => value` pairs when the labels need to be
 # strings.
 _variant_list(v::NamedTuple) = [String(k) => getfield(v, k) for k in keys(v)]
 _variant_list(v::AbstractVector{<:Pair}) = [String(first(p)) => last(p) for p in v]
@@ -204,38 +231,35 @@ function _labels(values)
     return allunique(ls) ? ls : [string(typeof(v)) for v in values]
 end
 
-# Problem factories spell their resolution keyword `nx` (1D) or `n` (2D/3D).
-# Ask the method rather than making the caller remember which.
-function _size_key(f)
-    try
-        kws = Base.kwarg_decl(only(methods(f)))
-        for k in (:nx, :n)
-            k in kws && return k
-        end
-    catch
-        # `kwarg_decl` is not a documented interface; if it ever moves, fall
-        # back to the common case rather than failing the run.
-    end
-    return :nx
-end
-
 """
-    compare(problem, variants; sizes, metrics, tmax, path, outdir, verbose) -> ComparisonTable
+    compare(variants; sizes, metrics, tmax, name, path, outdir, verbose) -> ComparisonTable
 
-Run `problem` once per (variant, size), score each run, and return the results
-as a [`ComparisonTable`](@ref) which is also written to disk.
+Run each variant once per size, score every run, and return the results as a
+[`ComparisonTable`](@ref) which is also written to disk.
 
-  - `problem` : a factory from [`Hydro3D.Problems`](@ref), or any callable
-    returning `(sim, tmax)`.
-  - `variants`: a `NamedTuple` of keyword `NamedTuple`s, which labels itself, or
-    an iterable of `label => kwargs`. Each is splatted into `problem`.
-  - `sizes`   : resolutions to sweep, default `(64, 128)`. Passed as the
-    factory's `nx` or `n` keyword, whichever it declares; override with
-    `size_key`.
-  - `metrics` : `NamedTuple` of `metric(sim) -> Real`. Defaults to
-    [`default_metrics`](@ref)`(problem)`.
-  - `tmax`    : override the factory's suggested stopping time.
-  - `path`    : where to write the table; defaults to `<problem>_compare.txt`
+`variants` is a vector of `label => builder`, where a **builder** is a function
+of resolution returning `(sim, tmax)` -- the contract the problem factories
+already satisfy:
+
+```julia
+compare(["HLLC" => nx -> P.sod_shock_tube(; nx, riemann = HLLC()),
+         "warm" => nx -> my_own_setup(nx)];
+        sizes = (64, 128, 256), metrics = default_metrics(P.sod_shock_tube))
+```
+
+Because the builder is arbitrary code, a variant may differ in anything at all
+-- a different initial condition, a different geometry, a global flag -- not
+only in keywords the harness knows how to pass. A builder may also be a
+prebuilt [`Simulation`](@ref), which fixes its own resolution and so needs an
+explicit `tmax`.
+
+  - `sizes`   : resolutions to sweep, default `(64, 128)`; each is handed to the
+    builder. The stored `size` is read back off the grid that was built.
+  - `metrics` : `NamedTuple` of `metric(sim) -> Real`. Required here; the forms
+    taking a `problem` default it to [`default_metrics`](@ref)`(problem)`.
+  - `tmax`    : override the builder's suggested stopping time.
+  - `name`    : what the table calls itself, and the stem of the default file.
+  - `path`    : where to write the table; defaults to `<name>_compare.txt`
     inside `outdir` (default the working directory). Pass `path = nothing` to
     skip writing.
 
@@ -244,38 +268,37 @@ statistics, so a variant that is more accurate *because* it took ten times as
 long, or that only converged with help from the positivity floors, is visible
 rather than flattering.
 
-```julia
-using Hydro3D
-const P = Hydro3D.Problems
-
-t = compare(P.radhydro_shock,
-            (P1 = (closure = EddingtonClosure(),),
-             M1 = (closure = LevermoreClosure(),));
-            sizes = (64, 128, 256))
-```
-
-Then `plotcompare(t)` (with Plots loaded), or `plotcompare("radhydro_shock_compare.txt")`
+Then `plotcompare(t)` (with Plots loaded), or `plotcompare("..._compare.txt")`
 in a later session, redraws it without re-running anything.
 
-See also the one-keyword form, [`compare(problem, key, values)`](@ref).
+See also the two sugars: [`compare(problem, variants)`](@ref) and
+[`compare(problem, key, values)`](@ref).
 """
-function compare(problem, variants;
-                 sizes=(64, 128),
-                 metrics=nothing,
-                 tmax=nothing,
-                 size_key::Symbol=_size_key(problem),
-                 path=:default,
-                 outdir=".",
-                 verbose::Bool=true)
-    vs = _variant_list(variants)
+compare(variants::AbstractVector{<:Pair}; kwargs...) =
+    _compare(_variant_list(variants); kwargs...)
+
+function _compare(vs;
+                  sizes=(64, 128),
+                  metrics=nothing,
+                  tmax=nothing,
+                  name::AbstractString="comparison",
+                  path=:default,
+                  outdir=".",
+                  verbose::Bool=true,
+                  # What the provenance header should say each variant *was*.
+                  # `vs` holds closures by the time it gets here, and a closure
+                  # prints as `#3 (generic function with 1 method)`, which tells
+                  # a reader of the stored table nothing.
+                  described=vs)
     isempty(vs) && throw(ArgumentError("compare: no variants given"))
     # Duplicate labels would silently merge into one variant when the table is
     # sliced, and the merged rows would be fitted as if they were a size sweep.
     allunique(first.(vs)) ||
         throw(ArgumentError("compare: variant labels must be distinct, got " *
                             join(first.(vs), ", ")))
-    ms = metrics === nothing ? default_metrics(problem) : metrics
-    isempty(ms) && throw(ArgumentError("compare: no metrics given"))
+    ms = metrics
+    (ms === nothing || isempty(ms)) && throw(ArgumentError("compare: no metrics given"))
+    builders = [l => _as_builder(v) for (l, v) in vs]
 
     mnames = String.(collect(keys(ms)))
     columns = ["size", "cells", "steps", "wall_s", "floors",
@@ -284,27 +307,32 @@ function compare(problem, variants;
     vals = Vector{Vector{Float64}}()
 
     verbose && @printf("compare: %s, %d variant(s) x %d size(s)\n",
-                       _problem_name(problem), length(vs), length(sizes))
-    for (name, kw) in vs
-        _warmup(problem, size_key, minimum(sizes), tmax, kw)
+                       name, length(builders), length(sizes))
+    for ((vname, build), (_, original)) in zip(builders, vs)
+        _warmup(build, minimum(sizes), tmax, original)
         for sz in sizes
-            sim, t_suggested = problem(; size_key => sz, kw...)
+            sim, t_suggested = build(sz)
             t_end = tmax === nothing ? t_suggested : tmax
+            t_end === nothing && throw(ArgumentError(
+                "compare: variant \"$vname\" is a prebuilt Simulation, which carries " *
+                "no stopping time; pass `tmax`"))
             el = time()
             run!(sim; tmax=t_end, verbose=false)
             el = time() - el
 
             d = sim.diag
-            row = Float64[sz, prod(sim.grid.n), d.steps, el, nrepaired(sim),
+            # Read the size off the grid rather than trusting the request: a
+            # builder is free to ignore it, and a prebuilt simulation must.
+            row = Float64[maximum(sim.grid.n), prod(sim.grid.n), d.steps, el, nrepaired(sim),
                           d.newton_cells > 0 ? d.newton_iterations / d.newton_cells : 0.0,
                           d.newton_max, d.newton_failures]
             for g in values(ms)
                 push!(row, float(g(sim)))
             end
-            push!(label, name)
+            push!(label, vname)
             push!(vals, row)
             if verbose
-                @printf("  %-14s %-6d  %6.2f s  ", name, sz, el)
+                @printf("  %-14s %-6d  %6.2f s  ", vname, row[1], el)
                 for (m, mn) in zip(row[9:end], mnames)
                     @printf("%s = %-10.4g", mn, m)
                 end
@@ -314,10 +342,10 @@ function compare(problem, variants;
     end
 
     values_matrix = permutedims(reduce(hcat, vals))
-    t = ComparisonTable(_problem_name(problem), _provenance(vs, sizes, mnames),
-                        label, columns, values_matrix)
+    t = ComparisonTable(name, _provenance(described, sizes, mnames), label, columns,
+                        values_matrix)
 
-    p = path === :default ? joinpath(outdir, _problem_name(problem) * "_compare.txt") : path
+    p = path === :default ? joinpath(outdir, name * "_compare.txt") : path
     if p !== nothing
         mkpath(dirname(abspath(p)))
         write_comparison(t, p)
@@ -325,6 +353,64 @@ function compare(problem, variants;
     end
     return t
 end
+
+"""
+    compare(problem, variants; kwargs...) -> ComparisonTable
+
+Variants as keywords to a problem: `variants` is a `NamedTuple` of keyword
+`NamedTuple`s, which labels itself, or an iterable of `label => kwargs`. Each is
+splatted into `problem` alongside the resolution.
+
+```julia
+compare(P.radhydro_shock,
+        (P1 = (closure = EddingtonClosure(),),
+         M1 = (closure = LevermoreClosure(),));
+        sizes = (64, 128, 256))
+```
+
+`metrics` defaults to [`default_metrics`](@ref)`(problem)` and the table names
+itself after the problem. A variant's value may also be a builder or a prebuilt
+[`Simulation`](@ref), so one call can mix "same problem, different keywords"
+with "something else entirely". All other keywords are as for [`compare`](@ref).
+"""
+function compare(problem, variants; metrics=nothing, name=nothing, kwargs...)
+    orig = _variant_list(variants)
+    vs = [l => _as_builder(problem, v) for (l, v) in orig]
+    return _compare(vs; described=orig,
+                    metrics=(metrics === nothing ? default_metrics(problem) : metrics),
+                    name=(name === nothing ? _problem_name(problem) : name), kwargs...)
+end
+
+"""
+    compare(sims::Simulation...; tmax, metrics, kwargs...) -> ComparisonTable
+    compare((label => sim)...; tmax, metrics, kwargs...)
+
+Compare simulations you have already built, however they differ. There is no
+resolution sweep -- every configuration field of `Simulation` is `const`, so an
+instance pins its own grid -- which means no convergence rate. For that, give
+[`compare`](@ref) builders instead.
+
+```julia
+a, _ = P.sod_shock_tube(nx = 256, riemann = HLLC())
+b, _ = P.sod_shock_tube(nx = 256, riemann = LLF())
+compare("HLLC" => a, "LLF" => b; tmax = 0.2,
+        metrics = default_metrics(P.sod_shock_tube))
+```
+
+`tmax` is required, because a simulation carries no suggested stopping time.
+Unlabelled simulations are called `sim1`, `sim2`, ...; the harness will not
+guess a name by inspecting what differs between them. The simulations are run
+in place, so they are left finished and ready to plot.
+"""
+compare(sim::Simulation, more::Simulation...; kwargs...) =
+    _compare_sims(["sim$i" => s for (i, s) in enumerate((sim, more...))]; kwargs...)
+
+compare(p::Pair{<:Any,<:Simulation}, more::Pair{<:Any,<:Simulation}...; kwargs...) =
+    _compare_sims(_variant_list([p, more...]); kwargs...)
+
+# There is one size and it belongs to the grid, not to the request.
+_compare_sims(vs; kwargs...) =
+    _compare(vs; sizes=(nothing,), name="simulations", kwargs...)
 
 """
     compare(problem, key::Symbol, values; kwargs...) -> ComparisonTable
@@ -357,6 +443,12 @@ end
 
 _problem_name(f) = String(nameof(f))
 
+# A keyword variant describes itself; a builder or a prebuilt simulation cannot,
+# so say what it was rather than printing `#3 (generic function with 1 method)`.
+_describe(v::NamedTuple) = string(v)
+_describe(v::Simulation) = "Simulation(n = " * join(v.grid.n, "x") * ")"
+_describe(v) = "builder"
+
 # Julia compiles on first call, and each variant produces its own concrete
 # `Simulation` type, so the first timed run of every variant would otherwise be
 # charged a few hundred milliseconds of compilation. Measured on the Sod tube,
@@ -364,17 +456,25 @@ _problem_name(f) = String(nameof(f))
 # variant at 256 cells -- which inverts the one column people read to judge
 # cost. So run each variant once first, at the smallest size, for one step, and
 # throw the result away. Compiling is the point; the answer is not.
-function _warmup(problem, size_key, sz, tmax, kw)
-    sim, t_suggested = problem(; size_key => sz, kw...)
-    run!(sim; tmax=(tmax === nothing ? t_suggested : tmax), maxsteps=1, verbose=false)
+#
+# A prebuilt simulation cannot be warmed by running it -- that would consume the
+# run about to be measured -- so warm a throwaway copy instead. The copy is
+# transient, and without it the first prebuilt variant is charged the
+# compilation of every kernel its type instantiates, which is the same 550x
+# distortion in the same column.
+function _warmup(build, sz, tmax, original)
+    sim, t_suggested = original isa Simulation ? (deepcopy(original), nothing) : build(sz)
+    t_end = tmax === nothing ? t_suggested : tmax
+    t_end === nothing && return nothing        # nothing to warm; the run will report it
+    run!(sim; tmax=t_end, maxsteps=1, verbose=false)
     return nothing
 end
 
 function _provenance(vs, sizes, mnames)
     [
         "variants" => join(first.(vs), ", "),
-        "variant_kwargs" => join((string(first(p), " = ", last(p)) for p in vs), " | "),
-        "sizes" => join(sizes, ", "),
+        "variant_kwargs" => join((string(first(p), " = ", _describe(last(p))) for p in vs), " | "),
+        "sizes" => (first(sizes) === nothing ? "prebuilt" : join(sizes, ", ")),
         "metrics" => join(mnames, ", "),
         "date" => Dates.format(Dates.now(), "yyyy-mm-ddTHH:MM:SS"),
         "code" => _code_version(),

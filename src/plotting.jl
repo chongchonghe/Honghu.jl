@@ -178,6 +178,11 @@ plotcompare("sod_shock_tube_riemann_compare.txt",
 
 Pass `metric` to draw one panel per table instead of all of them.
 
+A table with only one resolution -- one built by comparing prebuilt
+[`Simulation`](@ref)s -- is drawn as a bar chart instead. There is no trend to
+put on a log-log axis, and an axis that implies one would be a claim the run
+never measured.
+
 **Requires `using Plots`.**
 """
 function plotcompare end

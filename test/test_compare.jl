@@ -65,12 +65,25 @@
         end
     end
 
-    @testset "finds the resolution keyword" begin
-        # 1D problems spell it `nx`, 2D/3D ones `n`; the caller should not have
-        # to remember which
-        @test Hydro3D._size_key(P.sod_shock_tube) === :nx
-        @test Hydro3D._size_key(P.sedov_blast) === :n
-        @test Hydro3D._size_key(P.kelvin_helmholtz) === :n
+    @testset "every problem takes `n` for resolution" begin
+        # The harness builds the simulation, so it has to pass resolution by
+        # name. It used to guess between `nx` and `n` by introspecting the
+        # factory with `Base.kwarg_decl`, a Julia internal -- and guessed wrong
+        # for `matter_coupling` (no size keyword at all) and `radiation_shadow`
+        # (`n` is a tuple). One name across all ten problems replaces the guess.
+        for f in (P.sod_shock_tube, P.smooth_advection, P.kelvin_helmholtz, P.sedov_blast,
+                  P.radiation_streaming, P.radiation_diffusion, P.matter_coupling,
+                  P.marshak_wave, P.radhydro_shock, P.radiation_shadow)
+            sim, _ = f(; n=32)
+            @test maximum(sim.grid.n) == 32
+        end
+        # `nx` survives as a human-facing alias, so existing scripts still read well
+        @test first(P.sod_shock_tube(; nx=77)).grid.n == (77, 1, 1)
+        # the shadow's cell counts are not independent: a 1 x 0.4 domain needs
+        # ny = 2nx/5 for square cells, and the default must be untouched
+        @test first(P.radiation_shadow()).grid.n == (280, 112, 1)
+        @test first(P.radiation_shadow(; n=100)).grid.n == (100, 40, 1)
+
         t = compare(P.sedov_blast, (base=(;),); sizes=(16,), path=nothing, verbose=false)
         @test t[:cells] == [16.0^3]
     end
@@ -178,6 +191,70 @@
                     verbose=false)
         @test all(h[:newton_max] .== 0)
         @test occursin("zero for every run", sprint(show, MIME("text/plain"), h))
+    end
+
+    @testset "a variant may be an arbitrary builder" begin
+        # The point of the builder core: a variant can differ in something that
+        # is not a keyword of `Simulation` at all. Here it is the initial
+        # condition, which lives inside the factory's closure and was
+        # unreachable when a variant had to be a set of keywords.
+        ref(x) = 1 + 0.5 * sinpi(2x)
+        function setup(nx, amp)
+            sim, tmax = P.smooth_advection(; n=nx, amplitude=amp)
+            (sim, tmax)
+        end
+        t = compare(["flat" => nx -> setup(nx, 0.1), "steep" => nx -> setup(nx, 0.9)];
+                    sizes=(32, 64), path=nothing, verbose=false,
+                    metrics=(; peak=sim -> maximum(first(field(sim, :density)))))
+        @test variants(t) == ["flat", "steep"]
+        @test all(t[:peak, "steep"] .> t[:peak, "flat"])
+        @test t[:size] == [32.0, 64.0, 32.0, 64.0]
+
+        # a builder needs metrics: there is no problem to take defaults from
+        @test_throws ArgumentError compare(["a" => nx -> setup(nx, 0.1)];
+                                           sizes=(32,), path=nothing, verbose=false)
+        # ... and bare keywords need a problem to be passed to
+        @test_throws ArgumentError compare(["a" => (amplitude=0.1,)]; sizes=(32,),
+                                           path=nothing, verbose=false,
+                                           metrics=(; peak=sim -> 1.0))
+    end
+
+    @testset "prebuilt simulations, without a sweep" begin
+        # no problem argument, so the metrics must be named -- but they are the
+        # same ones the problem already defines
+        m = default_metrics(P.sod_shock_tube)
+        a, _ = P.sod_shock_tube(; n=128, riemann=HLLC())
+        b, _ = P.sod_shock_tube(; n=128, riemann=LLF())
+        t = compare("HLLC" => a, "LLF" => b; tmax=0.2, metrics=m, path=nothing,
+                    verbose=false)
+        @test variants(t) == ["HLLC", "LLF"]
+        @test t[:size] == [128.0, 128.0]              # read off the grid, not requested
+        @test t[:l1_density, "HLLC"][1] < t[:l1_density, "LLF"][1]
+        # the simulations are run in place and left finished, ready to plot
+        @test a.t ≈ 0.2 && b.t ≈ 0.2
+        # one resolution, so no rate is claimed
+        @test !occursin("convergence rate", sprint(show, MIME("text/plain"), t))
+
+        # unlabelled instances get positional names rather than a guess at what differs
+        c, _ = P.sod_shock_tube(; n=64)
+        d, _ = P.sod_shock_tube(; n=64, reconstruction=PCM())
+        @test variants(compare(c, d; tmax=0.05, metrics=m, path=nothing,
+                               verbose=false)) == ["sim1", "sim2"]
+
+        # a Simulation carries no stopping time of its own
+        e, _ = P.sod_shock_tube(; n=32)
+        @test_throws ArgumentError compare(e; metrics=m, path=nothing, verbose=false)
+
+        # Warm-up cannot run the simulation itself -- that would consume the run
+        # being measured -- so it runs a throwaway copy. Without it the first
+        # variant carries its type's compilation and the 64-cell run would
+        # measure slower than the 512-cell one, which is the same distortion the
+        # builder path guards against.
+        small, _ = P.sod_shock_tube(; n=64)
+        big, _ = P.sod_shock_tube(; n=512)
+        u = compare("small" => small, "big" => big; tmax=0.2, metrics=m, path=nothing,
+                    verbose=false)
+        @test u[:wall_s, "big"][1] > 4 * u[:wall_s, "small"][1]
     end
 
     @testset "a column can be sliced by variant" begin

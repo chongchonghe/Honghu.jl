@@ -144,7 +144,8 @@ function Hydro3D.plotcompare(t::ComparisonTable, more::ComparisonTable...;
     isempty(pairs) && throw(ArgumentError("plotcompare: the table has no metric columns"))
     named = length(ts) > 1
 
-    panels = [_panel(u, m; title=(named ? u.problem : "")) for (u, m) in pairs]
+    panels = [(_sweeps(u) ? _panel : _barpanel)(u, m; title=(named ? u.problem : ""))
+              for (u, m) in pairs]
 
     # Stamp the code version onto the figure. A convergence plot without one is
     # a number you cannot go back to.
@@ -160,6 +161,21 @@ end
 function _stamp(t::ComparisonTable)
     i = findfirst(p -> first(p) == "code", t.meta)
     return i === nothing ? "" : "[" * last(t.meta[i]) * "]"
+end
+
+_sweeps(t::ComparisonTable) = length(unique(t[:size])) > 1
+
+# A table from prebuilt simulations has one resolution, so there is nothing to
+# put on a log-log axis -- every series would be a lone marker and the axis
+# would imply a trend that was never measured. A grouped bar is the honest
+# picture of a head-to-head, on a linear axis because a bar chart is read from
+# zero.
+function _barpanel(t::ComparisonTable, m::AbstractString; title="")
+    bv = Hydro3D._by_variant(t)
+    labels = [v for (v, _) in bv]
+    y = [t[m][k][1] for (_, k) in bv]
+    bar(labels, y; legend=false, ylabel=m, title=title, titlefontsize=10,
+        lw=0, bar_width=0.6)
 end
 
 function _panel(t::ComparisonTable, m::AbstractString; title="")

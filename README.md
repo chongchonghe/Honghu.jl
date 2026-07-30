@@ -137,6 +137,26 @@ compare(P.radhydro_shock, (P1 = (closure = EddingtonClosure(),),
                            M1 = (closure = LevermoreClosure(),)); sizes = (64, 128, 256))
 ```
 
+Underneath both of those, a variant is a **builder**: a function of resolution returning `(sim, tmax)`, which is the contract the problem factories already satisfy. Hand builders in directly and a variant can differ in anything at all — a different initial condition, a different geometry, a global flag — not only in keywords the harness knows how to pass:
+
+```julia
+compare(["flat"  => nx -> setup(nx, amplitude = 0.1),
+         "steep" => nx -> setup(nx, amplitude = 0.9)];
+        sizes = (64, 128, 256), metrics = default_metrics(P.smooth_advection))
+```
+
+Because every built-in problem takes `n` for resolution, nothing has to inspect a factory to discover what it calls it. (`nx` still works everywhere as a human-facing alias.)
+
+You can also hand over simulations you have already built, however they differ:
+
+```julia
+a, _ = P.sod_shock_tube(n = 256, riemann = HLLC())
+b, _ = P.sod_shock_tube(n = 256, riemann = LLF())
+compare("HLLC" => a, "LLF" => b; tmax = 0.2, metrics = default_metrics(P.sod_shock_tube))
+```
+
+There is no sweep in that form — every configuration field of `Simulation` is `const`, so an instance pins its own grid — and therefore no convergence rate. `plotcompare` draws such a table as a bar chart rather than putting a single point per series on a log axis. `tmax` is required, since a simulation carries no stopping time of its own, and the simulations are run in place, so they come back finished and ready to plot.
+
 Every run also records `steps`, `wall_s`, `floors` and the Newton statistics, so a variant that is more accurate *because* it took ten times as long, or that only converged with help from the positivity floors, is visible rather than flattering. The first run of each variant is a discarded warm-up, so `wall_s` measures the solver rather than Julia's compiler.
 
 The table is the durable artefact; `plotcompare` draws from it, so a figure is reproducible from stored numbers months later, with the git hash that produced them stamped on:
@@ -256,7 +276,7 @@ hydro3d.jl/
     riemann/     one Riemann solver per file, mirroring Quokka's headers
     problems/    built-in problems, exact solutions, per-problem metrics
   ext/           plotting methods, loaded only when Plots is present
-  test/          665 tests in eleven files, plus benchmarks.jl
+  test/          688 tests in eleven files, plus benchmarks.jl
   docs/          make_figures.jl, make_animations.jl, and the generated figures/
   examples/      sod_1d, kelvin_helmholtz_2d, sedov_3d, compare_schemes,
                  marshak_wave, radiation_shadow, radiating_blast_3d

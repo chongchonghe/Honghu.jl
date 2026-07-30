@@ -4,7 +4,7 @@
 # readable; nothing in the code depends on that choice.
 
 """
-    radiation_streaming(; nx = 128, chat_over_c = 1.0, closure = LevermoreClosure(),
+    radiation_streaming(; n = 128, chat_over_c = 1.0, closure = LevermoreClosure(),
                         beta_order = 0, kwargs...) -> (sim, tmax)
 
 Free-streaming limit: radiation injected at the left boundary of a transparent
@@ -14,7 +14,7 @@ differs from flux-limited diffusion.
 
 At `tmax = 0.5` the front sits at `x = 0.5 chat`.
 """
-function radiation_streaming(; nx::Integer=128, chat_over_c=1.0,
+function radiation_streaming(; n::Integer=128, nx::Integer=n, chat_over_c=1.0,
                              closure::AbstractClosure=LevermoreClosure(),
                              beta_order::Integer=0, kwargs...)
     c = 1.0
@@ -37,7 +37,7 @@ function radiation_streaming(; nx::Integer=128, chat_over_c=1.0,
 end
 
 """
-    radiation_diffusion(; nx = 128, kappa = 300.0, sigma0 = 0.05,
+    radiation_diffusion(; n = 128, kappa = 300.0, sigma0 = 0.05,
                         closure = LevermoreClosure(), beta_order = 0, kwargs...)
         -> (sim, tmax)
 
@@ -53,7 +53,7 @@ the answer must not depend on how many mean free paths a cell spans.
 Note that a reduced speed of light rescales `D` by `chat/c`, so this problem is
 set up with `chat = c`.
 """
-function radiation_diffusion(; nx::Integer=128, kappa=300.0, sigma0=0.05, E0=1.0,
+function radiation_diffusion(; n::Integer=128, nx::Integer=n, kappa=300.0, sigma0=0.05, E0=1.0,
                              closure::AbstractClosure=LevermoreClosure(),
                              beta_order::Integer=0, kwargs...)
     c = 1.0
@@ -80,7 +80,7 @@ function diffusion_exact(x, t; sigma0=0.05, E0=1.0, D=1 / 900, x0=0.5)
 end
 
 """
-    matter_coupling(; kappa = 1e3, T_gas = 1.0, T_rad = 0.1, cv = 1.0, kwargs...)
+    matter_coupling(; n = 4, kappa = 1e3, T_gas = 1.0, T_rad = 0.1, cv = 1.0, kwargs...)
         -> (sim, tmax)
 
 Stiff matter-radiation coupling with no spatial structure: a uniform box whose
@@ -91,11 +91,15 @@ the transport step.
 Passing this test means the implicit solve is doing its job: total energy
 `E_int + (c/chat) E_rad` must be conserved to round-off, and the final state
 must sit on the equilibrium curve regardless of how large the step is.
+
+The state is uniform, so `n` changes nothing but the number of cells solving the
+same problem; it exists so that every problem takes resolution under one name.
 """
-function matter_coupling(; kappa=1e3, T_gas=1.0, T_rad=0.1, cv=1.0, gamma=5 / 3, kwargs...)
+function matter_coupling(; n::Integer=4, kappa=1e3, T_gas=1.0, T_rad=0.1, cv=1.0,
+                         gamma=5 / 3, kwargs...)
     rad = RadiationPhysics(; c=1.0, chat=1.0, a_rad=1.0, beta_order=0,
                            opacity=ConstantOpacity(kappa))
-    sim = Simulation(; n=(4, 1, 1), xhi=(1.0, 1.0, 1.0),
+    sim = Simulation(; n=(n, 1, 1), xhi=(1.0, 1.0, 1.0),
                      eos=IdealGas(; gamma, cv), radiation=rad, hydro=false,
                      boundaries=Boundaries(Periodic()), kwargs...)
     set_initial_conditions!(sim) do x, y, z
@@ -105,7 +109,7 @@ function matter_coupling(; kappa=1e3, T_gas=1.0, T_rad=0.1, cv=1.0, gamma=5 / 3,
 end
 
 """
-    marshak_wave(; nx = 256, kappa = 300.0, T_wall = 1.0, cv = 1.0,
+    marshak_wave(; n = 256, kappa = 300.0, T_wall = 1.0, cv = 1.0,
                  closure = LevermoreClosure(), beta_order = 0, kwargs...)
         -> (sim, tmax)
 
@@ -118,7 +122,7 @@ The wall is imposed as a Dirichlet condition on the radiation moments,
 `E = a_rad T_wall⁴` with zero flux; the HLL solver then supplies the inward flux
 set by the jump across the boundary.
 """
-function marshak_wave(; nx::Integer=256, kappa=300.0, T_wall=1.0, T_init=1e-4,
+function marshak_wave(; n::Integer=256, nx::Integer=n, kappa=300.0, T_wall=1.0, T_init=1e-4,
                       cv=1.0, gamma=5 / 3,
                       closure::AbstractClosure=LevermoreClosure(),
                       beta_order::Integer=0, kwargs...)
@@ -140,7 +144,7 @@ function marshak_wave(; nx::Integer=256, kappa=300.0, T_wall=1.0, T_init=1e-4,
 end
 
 """
-    radhydro_shock(; nx = 256, closure = EddingtonClosure(), beta_order = 1,
+    radhydro_shock(; n = 256, closure = EddingtonClosure(), beta_order = 1,
                    chat_factor = 10.0, kwargs...) -> (sim, tmax)
 
 The Mach 3 radiative shock of Lowrie & Edwards (2008), in the form used by
@@ -176,7 +180,7 @@ of `10 (v_0 + c_s0)` is Quokka's.
 Compare against [`radhydro_shock_exact`](@ref); `tmax` is three shock-crossing
 times.
 """
-function radhydro_shock(; nx::Integer=256,
+function radhydro_shock(; n::Integer=256, nx::Integer=n,
                         closure::AbstractClosure=EddingtonClosure(),
                         beta_order::Integer=1, chat_factor=10.0, kwargs...)
     a_rad = 1.0e-4
@@ -234,6 +238,10 @@ The shadow test of Hayes & Norman (2003) in 2D: a collimated beam enters from
 the left of a transparent box and strikes an opaque, absorbing elliptical clump
 of semi-axes `(0.10, 0.06)` centred at `x = 0.25`.
 
+`n` may be the pair of cell counts or a single number, which is taken as the `x`
+resolution and gives `ny = 2 nx / 5` -- the ratio that makes cells square on
+this `1 x 0.4` domain, and the one the default `(280, 112)` already has.
+
 A two-moment scheme with the M1 closure preserves the direction of the
 radiation and leaves a sharp shadow behind the clump; a diffusion-based scheme
 lets radiation leak around the obstacle and fills the shadow in. Far downstream
@@ -248,10 +256,15 @@ function radiation_shadow(; n=(280, 112), kappa=1.0, rho_blob=1e3, rho_bg=1e-2,
                           beta_order::Integer=0, kwargs...)
     c = 1.0
     E0 = 1.0
+    # The domain is 1 x 0.4, so the two cell counts are not independent: square
+    # cells need `ny = 2 nx / 5`. A scalar `n` is the x resolution and supplies
+    # the other, which is what makes this problem refinable by `compare`; the
+    # default (280, 112) is exactly that ratio.
+    nxy = n isa Integer ? (n, round(Int, 2n / 5)) : n
     rad = RadiationPhysics(; c=c, chat=c, a_rad=1.0, closure, beta_order,
                            opacity=ConstantOpacity(kappa))
     beam = Fixed((E0, 0.999 * c * E0, 0.0, 0.0))
-    sim = Simulation(; n=(n[1], n[2], 1), xlo=(0.0, -0.2, 0.0), xhi=(1.0, 0.2, 1.0),
+    sim = Simulation(; n=(nxy[1], nxy[2], 1), xlo=(0.0, -0.2, 0.0), xhi=(1.0, 0.2, 1.0),
                      eos=IdealGas(gamma=5 / 3, cv=1e10),
                      radiation=rad, hydro=false,
                      boundaries=Boundaries(Outflow()),
