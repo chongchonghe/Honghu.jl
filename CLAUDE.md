@@ -28,16 +28,49 @@ Prefer building example figures out of `plotstate` / `plotpanels` rather than ra
 
 ## Dependencies
 
-The runtime dependency list is `Printf` and `Dates`. That is no longer a hard rule -- packages are allowed where they earn their place -- but it is still the default, and worth keeping for the *solver*. Both are Julia stdlibs -- nothing to download, no dependency tree; `Dates` is used only for the provenance timestamp in a comparison table. That is a design property, not an accident: this code is meant to run on nodes where a large dependency tree is a liability. Two things that would normally be a package are written in-tree instead — `src/staticvec.jl` (a fixed-size vector) and the VTK writer in `src/output.jl`.
+**Use a package when it earns its place.** There is no prohibition here, and no
+credit for hand-writing something a library does better. Justify the choice, put
+it in the right tier, and move on.
 
-Anything that is not needed to *solve* goes in a weak dependency or a test extra:
+The tiers, strongest preference first:
 
-- **`Plots`** is a `[weakdeps]` entry. The plotting methods live in `ext/Hydro3DPlotsExt.jl` and appear only when the user loads Plots. `src/plotting.jl` holds the function stubs, their docstrings, and fallbacks that raise a message telling the caller to load Plots. Add new plotting features to the extension, never to `src/`.
-- **`BenchmarkTools`** is a test extra, used only by `test/benchmarks.jl`.
+| Tier | What goes there | Cost to a user who doesn't use it |
+|:---|:---|:---|
+| `[weakdeps]` + `ext/` | anything not needed to *solve* -- plotting, ODE solvers, IO formats, analysis | nothing |
+| `[extras]` / test target | anything used only by the test suite | nothing |
+| `[deps]` | genuinely required to integrate the equations | paid by everyone, every run |
 
-Before adding any dependency, ask whether it earns its place. `StaticArrays` would replace 58 lines of `SVec` that are already allocation-free; `HDF5`/`WriteVTK` would replace a validated 200-line writer; a generic nonlinear solver would be slower than the hand-written 2×2 Newton whose Jacobian inverts analytically. All three were considered and declined -- on merit, not on principle.
+Prefer a weak dependency whenever the feature is optional, because the extension
+mechanism makes that free: the methods appear when the user loads the package and
+are absent otherwise. `src/plotting.jl` is the pattern -- stubs and docstrings in
+`src/`, implementations in `ext/`, and a fallback that tells the caller which
+package to load rather than throwing `MethodError`. Two worked examples:
 
-Where a package does earn its place, prefer a `[weakdeps]` extension over a hard dependency, so that a run which does not use the feature still needs nothing. `AdaptiveCoupling` is the worked example: it is an error-controlled ODE solve backed by OrdinaryDiffEq, and the two hand-written coupling solvers next to it need no packages at all, so the solver still starts on a bare node.
+- **`Plots`** — the four plotting entry points, in `ext/Hydro3DPlotsExt.jl`.
+- **`OrdinaryDiffEq`** — `AdaptiveCoupling`, the error-controlled
+  matter-radiation coupling. The two hand-written coupling solvers beside it
+  need no packages, so the solver still starts on a machine with neither.
+
+The `[deps]` list is currently `Printf` and `Dates`, both stdlibs. Keeping the
+*solver* that light is still worth something — this code is meant to run on
+compute nodes where a large tree is a liability, and a hard dependency is the one
+tier every user pays for. So the bar for `[deps]` is real, but it is a bar, not a
+wall: if integrating the equations genuinely needs a package, add it.
+
+Three things were considered and written in-tree instead, each on merit rather
+than principle, and each is worth revisiting if the calculus changes:
+
+- `StaticArrays` — would replace `src/staticvec.jl`, 58 lines that are already
+  allocation-free and deliberately *not* an `AbstractArray` so a stray broadcast
+  cannot allocate.
+- `HDF5` / `WriteVTK` — would replace a validated ~200-line writer in
+  `src/output.jl`.
+- a generic nonlinear solver — slower than the hand-written 2×2 Newton whose
+  Jacobian inverts analytically, and slower than the arrowhead elimination in
+  `src/coupling_solvers.jl`, which is `O(NG)` and forms no matrix.
+
+What has not changed: keep hot kernels allocation-free, and don't let a
+dependency into an inner loop without measuring what it costs there.
 
 ## Source layout
 
