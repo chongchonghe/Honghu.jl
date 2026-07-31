@@ -367,24 +367,34 @@ end
 
 # --- a known limitation, recorded here rather than in a commit message --------
 #
-# `QuokkaCoupling` opens its Newton iteration at `R = 0`, which makes the group
-# energy it implies on the first pass `kappa_P/kappa_E * (4piB/c + work/tau)`.
-# When the lagged `v.F` work term is negative and larger in magnitude than the
-# thermal emission -- a cell moving against the radiation flux, deep enough in
-# the medium that `tau` is large -- that first energy is negative, the
-# equilibrium-temperature guard then snaps the gas to its floor, and the
-# iteration is trapped there. It reports `converged = false`, so the failure is
-# visible in `sim.diag.newton_failures` and in `run!`'s summary rather than
-# silent, but the cell is wrong.
-#
-# Reproduce with `beta_order = 1`, `c = 100`, `chat = 10`, `a_rad = 1e-6`,
-# `kappa = 100`, `rho = 1`, `p = 1`, `Erad = 1`, `Fx = 0.9c` and `vx < 0`: every
-# cell with a negative velocity loses all its energy. `DirectCoupling` gets the
-# same problem right, because it starts from `Erad0` instead.
-#
-# The grey driver in `source_terms.jl` does not have the problem: its first
-# iterate is the linearised solution `R = (4piB/c - E0 kappa_E/kappa_P) tau +
-# work`, with `Erad` held at `Erad0`. That is also what Quokka's
-# `AddSourceTermsMultiGroup` does, so the fix is to give `QuokkaCoupling` the
-# same opening guess. It lives in `coupling_solvers.jl`, which this change does
-# not own.
+@testset "a negative work term does not drain a cell" begin
+    # `QuokkaCoupling` used to open its Newton iteration at `R = 0`, which makes
+    # the group energy implied on the first pass `kappaP/kappaE (4piB/c +
+    # work/tau)`. When the lagged `v.F` work term is negative and larger than the
+    # thermal emission -- a cell moving against the radiation flux, deep enough
+    # that `tau` is large -- that first energy is negative, the
+    # equilibrium-temperature guard snapped the gas to its floor, and the
+    # iteration was trapped: every negative-velocity cell lost all its energy.
+    #
+    # It now opens from the linearised transfer with `Erad` held at `Erad0`,
+    # which is what the grey driver and Quokka's `AddSourceTermsMultiGroup` both
+    # do. `DirectCoupling` never had the problem, because it starts from `Erad0`,
+    # so the two agreeing here is the assertion that matters.
+    groups = RadiationGroups(1.0, 100.0, 3)
+    function drained(coupling)
+        rad = RadiationPhysics(; c=100.0, chat=10.0, a_rad=1e-6, groups, coupling,
+                               beta_order=1, opacity=ConstantOpacity(100.0))
+        sim = Simulation(; n=(8, 1, 1), radiation=rad,
+                         boundaries=Boundaries(Periodic()),
+                         radiation_boundaries=Boundaries(Periodic()))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=1.0, vx=-0.5, p=1.0, Erad=1.0, Fx=0.9 * 100.0)
+        end
+        run!(sim; tmax=1e-3, verbose=false)
+        return minimum(first(field(sim, :Erad)))   # group sum
+    end
+    q = drained(QuokkaCoupling())
+    d = drained(DirectCoupling())
+    @test q > 1e-6                      # the cell keeps its energy at all
+    @test isapprox(q, d; rtol=1e-6)     # ... and the two solvers agree on it
+end

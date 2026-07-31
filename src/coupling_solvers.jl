@@ -120,8 +120,18 @@ function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M
 
     Egas = s.Egas
     Erad = s.Erad
-    Rvec = zero(SVec{NG,T})
     Etot0 = s.Egas + cscale * (sumvec(s.Erad) + sumvec(s.src))
+
+    # Open from the *linearised* transfer at the old state, not from R = 0.
+    # Starting at zero makes the first implied group energy
+    # kappaPoverE (B + work/tau), which goes negative whenever the lagged v.F
+    # work term is negative and outweighs the cell's thermal emission. The
+    # equilibrium guard below then snaps the gas to its floor and the iteration
+    # never recovers, emptying the cell. The grey driver in `source_terms.jl`
+    # has always opened this way; the multigroup path had not, and every
+    # negative-velocity cell of a beta_order = 1 run drained to the floor.
+    Rvec = mul(tau, thermal_emission(s, gas_temperature_of(s, Egas)) -
+                    divide(s.Erad, kPoverE)) + s.work
 
     n = 0
     converged = false
@@ -133,8 +143,10 @@ function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M
 
         # Given R, the group energies follow in closed form -- this is the
         # inversion that the replacement buys, and why no group energy ever
-        # appears as an independent unknown.
-        Erad = _erad_from_R(tau, kPoverE, fourPiBoverC, Rvec, s.work, s.Erad, s.src, Val(NG))
+        # appears as an independent unknown. The opening pass keeps the old
+        # energies, which is what makes the linearised R above self-consistent.
+        Erad = n == 1 ? s.Erad :
+               _erad_from_R(tau, kPoverE, fourPiBoverC, Rvec, s.work, s.Erad, s.src, Val(NG))
 
         scale = max(abs(Etot0), eps(T))
 

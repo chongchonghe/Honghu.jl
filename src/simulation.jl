@@ -339,10 +339,22 @@ function set_initial_conditions!(f::F, sim::Simulation{T}) where {F,T}
                 er = phys.a_rad * tr^4
             end
             er = max(er, sim.floors.erad)
-            sim.R[IERAD, i, j, k] = er
-            sim.R[IFRX, i, j, k] = T(_field(s, Val(:Fx), z0))
-            sim.R[IFRY, i, j, k] = T(_field(s, Val(:Fy), z0))
-            sim.R[IFRZ, i, j, k] = T(_field(s, Val(:Fz), z0))
+            fx = T(_field(s, Val(:Fx), z0))
+            fy = T(_field(s, Val(:Fy), z0))
+            fz = T(_field(s, Val(:Fz), z0))
+            # A scalar `Erad` in an initial condition is a *total*. Split it over
+            # the groups by the Planck spectrum at the radiation temperature it
+            # implies -- the only spectrum a single number carries -- so that a
+            # multigroup run starts in equilibrium rather than with everything
+            # piled into group 1 and the rest empty. Exact at one group.
+            frac = planck_fractions(phys.groups, sqrt(sqrt(er / phys.a_rad)), phys.k_B)
+            for gr in 1:ngroups(phys)
+                b = gbase(gr)
+                sim.R[b+IERAD, i, j, k] = er * frac[gr]
+                sim.R[b+IFRX, i, j, k] = fx * frac[gr]
+                sim.R[b+IFRY, i, j, k] = fy * frac[gr]
+                sim.R[b+IFRZ, i, j, k] = fz * frac[gr]
+            end
         end
     end
     # Ghosts first: `enforce_state!` sweeps the whole array, and until the
@@ -741,7 +753,11 @@ function conserved_totals(sim::Simulation{T}) where {T}
         py += sim.U[IMY, i, j, k]
         pz += sim.U[IMZ, i, j, k]
         egas += sim.U[IEGAS, i, j, k]
-        has_radiation(sim) && (erad += sim.R[IERAD, i, j, k])
+        if has_radiation(sim)
+            for gr in 1:ngroups(sim.radiation)
+                erad += sim.R[gbase(gr)+IERAD, i, j, k]
+            end
+        end
     end
     (mass=mass * dV, momentum=(px * dV, py * dV, pz * dV),
      energy_gas=egas * dV, energy_rad=erad * dV,
@@ -790,7 +806,13 @@ function radiation_temperature(sim::Simulation{T}) where {T}
     arad = sim.radiation.a_rad
     out = Array{T,3}(undef, g.n...)
     @inbounds for k in 1:g.n[3], j in 1:g.n[2], i in 1:g.n[1]
-        er = sim.R[IERAD, i+g.ng[1], j+g.ng[2], k+g.ng[3]]
+        # The radiation temperature is set by the *total* energy density: the
+        # Planck fractions sum to one, so a_rad T^4 is the sum over groups.
+        # Reading group 1 alone would report the temperature of one bin.
+        er = zero(T)
+        for gr in 1:ngroups(sim.radiation)
+            er += sim.R[gbase(gr)+IERAD, i+g.ng[1], j+g.ng[2], k+g.ng[3]]
+        end
         out[i, j, k] = sqrt(sqrt(max(er, zero(T)) / arad))
     end
     out

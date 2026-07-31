@@ -50,6 +50,7 @@ include("metrics.jl")     # needs the problem functions it dispatches on
 export sod_shock_tube, smooth_advection, kelvin_helmholtz, sedov_blast
 export radiation_streaming, radiation_diffusion, matter_coupling
 export marshak_wave, radiation_shadow, radhydro_shock
+export marshak_vaytet, total_erad
 export sod_exact, diffusion_exact, radhydro_shock_exact, interpolate_to
 
 end # module Problems
