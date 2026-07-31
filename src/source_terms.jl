@@ -61,10 +61,14 @@ automatically when hydrodynamics is disabled.
 
 Returns a [`SourceStats`](@ref).
 """
-function radiation_source_step!(U::A, R::A, eos::AbstractEOS, phys::RadiationPhysics{T},
+function radiation_source_step!(U::A, R::A, eos::AbstractEOS,
+                                phys::RadiationPhysics{NG,M,T},
                                 g::CartesianGrid{T}, dt::T, source::S, t::T,
                                 floors::Floors{T};
-                                update_momentum::Bool=true) where {T,A<:AbstractArray{T,4},S}
+                                update_momentum::Bool=true) where {NG,M,T,A<:AbstractArray{T,4},S}
+    NG == 1 || throw(ArgumentError(
+        "radiation_source_step!: this driver is the single-group coupling; a " *
+        "$(NG)-group run needs the multigroup driver"))
     c = phys.c
     chat = phys.chat
     cscale = c / chat

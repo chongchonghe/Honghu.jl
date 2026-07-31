@@ -38,6 +38,32 @@ end
 @inline Base.:*(s::Number, a::SVec) = SVec(map(x -> s * x, a.data))
 @inline Base.:*(a::SVec, s::Number) = s * a
 @inline Base.:/(a::SVec, s::Number) = SVec(map(x -> x / s, a.data))
+@inline Base.:+(a::SVec, s::Number) = SVec(map(x -> x + s, a.data))
+@inline Base.:+(s::Number, a::SVec) = a + s
+@inline Base.:-(a::SVec, s::Number) = SVec(map(x -> x - s, a.data))
+
+# Elementwise products and quotients between two group vectors. Multigroup
+# coupling is full of them -- `kappaP .* fourPiB`, `Erad ./ kappaPoverE` -- and
+# spelling them with `map` here keeps the call sites readable without pulling in
+# broadcasting, which `SVec` deliberately does not support (a stray broadcast on
+# a state vector is exactly the allocation this type exists to prevent).
+@inline mul(a::SVec{N}, b::SVec{N}) where {N} = SVec(map(*, a.data, b.data))
+@inline divide(a::SVec{N}, b::SVec{N}) where {N} = SVec(map(/, a.data, b.data))
+
+"""
+    sumvec(a::SVec)
+
+Sum of the components. Named to avoid extending `Base.sum`, which would invite
+the generic iterator machinery into a hot loop.
+"""
+@inline sumvec(a::SVec) = sum(a.data)
+
+"""
+    maxabs(a::SVec)
+
+Largest absolute component, for convergence tests on a group vector.
+"""
+@inline maxabs(a::SVec) = maximum(map(abs, a.data))
 
 """
     dot(a::SVec, b::SVec)

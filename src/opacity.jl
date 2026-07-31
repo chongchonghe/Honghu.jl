@@ -86,3 +86,75 @@ UserOpacity(; planck, energy=planck, flux=planck) = UserOpacity(planck, energy, 
 @inline planck_opacity(op::UserOpacity, rho, T) = op.planck(rho, T)
 @inline energy_mean_opacity(op::UserOpacity, rho, T) = op.energy(rho, T)
 @inline flux_mean_opacity(op::UserOpacity, rho, T) = op.flux(rho, T)
+
+# --- multigroup ---------------------------------------------------------------
+#
+# Multigroup here is *piecewise constant*: the opacity is taken to be uniform
+# inside each frequency group, evaluated at the group's centre. That is Quokka's
+# `OpacityModel::piecewise_constant_opacity`, and it collapses the three means
+# into one -- averaging a constant against the Planck function, against the
+# radiation energy density, or against the flux all return the same constant.
+# Quokka's other models fit a power law across each group and so must keep the
+# means apart; those are deliberately not implemented here.
+
+"""
+    group_opacity(op, nu, rho, T) -> Real
+
+The opacity of a frequency group centred on `nu`.
+
+Defaults to the grey Planck mean, so any existing opacity law used with several
+groups gives the same `kappa` in every group -- a genuine configuration, and the
+one Vaytet et al. (2011) call the constant-opacity model. Override it for a law
+that actually varies with frequency, or use [`FrequencyOpacity`](@ref).
+"""
+@inline group_opacity(op::AbstractOpacity, nu, rho, T) = planck_opacity(op, rho, T)
+
+"""
+    FrequencyOpacity(f; grey = nothing)
+
+Opacity from a callable `f(nu, rho, T) -> kappa`, evaluated at each group centre.
+
+```julia
+# Vaytet's nu^-2 law: kappa = 2000 (nu / 4e13)^-2 cm^2/g
+FrequencyOpacity((nu, rho, T) -> 2000.0 * (nu / 4.0e13)^-2)
+```
+
+A frequency-dependent law has no single grey value, so the grey entry points
+throw unless `grey` gives one explicitly. That is deliberate: silently
+collapsing `kappa(nu)` to some arbitrary frequency is how a multigroup opacity
+ends up quietly driving a single-group run.
+"""
+struct FrequencyOpacity{F,G} <: AbstractOpacity
+    kappa::F
+    grey::G
+end
+
+FrequencyOpacity(f; grey=nothing) = FrequencyOpacity(f, grey)
+
+@inline group_opacity(op::FrequencyOpacity, nu, rho, T) = op.kappa(nu, rho, T)
+
+function _grey(op::FrequencyOpacity, rho, T)
+    op.grey === nothing && throw(ArgumentError(
+        "FrequencyOpacity depends on frequency and has no grey value; pass " *
+        "`grey = kappa` if you mean to use it with a single group"))
+    return op.grey(rho, T)
+end
+
+@inline planck_opacity(op::FrequencyOpacity, rho, T) = _grey(op, rho, T)
+@inline energy_mean_opacity(op::FrequencyOpacity, rho, T) = _grey(op, rho, T)
+@inline flux_mean_opacity(op::FrequencyOpacity, rho, T) = _grey(op, rho, T)
+
+"""
+    group_opacities(op, groups, rho, T) -> SVec{NG}
+
+The opacity in each group, evaluated at the group centres.
+
+With one group this is the grey Planck mean, so a single-group run goes down
+exactly the path it did before multigroup existed.
+"""
+@inline function group_opacities(op::AbstractOpacity, groups::RadiationGroups{NG,M,T},
+                                 rho, Tgas) where {NG,M,T}
+    NG == 1 && return SVec{1,T}(T(planck_opacity(op, rho, Tgas)))
+    nu = group_centers(groups)
+    return SVec{NG,T}(ntuple(g -> T(group_opacity(op, nu[g], rho, Tgas)), Val(NG))...)
+end

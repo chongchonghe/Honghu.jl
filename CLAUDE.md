@@ -28,14 +28,16 @@ Prefer building example figures out of `plotstate` / `plotpanels` rather than ra
 
 ## Dependencies
 
-The runtime dependency list is `Printf` and `Dates` and nothing else, and it should stay that way. Both are Julia stdlibs -- nothing to download, no dependency tree; `Dates` is used only for the provenance timestamp in a comparison table. That is a design property, not an accident: this code is meant to run on nodes where a large dependency tree is a liability. Two things that would normally be a package are written in-tree instead — `src/staticvec.jl` (a fixed-size vector) and the VTK writer in `src/output.jl`.
+The runtime dependency list is `Printf` and `Dates`. That is no longer a hard rule -- packages are allowed where they earn their place -- but it is still the default, and worth keeping for the *solver*. Both are Julia stdlibs -- nothing to download, no dependency tree; `Dates` is used only for the provenance timestamp in a comparison table. That is a design property, not an accident: this code is meant to run on nodes where a large dependency tree is a liability. Two things that would normally be a package are written in-tree instead — `src/staticvec.jl` (a fixed-size vector) and the VTK writer in `src/output.jl`.
 
 Anything that is not needed to *solve* goes in a weak dependency or a test extra:
 
 - **`Plots`** is a `[weakdeps]` entry. The plotting methods live in `ext/Hydro3DPlotsExt.jl` and appear only when the user loads Plots. `src/plotting.jl` holds the function stubs, their docstrings, and fallbacks that raise a message telling the caller to load Plots. Add new plotting features to the extension, never to `src/`.
 - **`BenchmarkTools`** is a test extra, used only by `test/benchmarks.jl`.
 
-Before adding any dependency, ask whether it earns its place. `StaticArrays` would replace 58 lines of `SVec` that are already allocation-free; `HDF5`/`WriteVTK` would replace a validated 200-line writer; a generic nonlinear solver would be slower than the hand-written 2×2 Newton whose Jacobian inverts analytically. All three were considered and declined.
+Before adding any dependency, ask whether it earns its place. `StaticArrays` would replace 58 lines of `SVec` that are already allocation-free; `HDF5`/`WriteVTK` would replace a validated 200-line writer; a generic nonlinear solver would be slower than the hand-written 2×2 Newton whose Jacobian inverts analytically. All three were considered and declined -- on merit, not on principle.
+
+Where a package does earn its place, prefer a `[weakdeps]` extension over a hard dependency, so that a run which does not use the feature still needs nothing. `AdaptiveCoupling` is the worked example: it is an error-controlled ODE solve backed by OrdinaryDiffEq, and the two hand-written coupling solvers next to it need no packages at all, so the solver still starts on a bare node.
 
 ## Source layout
 

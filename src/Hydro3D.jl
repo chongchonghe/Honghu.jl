@@ -45,8 +45,11 @@ using Dates          # provenance timestamps only; a stdlib, not a package
 # --- core types and kernels --------------------------------------------------
 include("staticvec.jl")
 include("constants.jl")
+include("planck.jl")     # RadiationGroups, needed by the multigroup opacity below
 include("eos.jl")
 include("opacity.jl")
+include("coupling.jl")            # per-cell matter-radiation coupling interface
+include("coupling_solvers.jl")    # ... and the two in-tree solvers
 include("grid.jl")
 include("variables.jl")
 include("boundary.jl")

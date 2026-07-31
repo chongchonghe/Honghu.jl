@@ -128,9 +128,9 @@ struct RadiationWorkspace{T<:AbstractFloat}
     Utmp::Array{T,4}
 end
 
-function RadiationWorkspace(g::CartesianGrid{T}) where {T}
-    RadiationWorkspace(allocate(g, NRAD), allocate(g, NRAD), allocate(g, NRAD),
-                       allocate(g, NRAD), allocate(g, NRAD), allocate(g, NRAD),
+function RadiationWorkspace(g::CartesianGrid{T}, nrad::Integer=NRAD) where {T}
+    RadiationWorkspace(allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
+                       allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
                        allocate(g, NHYDRO))
 end
 
@@ -235,8 +235,9 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
              radiation === nothing ? 0 : required_ghosts(radiation_reconstruction))
     grid = CartesianGrid(; n, xlo, xhi, nghost=ng, T)
     U = allocate(grid, NHYDRO)
-    Rarr = radiation === nothing ? Array{T,4}(undef, 0, 0, 0, 0) : allocate(grid, NRAD)
-    rw = radiation === nothing ? nothing : RadiationWorkspace(grid)
+    nrad = radiation === nothing ? 0 : nradvars(radiation)
+    Rarr = radiation === nothing ? Array{T,4}(undef, 0, 0, 0, 0) : allocate(grid, nrad)
+    rw = radiation === nothing ? nothing : RadiationWorkspace(grid, nrad)
     fl = Floors(T(floors.rho), T(floors.pressure), T(floors.erad))
     Simulation(grid, eos, radiation, reconstruction, radiation_reconstruction,
                riemann, integrator, boundaries,
@@ -385,9 +386,10 @@ end
 function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}) where {D}
     rw = sim.rw
     g = sim.grid
-    reconstruct!(rw.qL, rw.qR, rw.prim, sim.radiation_reconstruction, Val(D), g, NRAD)
+    nrad = nradvars(sim.radiation)
+    reconstruct!(rw.qL, rw.qR, rw.prim, sim.radiation_reconstruction, Val(D), g, nrad)
     rad_fluxes!(rw.flux, rw.qL, rw.qR, R, sim.radiation, Val(D), g)
-    flux_divergence!(dR, rw.flux, Val(D), g, NRAD)
+    flux_divergence!(dR, rw.flux, Val(D), g, nrad)
     return nothing
 end
 
@@ -447,7 +449,8 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
 
     # --- stage 2: U(2) = U^n + dt Aex21 s(U^n), then implicit coupling -------
     rad_rhs!(rw.dR, sim.R, sim, t)
-    combine!(rw.Rtmp, one(T), sim.R, zero(T), sim.R, T(IMEX_AEX_21) * dt, rw.dR, g, NRAD)
+    combine!(rw.Rtmp, one(T), sim.R, zero(T), sim.R, T(IMEX_AEX_21) * dt, rw.dR, g,
+             nradvars(sim.radiation))
     copyto!(rw.Utmp, sim.U)
     amend_rad_state!(rw.Rtmp, phys, g, fl)
     s1 = radiation_source_step!(rw.Utmp, rw.Rtmp, sim.eos, phys, g, T(IMEX_AIM_22) * dt,
@@ -456,7 +459,7 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     # --- stage 3: Shu-Osher combination + implicit coupling ------------------
     rad_rhs!(rw.dR, rw.Rtmp, sim, t + dt)
     combine!(sim.R, T(1 - IMEX_ALPHA), sim.R, T(IMEX_ALPHA), rw.Rtmp,
-             T(IMEX_AEX_32) * dt, rw.dR, g, NRAD)
+             T(IMEX_AEX_32) * dt, rw.dR, g, nradvars(sim.radiation))
     combine_gas!(sim.U, T(IMEX_ALPHA), rw.Utmp, g)
     amend_rad_state!(sim.R, phys, g, fl)
     s2 = radiation_source_step!(sim.U, sim.R, sim.eos, phys, g, T(IMEX_AIM_33) * dt,
