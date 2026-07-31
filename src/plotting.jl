@@ -15,16 +15,48 @@ function coordinates(g::CartesianGrid{T}, d::Integer) where {T}
     [g.xlo[d] + (i - T(0.5)) * g.dx[d] for i in 1:g.n[d]]
 end
 
+# The radiation state variables, one set per frequency group: name, offset
+# within a group, label. Both the group sums and the `Erad_2`-style per-group
+# names are built from this list.
+const _RAD_VARS = ((:Erad, IERAD, "radiation energy density"),
+                   (:Fx, IFRX, "x radiation flux"),
+                   (:Fy, IFRY, "y radiation flux"),
+                   (:Fz, IFRZ, "z radiation flux"))
+
 """
     available_fields(sim) -> Tuple{Vararg{Symbol}}
 
 The field names [`field`](@ref) accepts for this simulation. Radiation fields
 are only present when the radiation module is enabled.
+
+A multigroup run also lists `:Erad_1`, `:Fx_1`, ... one set per group. A grey
+run does not: with one group those names are accepted but they name the same
+array as `:Erad`, `:Fx`, ..., and advertising both would suggest a distinction
+that is not there.
 """
 function available_fields(sim::Simulation)
     hydro = (:density, :vx, :vy, :vz, :speed, :pressure, :temperature,
              :internal_energy, :mach)
-    has_radiation(sim) ? (hydro..., :Erad, :Fx, :Fy, :Fz, :Trad, :reduced_flux) : hydro
+    has_radiation(sim) || return hydro
+    rad = (:Erad, :Fx, :Fy, :Fz, :Trad, :reduced_flux)
+    ng = ngroups(sim.radiation)
+    ng == 1 && return (hydro..., rad...)
+    per = Tuple(Symbol(v, :_, gr) for gr in 1:ng for (v, _, _) in _RAD_VARS)
+    return (hydro..., rad..., per...)
+end
+
+# One radiation component summed over the groups, as an (nx, ny, nz) array.
+_rad_total(sim::Simulation, comp::Int) = dropdims(_rad_group_sum(sim, comp:comp); dims=1)
+
+# `:Erad_2` -> (:Erad, 2); `nothing` for a name with no numeric group suffix, so
+# `:internal_energy` and `:reduced_flux` pass straight through.
+function _group_suffix(name::Symbol)
+    s = String(name)
+    i = findlast('_', s)
+    i === nothing && return nothing
+    gr = tryparse(Int, s[(i+1):end])
+    gr === nothing && return nothing
+    return (Symbol(s[1:(i-1)]), gr)
 end
 
 """
@@ -33,7 +65,10 @@ end
 Extract one named field over the interior as a fresh `(nx, ny, nz)` array,
 together with a label suitable for an axis or colour bar.
 
-See [`available_fields`](@ref) for the accepted names.
+See [`available_fields`](@ref) for the accepted names. `:Erad`, `:Fx`, `:Fy`,
+`:Fz` and `:reduced_flux` are summed over the frequency groups, so they mean the
+same thing in a grey run and a multigroup one; a trailing group number picks one
+group out, as in `field(sim, :Erad_2)`.
 
 ```julia
 rho, lbl = field(sim, :density)
@@ -47,6 +82,23 @@ function field(sim::Simulation{T}, name::Symbol) where {T}
     elseif name === :Trad
         _require_radiation(sim, name)
         return radiation_temperature(sim), "radiation temperature"
+    end
+
+    # Per-group access: `Erad_2` is group 2's energy density. Handled here, ahead
+    # of the primitives, because it needs none of them. No plain field name ends
+    # in an underscore and a number, so nothing already named can be shadowed.
+    sg = _group_suffix(name)
+    if sg !== nothing
+        base, gr = sg
+        i = findfirst(v -> first(v) === base, _RAD_VARS)
+        if i !== nothing
+            _require_radiation(sim, name)
+            _, comp, label = _RAD_VARS[i]
+            ng = ngroups(sim.radiation)
+            1 <= gr <= ng ||
+                throw(ArgumentError("field $name asks for group $gr of $ng"))
+            return sim.R[gbase(gr)+comp, ir, jr, kr], "group $gr $label"
+        end
     end
 
     prim = primitives(sim)
@@ -72,22 +124,24 @@ function field(sim::Simulation{T}, name::Symbol) where {T}
                "Mach number"
     elseif name === :Erad
         _require_radiation(sim, name)
-        return sim.R[IERAD, ir, jr, kr], "radiation energy density"
+        return _rad_total(sim, IERAD), "radiation energy density"
     elseif name === :Fx
         _require_radiation(sim, name)
-        return sim.R[IFRX, ir, jr, kr], "x radiation flux"
+        return _rad_total(sim, IFRX), "x radiation flux"
     elseif name === :Fy
         _require_radiation(sim, name)
-        return sim.R[IFRY, ir, jr, kr], "y radiation flux"
+        return _rad_total(sim, IFRY), "y radiation flux"
     elseif name === :Fz
         _require_radiation(sim, name)
-        return sim.R[IFRZ, ir, jr, kr], "z radiation flux"
+        return _rad_total(sim, IFRZ), "z radiation flux"
     elseif name === :reduced_flux
         _require_radiation(sim, name)
         c = sim.radiation.c
-        E = sim.R[IERAD, ir, jr, kr]
-        F = sqrt.(sim.R[IFRX, ir, jr, kr] .^ 2 .+ sim.R[IFRY, ir, jr, kr] .^ 2 .+
-                  sim.R[IFRZ, ir, jr, kr] .^ 2)
+        # Group sums, and still causal: each group has |F_g| <= c E_g, so the
+        # summed flux obeys |sum F_g| <= sum |F_g| <= c sum E_g.
+        E = _rad_total(sim, IERAD)
+        F = sqrt.(_rad_total(sim, IFRX) .^ 2 .+ _rad_total(sim, IFRY) .^ 2 .+
+                  _rad_total(sim, IFRZ) .^ 2)
         return F ./ (c .* E), "reduced flux |F|/(cE)"
     end
     throw(ArgumentError("unknown field $name; available: $(available_fields(sim))"))

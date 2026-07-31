@@ -11,10 +11,37 @@ _vtk_type(::Type{Float64}) = "Float64"
 _vtk_type(::Type{Float32}) = "Float32"
 
 """
+    _rad_group_sum(sim, comps) -> Array{T,4}
+
+Sum of the radiation components `comps` -- given as their offsets *within* a
+group, so `IERAD:IERAD` or `IFRX:IFRZ` -- over every frequency group, on the
+interior, with the component axis kept.
+
+The unsuffixed radiation outputs are group sums so that a grey file and a
+multigroup file of the same problem carry the same quantity. With one group the
+sum is the group, and the array is the plain slice it always was.
+"""
+function _rad_group_sum(sim::Simulation{T}, comps::UnitRange{Int}) where {T}
+    g = sim.grid
+    ir, jr, kr = g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]
+    out = sim.R[comps, ir, jr, kr]
+    for gr in 2:ngroups(sim.radiation)
+        b = gbase(gr)
+        out .+= @view sim.R[(b+first(comps)):(b+last(comps)), ir, jr, kr]
+    end
+    return out
+end
+
+"""
     output_fields(sim) -> Vector{Tuple{String,Int,Array}}
 
 The named fields written by [`write_vtk`](@ref): `(name, ncomponents, data)`
 where `data` is laid out with the component index first and then `x, y, z`.
+
+`radiation_energy` and `radiation_flux` are summed over the frequency groups.
+A multigroup run adds `radiation_energy_1`, `radiation_flux_1`, ... per group
+after them; a grey run does not, since those would be exact duplicates of the
+totals, and a grey file is byte for byte what it has always been.
 """
 function output_fields(sim::Simulation{T}) where {T}
     g = sim.grid
@@ -26,8 +53,16 @@ function output_fields(sim::Simulation{T}) where {T}
     push!(fields, ("pressure", 1, prim[IPRE:IPRE, :, :, :]))
     push!(fields, ("gas_temperature", 1, reshape(gas_temperature(sim), 1, g.n...)))
     if has_radiation(sim)
-        push!(fields, ("radiation_energy", 1, sim.R[IERAD:IERAD, ir, jr, kr]))
-        push!(fields, ("radiation_flux", 3, sim.R[IFRX:IFRZ, ir, jr, kr]))
+        push!(fields, ("radiation_energy", 1, _rad_group_sum(sim, IERAD:IERAD)))
+        push!(fields, ("radiation_flux", 3, _rad_group_sum(sim, IFRX:IFRZ)))
+        ng = ngroups(sim.radiation)
+        if ng > 1
+            for gr in 1:ng
+                b = gbase(gr)
+                push!(fields, ("radiation_energy_$gr", 1, sim.R[(b+IERAD):(b+IERAD), ir, jr, kr]))
+                push!(fields, ("radiation_flux_$gr", 3, sim.R[(b+IFRX):(b+IFRZ), ir, jr, kr]))
+            end
+        end
         push!(fields, ("radiation_temperature", 1, reshape(radiation_temperature(sim), 1, g.n...)))
     end
     return fields

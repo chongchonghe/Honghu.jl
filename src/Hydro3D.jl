@@ -50,6 +50,7 @@ include("eos.jl")
 include("opacity.jl")
 include("coupling.jl")            # per-cell matter-radiation coupling interface
 include("coupling_solvers.jl")    # ... and the two in-tree solvers
+include("coupling_adaptive.jl")   # ... and the reference solver's stub
 include("grid.jl")
 include("variables.jl")
 include("boundary.jl")
