@@ -16,6 +16,15 @@
 # The flux and momentum update is linear once the temperature is known, so it is
 # done analytically. The velocity-dependent work term couples the two, and is
 # handled by a short lagged outer iteration.
+#
+# There are two drivers, selected by dispatch on the number of groups.
+#
+#   NG == 1  the grey driver below, with the 2x2 Newton written out inline. It is
+#            the code every existing single-group test measures, so it is left
+#            exactly as it was rather than folded into the general case.
+#   NG >= 2  `multigroup_source_step!`, which hands each cell to the pluggable
+#            `AbstractCoupling` in `coupling.jl` and then does the same
+#            analytic flux and momentum update, group by group.
 
 """
     SourceStats(cells, newton_iterations, max_newton, failures)
@@ -59,16 +68,16 @@ luminosity of a star spread over a cell.
 test problems (Marshak wave, matter-radiation equilibration) assume; it is set
 automatically when hydrodynamics is disabled.
 
+This method is the grey (`NG == 1`) driver; a multigroup `phys` selects
+[`multigroup_source_step!`](@ref) instead, by dispatch on the group count.
+
 Returns a [`SourceStats`](@ref).
 """
 function radiation_source_step!(U::A, R::A, eos::AbstractEOS,
-                                phys::RadiationPhysics{NG,M,T},
+                                phys::RadiationPhysics{1,M,T},
                                 g::CartesianGrid{T}, dt::T, source::S, t::T,
                                 floors::Floors{T};
-                                update_momentum::Bool=true) where {NG,M,T,A<:AbstractArray{T,4},S}
-    NG == 1 || throw(ArgumentError(
-        "radiation_source_step!: this driver is the single-group coupling; a " *
-        "$(NG)-group run needs the multigroup driver"))
+                                update_momentum::Bool=true) where {M,T,A<:AbstractArray{T,4},S}
     c = phys.c
     chat = phys.chat
     cscale = c / chat
@@ -278,3 +287,247 @@ function radiation_source_step!(U::A, R::A, eos::AbstractEOS,
     ncell = prod(g.n)
     return SourceStats(ncell, nit[], maxn[], nfail[])
 end
+
+# --- multigroup ---------------------------------------------------------------
+#
+# The same operator, one frequency group at a time. Two things change:
+#
+#   * the energy exchange is no longer a 2x2 system but an (NG+1)x(NG+1) one --
+#     and it is not solved here at all. The cell state is handed to
+#     `solve_coupling`, so which implicit integrator runs is a property of the
+#     physics object rather than of this loop.
+#   * the gas sees the *sum* over groups. The momentum kick is the sum of the
+#     per-group flux changes, while the work term stays a per-group vector,
+#     because each group is damped by its own opacity.
+#
+# The opacity is piecewise constant across a group, so the Planck, energy and
+# flux means coincide (see `opacity.jl`) and one `group_opacities` call serves
+# all three. That is why `kappaP` and `kappaE` of the `CouplingState` below are
+# the same vector, and why the `(kappa_F - kappa_E) E` term the grey driver
+# carries has no counterpart here.
+
+"""
+    _group_component(R, i, j, k, Val(NG), Val(C)) -> SVec{NG}
+
+Component `C` of every group at cell `(i, j, k)`, gathered into a group vector.
+
+A free function taking `Val(NG)` so the `ntuple` unrolls, and taking `R, i, j, k`
+as arguments so that the closure captures nothing the caller assigns -- the
+boxing trap CLAUDE.md records.
+"""
+@inline _group_component(R::AbstractArray{T,4}, i, j, k, ::Val{NG},
+                         ::Val{C}) where {T,NG,C} =
+    SVec{NG,T}(ntuple(gr -> @inbounds(R[gbase(gr)+C, i, j, k]), Val(NG))...)
+
+"""
+    _beta_force(closure, Erad, F0x, F0y, F0z, kappa, B, m1, m2, m3, c, chat*dt)
+        -> (SVec{NG}, SVec{NG}, SVec{NG})
+
+The `O(v/c)` terms of the per-group flux update: thermal emission dragged along
+by the moving gas, plus the radiation pressure acting on it. The grey driver's
+same expression, evaluated once per group.
+
+Every value is an argument for the reason given above; written as a closure over
+the outer-iteration variables it would box them.
+"""
+@inline function _beta_force(cl::AbstractClosure, Erad::SVec{NG,T}, F0x::SVec{NG,T},
+                             F0y::SVec{NG,T}, F0z::SVec{NG,T}, kap::SVec{NG,T},
+                             B::SVec{NG,T}, m1::T, m2::T, m3::T, c::T,
+                             cdt::T) where {NG,T}
+    v = ntuple(Val(NG)) do gr
+        ce = c * Erad[gr]
+        tedd = eddington_tensor(cl, F0x[gr] / ce, F0y[gr] / ce, F0z[gr] / ce)
+        pl = cdt * kap[gr] * B[gr]
+        pk = cdt * kap[gr] * Erad[gr]
+        (pl * m1 + pk * (m1 * tedd[1, 1] + m2 * tedd[1, 2] + m3 * tedd[1, 3]),
+         pl * m2 + pk * (m1 * tedd[2, 1] + m2 * tedd[2, 2] + m3 * tedd[2, 3]),
+         pl * m3 + pk * (m1 * tedd[3, 1] + m2 * tedd[3, 2] + m3 * tedd[3, 3]))
+    end
+    return (SVec{NG,T}(ntuple(gr -> v[gr][1], Val(NG))...),
+            SVec{NG,T}(ntuple(gr -> v[gr][2], Val(NG))...),
+            SVec{NG,T}(ntuple(gr -> v[gr][3], Val(NG))...))
+end
+
+"""
+    multigroup_source_step!(U, R, eos, phys, grid, dt, source, t, floors;
+                            update_momentum = true)
+
+The multigroup matter-radiation coupling: what [`radiation_source_step!`](@ref)
+dispatches to when `phys` has more than one frequency group. Same arguments,
+same return value, same meaning.
+
+Each interior cell is packed into a [`CouplingState`](@ref) and handed to
+`phys.coupling`, so the choice of implicit integrator is a property of the
+physics object; `phys.tolerance` and `phys.max_iterations` belong to the grey
+driver's own Newton loop and are not consulted here.
+
+`source` returns a *total* radiation energy source density, which is shared out
+over the groups by the Planck spectrum at the local gas temperature -- the
+spectrum of a thermal emitter, and the only one a scalar can imply. At `NG == 1`
+that reduces to the grey source exactly.
+
+Returns a [`SourceStats`](@ref).
+"""
+function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
+                                 phys::RadiationPhysics{NG,M,T},
+                                 g::CartesianGrid{T}, dt::T, source::S, t::T,
+                                 floors::Floors{T};
+                                 update_momentum::Bool=true) where {NG,M,T,A<:AbstractArray{T,4},S}
+    c = phys.c
+    chat = phys.chat
+    cscale = c / chat
+    cdt = chat * dt
+    arad = phys.a_rad
+    kB = phys.k_B
+    op = phys.opacity
+    cl = phys.closure
+    grp = phys.groups
+    method = phys.coupling
+    keep_beta = phys.beta_order >= 1 && update_momentum
+    maxouter = keep_beta ? phys.max_outer_iterations : 1
+    lag_tol = T(1e-13)
+    # The floor bounds the total, not each bin, so it is shared out over the
+    # groups exactly as `enforce_rad_floors!` shares it.
+    efloor = floors.erad / NG
+
+    ir = g.lo[1]:g.hi[1]
+    nfail = Threads.Atomic{Int}(0)
+    nit = Threads.Atomic{Int}(0)
+    maxn = Threads.Atomic{Int}(0)
+
+    threaded_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]) do j, k
+        local fails = 0
+        local iters = 0
+        local worst = 0
+        @inbounds for i in ir
+            rho = U[IRHO, i, j, k]
+            mom0 = SVec(U[IMX, i, j, k], U[IMY, i, j, k], U[IMZ, i, j, k])
+            Ekin0 = dot(mom0, mom0) / (2 * rho)
+            Eint0 = U[IEGAS, i, j, k] - Ekin0
+            Erad0 = _group_component(R, i, j, k, Val(NG), Val(IERAD))
+            F0x = _group_component(R, i, j, k, Val(NG), Val(IFRX))
+            F0y = _group_component(R, i, j, k, Val(NG), Val(IFRY))
+            F0z = _group_component(R, i, j, k, Val(NG), Val(IFRZ))
+
+            # Opacities and heat capacity are frozen at the old temperature for
+            # the whole solve, as in Quokka: that sets how fast the iteration
+            # converges, not what it converges to.
+            Tfloor = temperature(eos, rho, internal_energy(eos, rho, floors.pressure))
+            Tg = max(temperature(eos, rho, Eint0), Tfloor)
+            cv = heat_capacity(eos, rho, Tg)
+            kap = group_opacities(op, grp, rho, Tg)
+
+            # external radiation source, converted to an energy density added
+            # over this step (with the reduced-speed-of-light rescaling)
+            src = zero(SVec{NG,T})
+            if S !== Nothing
+                x, y, z = cellcenter(g, i, j, k)
+                stot = T(source(x, y, z, t)) * dt / cscale
+                src = stot * planck_fractions(grp, Tg, kB)
+            end
+
+            # scale for the lagged-work convergence test
+            Eref = Eint0 + cscale * (sumvec(Erad0) + sumvec(src))
+
+            # The first work estimate uses the old momentum and flux, as the
+            # grey driver's does, so a single outer iteration already carries it.
+            work = keep_beta ?
+                   mul(mom0[1] * F0x + mom0[2] * F0y + mom0[3] * F0z, kap) *
+                   (cdt / (c * c)) : zero(SVec{NG,T})
+            Eint = Eint0
+            Erad = Erad0
+            Fx = F0x
+            Fy = F0y
+            Fz = F0z
+            mom1 = mom0
+            citers = 0                # coupling iterations spent on *this* cell
+
+            for _ in 1:maxouter
+                res = solve_coupling(method,
+                                     CouplingState{NG,M,T}(Eint0, Erad0, src, work, rho,
+                                                           cv, kap, kap, dt, c, chat,
+                                                           arad, kB, grp, Tfloor, efloor))
+                Eint = res.Egas
+                Erad = res.Erad
+                citers += res.iterations
+                res.converged || (fails += 1)
+
+                # keep the opacities and the emission consistent with the solution
+                Tnew = max(temperature(eos, rho, Eint), Tfloor)
+                kapF = group_opacities(op, grp, rho, Tnew)
+
+                # --- flux, momentum ------------------------------------------
+                denom = (rho * cdt) * kapF + one(T)
+                if keep_beta
+                    B = (arad * Tnew^4) * planck_fractions(grp, Tnew, kB)
+                    vx, vy, vz = _beta_force(cl, Erad, F0x, F0y, F0z, kapF, B,
+                                             mom0[1], mom0[2], mom0[3], c, cdt)
+                    Fx = divide(F0x + vx, denom)
+                    Fy = divide(F0y + vy, denom)
+                    Fz = divide(F0z + vz, denom)
+                else
+                    Fx = divide(F0x, denom)
+                    Fy = divide(F0y, denom)
+                    Fz = divide(F0z, denom)
+                end
+
+                # the gas feels the sum of the per-group flux changes
+                mom1 = update_momentum ?
+                       mom0 - SVec(sumvec(Fx - F0x), sumvec(Fy - F0y),
+                                   sumvec(Fz - F0z)) / (c * chat) : mom0
+
+                keep_beta || break
+
+                # The work done by the radiation force went into the internal
+                # energy above; move it to the kinetic energy instead.
+                Ekin1 = dot(mom1, mom1) / (2 * rho)
+                Eint -= Ekin1 - Ekin0
+
+                work_prev = work
+                work = mul(mom1[1] * Fx + mom1[2] * Fy + mom1[3] * Fz, kapF) *
+                       (cdt / (c * c))
+                wtot = sumvec(work)
+                dwork = abs(wtot - sumvec(work_prev))
+                if wtot == 0 || cscale * dwork < lag_tol * Eref ||
+                   dwork <= T(1e-8) * abs(wtot)
+                    break
+                end
+            end
+
+            # Counted per cell, not per outer iteration, so that the reported
+            # mean can never exceed the reported worst case.
+            iters += citers
+            worst = max(worst, citers)
+
+            # --- store --------------------------------------------------------
+            # `solve_coupling` left the pair admissible, but the kinetic-energy
+            # bookkeeping above runs after it, so the gas floor is re-checked.
+            emin = internal_energy(eos, rho, floors.pressure)
+            Eint < emin && (Eint = emin)
+
+            U[IMX, i, j, k] = mom1[1]
+            U[IMY, i, j, k] = mom1[2]
+            U[IMZ, i, j, k] = mom1[3]
+            U[IEGAS, i, j, k] = Eint + dot(mom1, mom1) / (2 * rho)
+            for gr in 1:NG
+                b = gbase(gr)
+                R[b+IERAD, i, j, k] = Erad[gr]
+                R[b+IFRX, i, j, k] = Fx[gr]
+                R[b+IFRY, i, j, k] = Fy[gr]
+                R[b+IFRZ, i, j, k] = Fz[gr]
+            end
+        end
+        Threads.atomic_add!(nit, iters)
+        fails > 0 && Threads.atomic_add!(nfail, fails)
+        Threads.atomic_max!(maxn, worst)
+    end
+
+    return SourceStats(prod(g.n), nit[], maxn[], nfail[])
+end
+
+# `RadiationPhysics{1}` is the more specific method above, so a grey run never
+# reaches this one and its numbers are exactly what they were before multigroup.
+radiation_source_step!(U::A, R::A, eos::AbstractEOS, phys::RadiationPhysics{NG,M,T},
+                       g::CartesianGrid{T}, dt::T, source::S, t::T, floors::Floors{T};
+                       update_momentum::Bool=true) where {NG,M,T,A<:AbstractArray{T,4},S} =
+    multigroup_source_step!(U, R, eos, phys, g, dt, source, t, floors; update_momentum)

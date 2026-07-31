@@ -106,3 +106,33 @@ Hydro3D.default_metrics(::typeof(sedov_blast)) = (;
         abs((i - 0.5) * g.dx[1] - 1.15 * (sim.t^2)^(1 / 5)) / (1.15 * (sim.t^2)^(1 / 5))
     end,
 )
+
+"""
+    default_metrics(marshak_vaytet)
+
+Two diagnostics rather than errors, because this problem has no closed-form
+solution -- the same shape as `radhydro_shock`'s `spike`:
+
+  - `front`, the position of the `T_gas = 650 K` contour, linearly interpolated
+    between the bracketing cells so that the number converges under refinement
+    instead of stepping by `dx`. It is what a group-count study measures: more
+    groups resolve more of the `nu^-2` opacity range, and the front moves.
+  - `Trad_wall`, the radiation temperature of the cell against the wall, summed
+    over the groups. It must sit just below `T_L = 1000 K`; if it does not, the
+    Dirichlet boundary is not driving the wave.
+"""
+Hydro3D.default_metrics(::typeof(marshak_vaytet)) = (;
+    front = function (sim)
+        x = coordinates(sim.grid, 1)
+        Tg = gas_temperature(sim)[:, 1, 1]
+        Thalf = 650.0                       # (T_L + T_initial) / 2
+        i = findlast(>(Thalf), Tg)
+        i === nothing && return zero(eltype(x))
+        i == length(Tg) && return x[end]
+        x[i] + (Tg[i] - Thalf) / (Tg[i] - Tg[i+1]) * (x[i+1] - x[i])
+    end,
+    Trad_wall = function (sim)
+        e = total_erad(sim)[1, 1, 1]
+        sqrt(sqrt(max(e, zero(e)) / sim.radiation.a_rad))
+    end,
+)

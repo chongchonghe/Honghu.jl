@@ -279,3 +279,141 @@ function radiation_shadow(; n=(280, 112), kappa=1.0, rho_blob=1e3, rho_bg=1e-2,
     end
     return sim, 1.5
 end
+
+"""
+    marshak_vaytet(; n = 64, ngroups = 4, Lx = 20.0, coupling = QuokkaCoupling(),
+                   closure = LevermoreClosure(), kwargs...) -> (sim, tmax)
+
+The frequency-dependent Marshak wave of Vaytet et al. (2011), in the form of
+Quokka's `RadMarshakVaytet` test: a cold slab of `rho = 10⁻³ g cm⁻³` at 300 K,
+heated from `x = 0` by a wall in radiative equilibrium at `T_L = 1000 K`, with
+an opacity that falls as `nu⁻²`.
+
+This is the multigroup counterpart of [`marshak_wave`](@ref), and it is here
+because the two disagree: with `kappa = 2000 (nu / 4×10¹³ Hz)⁻² cm² g⁻¹` the
+groups span four decades of optical depth at once — a mean free path of 10⁻⁵ cm
+in the lowest group and 10 cm in the highest — so the high-frequency groups run
+ahead of the wave while the low-frequency ones are trapped in it. A grey
+calculation, which has one opacity to describe all of that, cannot reproduce the
+front. The number of groups is the convergence parameter of the test, hence
+`ngroups`: its edges are always logarithmically spaced from `6×10¹⁰` to
+`6×10¹⁴ Hz`, which reproduces Quokka's tabulated edges exactly at every group
+count it lists (4 gives `6e10, 6e11, 6e12, 6e13, 6e14`).
+
+Everything is CGS, the medium is static (`hydro = false`, `beta_order = 0`) and
+`chat = c`. The opacity is piecewise constant across a group, evaluated at the
+group's geometric centre, which is Quokka's `piecewise_constant_opacity` model.
+
+The domain length is a keyword because the choice matters and Quokka keeps it in
+an inputs file rather than in the problem source. `Lx = 20 cm` is the value that
+file uses, and it is the right one: at `tmax = 1.36×10⁻⁷ s` and 64 cells the
+thermal front (`T_gas = 650 K`, half way from 300 K to the wall) sits at about
+3.8 cm, so the wave itself is comfortably inside. What does reach the far
+boundary is the top group, whose mean free path is 11 cm: it is optically thin,
+it streams across the slab, and it has warmed the far end to about 370 K by
+`tmax`. That is the physics the test exists to show, not an error, and it is why
+the far boundary is outflow rather than a cold wall — a shorter `Lx` would
+simply move the outflow closer, while a longer one costs proportionally more
+steps for no extra physics.
+
+Has a [`default_metrics`](@ref) method: the front position and the near-wall
+radiation temperature.
+"""
+function marshak_vaytet(; n::Integer=64, nx::Integer=n, ngroups::Integer=4, Lx=20.0,
+                        coupling::Hydro3D.AbstractCoupling=QuokkaCoupling(),
+                        closure::AbstractClosure=LevermoreClosure(), kwargs...)
+    rho0 = 1.0e-3               # g cm^-3
+    T_initial = 300.0           # K
+    T_L = 1000.0                # K, the wall
+    rho_C_V = 1.0e-3            # erg cm^-3 K^-1, so cv is 1 erg g^-1 K^-1
+    cv = rho_C_V / rho0
+    gamma = 5 / 3
+    kappa0 = 2000.0             # cm^2 g^-1 at the pivot frequency
+    nu_pivot = 4.0e13           # Hz
+
+    c = Hydro3D.CGS.c_light
+    a_rad = Hydro3D.CGS.a_rad
+    k_B = Hydro3D.CGS.k_B
+
+    groups = RadiationGroups(6.0e10, 6.0e14, ngroups;
+                             energy_unit=Hydro3D.CGS.h_planck, spacing=:log)
+    # No grey value: kappa really does depend on frequency here, and letting a
+    # single-group run silently pick one would be the bug FrequencyOpacity exists
+    # to prevent.
+    opacity = FrequencyOpacity((nu, rho, T) -> kappa0 * (nu_pivot / nu)^2)
+
+    rad = RadiationPhysics(; c=c, chat=c, a_rad=a_rad, k_B=k_B, groups=groups,
+                           opacity=opacity, closure=closure, coupling=coupling,
+                           beta_order=0)
+
+    # The wall: a Planck spectrum at T_L with no net flux. The HLL solver then
+    # supplies the inward flux set by the jump across the boundary, exactly as in
+    # the grey Marshak wave.
+    fracL = planck_fractions(groups, T_L, k_B)
+    EL = a_rad * T_L^4
+    wall = Fixed(ntuple(Hydro3D.NRAD * ngroups) do m
+        gr, comp = divrem(m - 1, Hydro3D.NRAD)
+        comp == 0 ? EL * fracL[gr+1] : 0.0
+    end)
+    outflow = (Outflow(), Outflow())
+
+    sim = Simulation(; n=(nx, 1, 1), xhi=(Lx, 1.0, 1.0),
+                     eos=IdealGas(; gamma, cv), radiation=rad, hydro=false,
+                     boundaries=Boundaries(Outflow()),
+                     radiation_boundaries=Boundaries((wall, Outflow()), outflow, outflow),
+                     floors=Floors(erad=a_rad * T_initial^4 * 1e-20),
+                     cfl_radiation=0.8, kwargs...)
+    set_initial_conditions!(sim) do x, y, z
+        (rho=rho0, T=T_initial, Erad=a_rad * T_initial^4, Fx=0.0)
+    end
+    _set_planck_groups!(sim, T_initial)
+    return sim, 1.36e-7
+end
+
+# `set_initial_conditions!` takes a single `Erad` and writes it into group 1,
+# which is the whole spectrum only when the run is grey. A multigroup problem
+# has to spread the energy over its groups itself, and then refill the ghost
+# cells and re-establish the between-steps admissibility invariant.
+function _set_planck_groups!(sim, Trad)
+    phys = sim.radiation
+    g = sim.grid
+    NG = ngroups(phys)
+    frac = planck_fractions(phys.groups, Trad, phys.k_B)
+    E = phys.a_rad * Trad^4
+    for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1], gr in 1:NG
+        b = Hydro3D.gbase(gr)
+        sim.R[b+Hydro3D.IERAD, i, j, k] = E * frac[gr]
+        sim.R[b+Hydro3D.IFRX, i, j, k] = 0.0
+        sim.R[b+Hydro3D.IFRY, i, j, k] = 0.0
+        sim.R[b+Hydro3D.IFRZ, i, j, k] = 0.0
+    end
+    Hydro3D.fill_ghosts!(sim.R, sim.radiation_boundaries, g, sim.t)
+    Hydro3D.enforce_state!(sim)
+    # `set_initial_conditions!` ran `enforce_state!` on a state whose groups
+    # 2..NG were still empty and counted one radiation repair per cell for it.
+    # Those repairs are an artefact of the two-stage setup, not of the problem,
+    # and leaving them in the counters would make `nrepaired(sim) == 0` -- the
+    # invariant the radiation tests assert -- untestable here.
+    reset_diagnostics!(sim)
+    return sim
+end
+
+"""
+    total_erad(sim) -> Array
+
+Radiation energy density summed over every frequency group, over the interior.
+
+`field(sim, :Erad)` and [`radiation_temperature`](@ref) read group 1, which is
+the whole spectrum in a grey run and a fraction of it in a multigroup one; this
+is what a multigroup diagnostic wants instead.
+"""
+function total_erad(sim)
+    g = sim.grid
+    NG = ngroups(sim.radiation)
+    ir, jr, kr = g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]
+    out = zeros(eltype(sim.R), length(ir), length(jr), length(kr))
+    for gr in 1:NG
+        out .+= @view sim.R[Hydro3D.gbase(gr)+Hydro3D.IERAD, ir, jr, kr]
+    end
+    return out
+end

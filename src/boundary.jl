@@ -1,8 +1,9 @@
 # Boundary conditions.
 #
 # A boundary condition only ever has to fill ghost cells. Because the momentum
-# component for direction `d` lives at index `d + 1` in both the hydro and the
-# radiation state vector, the same code serves both systems.
+# component for direction `d` lives at index `d + 1` in the hydro state vector
+# and at `d + 1` *within each group* of the radiation state vector, the same
+# code serves both systems: see the stride in the reflecting condition below.
 
 """
     BoundaryCondition
@@ -40,7 +41,7 @@ struct Outflow <: BoundaryCondition end
     Reflecting()
 
 Mirror the interior state and flip the sign of the normal momentum (hydro) or
-normal radiation flux.
+the normal radiation flux of every frequency group (radiation).
 """
 struct Reflecting <: BoundaryCondition end
 
@@ -166,13 +167,20 @@ end
 
 function fill_face!(A::AbstractArray{T,4}, ::Reflecting, g::CartesianGrid, dir::Int, side::Int, t) where {T}
     ng, lo, hi = g.ng[dir], g.lo[dir], g.hi[dir]
-    nflip = dir + 1   # normal momentum / normal radiation flux
+    # Normal momentum (hydro) / normal radiation flux of every group. The
+    # radiation state stores `NRAD` components per group contiguously, so the
+    # normal flux of group `gr` is at `NRAD*(gr-1) + dir + 1`; striding by
+    # `NRAD` from `dir + 1` hits exactly those. The five-variable hydro vector
+    # is not a multiple of `NRAD`, so the same stride hits `dir + 1` and stops,
+    # which is why one implementation still serves both.
     for m in 1:ng
         dst = side == 1 ? lo - m : hi + m
         src = side == 1 ? lo + m - 1 : hi - m + 1
         d = _slab(A, dir, dst)
         copyto!(d, _slab(A, dir, src))
-        @views d[nflip, :, :] .= .-d[nflip, :, :]
+        for nflip in (dir+1):NRAD:size(A, 1)
+            @views d[nflip, :, :] .= .-d[nflip, :, :]
+        end
     end
     return nothing
 end

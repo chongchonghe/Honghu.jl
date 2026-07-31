@@ -81,8 +81,12 @@ export SourceOrder, SourceForward, SourceReverse
 
 # physics
 export IdealGas, cv_from_mu, RadiationPhysics, Floors
-export ConstantOpacity, PowerLawOpacity, UserOpacity
+export ConstantOpacity, PowerLawOpacity, UserOpacity, FrequencyOpacity
 export LevermoreClosure, EddingtonClosure
+
+# multigroup radiation
+export RadiationGroups, ngroups, planck_integral, planck_fractions
+export AbstractCoupling, QuokkaCoupling, DirectCoupling, AdaptiveCoupling
 
 # numerics
 export PCM, PLM, PPM
