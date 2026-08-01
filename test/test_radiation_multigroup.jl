@@ -271,16 +271,21 @@ end
 end
 
 @testset "the two Jacobian solves agree" begin
-    # `solve_arrowhead` is an `O(NG)` elimination that is exact only because the
-    # Jacobian's group block is diagonal, and until `DenseSolve` existed the
-    # linear solve itself was never compared with anything: both in-tree solvers
-    # called it, so they could agree with each other and both be wrong. What
-    # checked it before was indirect -- the grey driver's own inline 2x2 solve,
-    # at one group, through a converged Newton answer -- and Newton stops on the
-    # residual of the true equations, so a damaged matrix mostly hides in the
-    # iteration count. A general LU of the same matrix is the direct check.
-    # Detuning the elimination by one part in a thousand fails the two
-    # assertions below, which is what "direct" is supposed to mean.
+    # This is the testset that licenses the default. `solve_arrowhead` is an
+    # `O(NG)` elimination that is exact only because the Jacobian's group block
+    # is diagonal, which is a property of the terms in `coupling_rhs` and not of
+    # radiation -- and both solvers use it unless told otherwise. A default may
+    # encode an assumption when something checks the assumption; these are the
+    # assertions that do, so they are load-bearing rather than decorative.
+    #
+    # Until `DenseSolve` existed the linear solve was never compared with
+    # anything: both in-tree solvers called the elimination, so they could agree
+    # with each other and both be wrong. What checked it before was indirect --
+    # the grey driver's own inline 2x2 solve, at one group, through a converged
+    # Newton answer -- and Newton stops on the residual of the true equations, so
+    # a damaged matrix mostly hides in the iteration count. A general LU of the
+    # same matrix is the direct check. Detuning the elimination by one part in a
+    # thousand fails the two assertions below, which is what "direct" means.
     #
     # A temperature-dependent opacity is used throughout, so that `dkappa/dT`
     # fills the Jacobian's first row and column. With a constant opacity the
@@ -327,21 +332,39 @@ end
               1e-12 * cond(A) * maximum(abs, y)
     end
 
-    # End to end the two take the same Newton path -- same matrix, same update to
-    # round-off, so the same iterate and the same iteration count. This is the
-    # assertion that would fail if `linsolve` ever stopped being a choice of how
-    # to solve and became a choice of what to solve.
-    for NG in (1, 4, 8), k0 in (1e-6, 1.0, 1e9)
+    # End to end, and for *both* solvers, since both default to the elimination:
+    # each takes the same Newton path under either linear solve -- same matrix,
+    # same update to round-off, so the same iterate and the same iteration count.
+    # This is the assertion that would fail if `linsolve` ever stopped being a
+    # choice of how to solve and became a choice of what to solve. It covers
+    # `QuokkaCoupling` too, whose `tau <= 0` sentinel is a large *finite* number
+    # precisely so that a general factorisation of its matrix is possible.
+    for NG in (1, 4, 8), k0 in (1e-6, 1.0, 1e9), M in (QuokkaCoupling, DirectCoupling)
         s = cell_state(; NG, opacity=law(k0))
-        a = solve_coupling(DirectCoupling(linsolve=ArrowheadSolve()), s)
-        d = solve_coupling(DirectCoupling(), s)
+        a = solve_coupling(M(), s)                          # ArrowheadSolve, the default
+        d = solve_coupling(M(linsolve=DenseSolve()), s)
         @test a.converged && d.converged
         @test a.iterations == d.iterations
         @test isapprox(a.Egas, d.Egas; rtol=1e-12)
         @test maxabs(a.Erad - d.Erad) <= 1e-12 * maxabs(d.Erad)
     end
 
-    # The cost of the default, asserted rather than described. Measured inside a
+    # ... including where `QuokkaCoupling` writes its `tau <= 0` sentinel, which
+    # is `-1/eps` rather than `-Inf` so that the elimination does not make NaN.
+    # A group that is exactly transparent while others are thick is what reaches
+    # it with a residual still to solve, and a large finite entry is also what
+    # lets `DenseSolve` factorise the same matrix instead of throwing.
+    op = FrequencyOpacity((nu, rho, T) -> nu < 2.0 ? 1e3 * T^2 : 0.0)
+    for NG in (4, 8), M in (QuokkaCoupling, DirectCoupling)
+        s = cell_state(; NG, opacity=op)
+        a = solve_coupling(M(), s)
+        d = solve_coupling(M(linsolve=DenseSolve()), s)
+        @test a.converged && d.converged
+        @test isapprox(a.Egas, d.Egas; rtol=1e-12)
+        @test maxabs(a.Erad - d.Erad) <= 1e-12 * maxabs(d.Erad)
+    end
+
+    # The cost of each path, asserted rather than described. Measured inside a
     # function: at global scope `@allocated` would be measuring dynamic dispatch
     # on a non-const global and not the solver.
     function coupling_bytes(method, s)
@@ -350,11 +373,15 @@ end
     end
     for NG in (1, 4, 8)
         s = cell_state(; NG, opacity=law(1.0))
-        @test coupling_bytes(DirectCoupling(linsolve=ArrowheadSolve()), s) == 0
+        # Both defaults are allocation-free, which is half of why the arrowhead
+        # is the default at all.
         @test coupling_bytes(QuokkaCoupling(), s) == 0
-        # ... and the dense default does allocate. Stated in its docstring, and
-        # here, rather than discovered in a profile.
-        @test coupling_bytes(DirectCoupling(), s) > 0
+        @test coupling_bytes(DirectCoupling(), s) == 0
+        # ... and the reference path does allocate, and cannot not: a `Matrix` is
+        # heap storage however small `NG` is. Stated in `DenseSolve`'s docstring,
+        # and here, rather than discovered in a profile.
+        @test coupling_bytes(QuokkaCoupling(linsolve=DenseSolve()), s) > 0
+        @test coupling_bytes(DirectCoupling(linsolve=DenseSolve()), s) > 0
     end
 end
 

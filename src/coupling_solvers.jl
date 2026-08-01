@@ -4,9 +4,10 @@
 #
 # `DirectCoupling` is generated: its residual is `u - u0 - dt f(u)` and its
 # Jacobian `I - dt J`, both straight from `coupling_rhs` / `coupling_jacobian`,
-# so it has no physics of its own to keep in step. How it solves that matrix is
-# a choice -- `AbstractJacobianSolve`, below -- because the `O(NG)` elimination
-# both solvers use is a physical assumption in the shape of an algorithm.
+# so it has no physics of its own to keep in step. How either solver inverts that
+# matrix is a `linsolve` choice -- `AbstractJacobianSolve`, below -- because the
+# `O(NG)` elimination they both default to is a physical assumption in the shape
+# of an algorithm, and the other option is what checks it.
 #
 # `QuokkaCoupling` is a separate formulation, kept separate on purpose. It takes
 # the *integrated transfer* `R_g` as its unknown, which does not exist until a
@@ -21,43 +22,14 @@
 # `apply_energy_floors`. The note at the top of `coupling.jl` says why those
 # three live here rather than in the right-hand side.
 
-"""
-    QuokkaCoupling(; tolerance = 1e-9, max_iterations = 100)
-
-Backward Euler in Quokka's *replaced* base variables `(E_gas, R_g)`, where `R_g`
-is the energy handed from gas to radiation group `g` over the step. The default.
-
-Why not the obvious variables: with `(E_gas, E_g)` the residual for a group is a
-difference of two large, nearly-cancelling terms once `tau = chat rho kappa dt`
-is big, and its Jacobian entry scales like `tau`, so the linear solve is
-ill-conditioned exactly where the physics is stiffest. Writing the unknown as
-the *transfer* `R_g` moves `tau` from the residual into the definition, and the
-condition number stops tracking it. That is what lets one step cross a coupling
-time a hundred million times shorter than `dt`.
-
-The Jacobian is an arrowhead -- diagonal in the groups, plus one dense row and
-one dense column for the gas -- so it inverts in `O(NG)` by elimination rather
-than `O(NG^3)`, with no matrix ever formed. See [`solve_arrowhead`](@ref).
-
-It is also hand-derived rather than taken from [`coupling_jacobian`](@ref), and
-has to be: `R_g` is not a state variable, so there is no `dR_g/dt` to
-differentiate. The derivation is written out in the Newton loop.
-"""
-struct QuokkaCoupling{T<:AbstractFloat} <: AbstractCoupling
-    tolerance::T
-    max_iterations::Int
-end
-
-QuokkaCoupling(; tolerance=1e-9, max_iterations::Integer=100) =
-    QuokkaCoupling(float(tolerance), Int(max_iterations))
-
 # --- the Newton step's linear solve -------------------------------------------
 #
 # One `(1+NG)x(1+NG)` system per Newton iteration per cell, and two ways to solve
-# it. Which one is a choice `DirectCoupling` hands to its caller, for a reason
-# spelled out under `AbstractJacobianSolve`: the fast one is only correct while
-# the group block of the Jacobian is diagonal, and that is a property of the
-# terms currently in `coupling_rhs` rather than of radiation.
+# it. Both solvers default to the fast one and take the other as a `linsolve`
+# argument, for the reason spelled out under `AbstractJacobianSolve`: the fast
+# one is correct only while the group block of the Jacobian is diagonal, that is
+# a property of the terms currently in `coupling_rhs` rather than of radiation,
+# and the general solve is what tests the difference.
 
 """
     solve_arrowhead(J00, J0g, Jg0, Jgg, F0, Fg) -> (dx0, dxg)
@@ -88,36 +60,48 @@ end
 """
     AbstractJacobianSolve
 
-How [`DirectCoupling`](@ref) solves the linear system of one Newton step. Two
-are provided, and the **default is the slower one on purpose**:
+How [`QuokkaCoupling`](@ref) and [`DirectCoupling`](@ref) solve the linear system
+of one Newton step. Two are provided:
 
-  - [`DenseSolve`](@ref)     -- assemble `I - dt J` and factorise it. `O(NG^3)`,
-    allocates, assumes nothing. The default.
   - [`ArrowheadSolve`](@ref) -- eliminate the group block into the gas row.
-    `O(NG)`, forms no matrix, allocates nothing.
+    `O(NG)`, forms no matrix, allocates nothing. The default for both.
+  - [`DenseSolve`](@ref)     -- assemble the Newton matrix and factorise it.
+    `O(NG^3)`, allocates, assumes nothing. The reference.
 
 The arrowhead is exact for the coupling as it stands, and it is not a small
 saving: at four groups it is the difference between roughly 0.9 kB a call and
 none, and between 25 and 70 per cent of the wall time of the whole cell solve
-over `NG = 4` to `16`. But it is exact only because of a *physical* assumption
--- groups exchange energy with the gas and never directly with each other, so
-the group block of [`CouplingJacobian`](@ref) is diagonal. That is a property of
-the terms in [`coupling_rhs`](@ref) today, not a truth about radiation. Add
-Compton redistribution between groups, or overlapping lines, and it acquires
-off-diagonal entries which the elimination has nowhere to put and would silently
-drop, while the dense assembly would only need to write a block where it now
-writes a diagonal.
+over `NG = 4` to `16`. That is why it is the default.
 
-Defaulting to the general solve is the opposite of the usual instinct, which is
-to ship the fast path and offer the safe one as an option, so it is worth saying
-why. The failure it protects against is quiet. Newton stops on the residual of
-the true equations, so a damaged matrix cannot converge to the wrong answer --
-it can only fail to converge, and a cell that exhausts `max_iterations` returns
-its last iterate and increments a counter rather than stopping the run. What you
-would see is a slower, slightly wrong simulation with a nonzero
-`newton_failures`, which is exactly the kind of symptom that gets blamed on the
-physics. The `O(NG)` shortcut is worth having; it is not worth having by
-default, on behalf of a user who has not been told what it assumes.
+It is exact because of a *physical assumption*: groups exchange energy with the
+gas and never directly with each other, so the group block of
+[`CouplingJacobian`](@ref) is diagonal. That is a property of the terms in
+[`coupling_rhs`](@ref) today, not a truth about radiation. Compton
+redistribution between groups, or overlapping lines, would give that block
+off-diagonal entries, and the elimination has nowhere to put them.
+
+What makes it acceptable as a default is that the assumption is now *checked*.
+`DenseSolve` solves the same system without it, and the suite asserts that the
+two agree -- block by block on a matrix built from the real Jacobian, and end to
+end through a converged cell. A default may encode an assumption when a checked
+alternative exists; it may not when the assumption is silent, and until
+`DenseSolve` existed this one was silent: both in-tree solvers called the
+elimination, so they could agree with each other and both be wrong.
+
+The cross-check has to exist because the failure would be quiet. Newton stops on
+the residual of the true equations, so a damaged matrix cannot converge to a
+wrong answer -- it can only fail to converge, and a cell that exhausts
+`max_iterations` returns its last iterate and increments a counter rather than
+stopping the run. What a broken elimination looks like from outside is a slower,
+slightly wrong simulation with a nonzero `newton_failures`, which is exactly the
+kind of symptom that gets blamed on the physics. Nothing about a run reports it;
+a test has to.
+
+`DenseSolve` stays the reference implementation, and is what to switch to the day
+a term is added that couples groups directly. That day is not free there either
+-- `rad_rad` is an `SVec` today, so the dense assembly writes a diagonal where it
+would have to write a block -- but that is one line of assembly against an
+elimination that has no place for the entries at all.
 """
 abstract type AbstractJacobianSolve end
 
@@ -126,11 +110,14 @@ abstract type AbstractJacobianSolve end
 
 Assemble the Newton matrix `I - dt J` as an ordinary `(1+NG)x(1+NG)` matrix and
 solve it by LU factorisation (LinearAlgebra's `lu!`/`ldiv!`, in place on the
-freshly built matrix and right-hand side). The default for
-[`DirectCoupling`](@ref).
+freshly built matrix and right-hand side).
 
-It makes no use of the arrowhead structure, which is precisely why it is the
-default -- see [`AbstractJacobianSolve`](@ref) for the argument.
+It makes no use of the arrowhead structure, which is what makes it the
+reference: it solves the system that [`ArrowheadSolve`](@ref) assumes something
+about, so the two agreeing is a direct test of the assumption rather than of two
+copies of it. Pass `linsolve = DenseSolve()` to either solver to run that
+comparison, and switch to it for good if a term is added that couples groups
+directly -- see [`AbstractJacobianSolve`](@ref).
 
 **It allocates, and it must**: `NG` is a compile-time constant but a `Matrix` is
 heap storage, so every Newton iteration of every cell buys a matrix, a
@@ -139,13 +126,10 @@ linear solve at one group, 464 at four, 976 at eight, 3.0 kB at sixteen, which
 makes a converged three-iteration cell cost 0.54, 0.93, 1.9 and 5.9 kB
 respectively. Wall time is 1.3 to 1.7 times [`ArrowheadSolve`](@ref) at four to
 sixteen groups, and 4.7 times at one, where the linear solve is most of what a
-grey cell does. `ArrowheadSolve()` restores exactly zero bytes per cell.
+grey cell does.
 
-Nothing in the package's default configuration is on this path --
-[`RadiationPhysics`](@ref) couples with [`QuokkaCoupling`](@ref), which is
-unaffected -- so this is a cost paid by a run that asks for `DirectCoupling`,
-which is the solver kept for verification. A run that wants it in production
-should pass `ArrowheadSolve()` and know why.
+Nothing is on this path unless it is asked for: both in-tree solvers default to
+`ArrowheadSolve()`, which is exactly zero bytes per cell.
 """
 struct DenseSolve <: AbstractJacobianSolve end
 
@@ -153,12 +137,12 @@ struct DenseSolve <: AbstractJacobianSolve end
     ArrowheadSolve()
 
 Solve the Newton step with [`solve_arrowhead`](@ref): eliminate the diagonal
-group block into the gas row, `O(NG)`, no matrix formed, nothing allocated.
+group block into the gas row, `O(NG)`, no matrix formed, nothing allocated. The
+default for [`QuokkaCoupling`](@ref) and [`DirectCoupling`](@ref).
 
-Opt in when the linear solve is measurably worth it *and* the coupling is still
-the one in [`coupling_rhs`](@ref), where groups meet only through the gas. It is
-what [`QuokkaCoupling`](@ref) uses unconditionally, and what `DirectCoupling`
-used unconditionally before the choice existed.
+Exact while the coupling is the one in [`coupling_rhs`](@ref), where groups meet
+only through the gas. [`AbstractJacobianSolve`](@ref) says what that assumption
+is, what checks that it still holds, and what to do the day it stops.
 """
 struct ArrowheadSolve <: AbstractJacobianSolve end
 
@@ -171,8 +155,10 @@ draws. Dispatches on an [`AbstractJacobianSolve`](@ref).
 
 The two paths differ once the matrix is singular: the arrowhead treats a zero
 group entry as a decoupled group and returns a zero update for it, while an LU
-factorisation of the same matrix throws. Neither case arises from
-[`DirectCoupling`](@ref), whose group entries are `1 + dt chat rho kappa_E >= 1`.
+factorisation of the same matrix throws. Neither solver produces one.
+[`DirectCoupling`](@ref)'s group entries are `1 + dt chat rho kappa_E >= 1`, and
+[`QuokkaCoupling`](@ref) writes a large finite sentinel rather than `-Inf` for a
+group of zero optical depth, so its matrix factorises too.
 """
 @inline solve_jacobian(::ArrowheadSolve, J00::T, J0g::SVec{NG,T}, Jg0::SVec{NG,T},
                        Jgg::SVec{NG,T}, F0::T, Fg::SVec{NG,T}) where {NG,T} =
@@ -198,8 +184,47 @@ function solve_jacobian(::DenseSolve, J00::T, J0g::SVec{NG,T}, Jg0::SVec{NG,T},
     return (@inbounds(b[1]), SVec{NG,T}(ntuple(g -> @inbounds(b[1+g]), Val(NG))...))
 end
 
+# --- the two solvers ----------------------------------------------------------
+
 """
-    DirectCoupling(; tolerance = 1e-9, max_iterations = 100, linsolve = DenseSolve())
+    QuokkaCoupling(; tolerance = 1e-9, max_iterations = 100,
+                     linsolve = ArrowheadSolve())
+
+Backward Euler in Quokka's *replaced* base variables `(E_gas, R_g)`, where `R_g`
+is the energy handed from gas to radiation group `g` over the step. The default.
+
+Why not the obvious variables: with `(E_gas, E_g)` the residual for a group is a
+difference of two large, nearly-cancelling terms once `tau = chat rho kappa dt`
+is big, and its Jacobian entry scales like `tau`, so the linear solve is
+ill-conditioned exactly where the physics is stiffest. Writing the unknown as
+the *transfer* `R_g` moves `tau` from the residual into the definition, and the
+condition number stops tracking it. That is what lets one step cross a coupling
+time a hundred million times shorter than `dt`.
+
+The Jacobian is an arrowhead -- diagonal in the groups, plus one dense row and
+one dense column for the gas -- so `linsolve` defaults to
+[`ArrowheadSolve`](@ref) and inverts it in `O(NG)` with no matrix ever formed.
+The diagonal is the same physical assumption `DirectCoupling` makes, and
+[`DenseSolve`](@ref) is the same escape hatch and the same cross-check; see
+[`AbstractJacobianSolve`](@ref).
+
+It is also hand-derived rather than taken from [`coupling_jacobian`](@ref), and
+has to be: `R_g` is not a state variable, so there is no `dR_g/dt` to
+differentiate. The derivation is written out in the Newton loop.
+"""
+struct QuokkaCoupling{T<:AbstractFloat,L<:AbstractJacobianSolve} <: AbstractCoupling
+    tolerance::T
+    max_iterations::Int
+    linsolve::L
+end
+
+QuokkaCoupling(; tolerance=1e-9, max_iterations::Integer=100,
+               linsolve::AbstractJacobianSolve=ArrowheadSolve()) =
+    QuokkaCoupling(float(tolerance), Int(max_iterations), linsolve)
+
+"""
+    DirectCoupling(; tolerance = 1e-9, max_iterations = 100,
+                     linsolve = ArrowheadSolve())
 
 Backward Euler in the natural variables `(E_gas, E_g)`, with the same Newton
 iteration as [`QuokkaCoupling`](@ref) and a choice of linear solve.
@@ -208,14 +233,12 @@ Nothing about it is hand-derived: the residual is `u - u0 - dt f(u)` with `f` =
 [`coupling_rhs`](@ref), and the Newton matrix is `I - dt * J` with `J` =
 [`coupling_jacobian`](@ref).
 
-`linsolve` is an [`AbstractJacobianSolve`](@ref) and defaults to the general
-[`DenseSolve`](@ref) rather than the `O(NG)` [`ArrowheadSolve`](@ref), which is
-the reverse of the usual defaulting instinct: the arrowhead is fast because it
-assumes the Jacobian's group block is diagonal, and that assumption belongs to
-the physics currently in `coupling_rhs` rather than to the solver. Its
-docstrings argue the case; the short version is that the dense path costs a
-kilobyte a cell in a solver kept for verification, and the arrowhead's failure
-mode -- when a future term couples groups directly -- would be silent.
+`linsolve` is an [`AbstractJacobianSolve`](@ref) and defaults to the `O(NG)`
+[`ArrowheadSolve`](@ref), which is exact for the coupling as it stands and
+allocates nothing. [`DenseSolve`](@ref) solves the same system without the
+structural assumption behind that speed; it is the reference the default is
+checked against, and what to switch to if a term is added that couples groups
+directly.
 
 This is the textbook formulation, and it exists here to be compared against
 [`QuokkaCoupling`](@ref): the two solve the same equations to the same
@@ -229,7 +252,7 @@ struct DirectCoupling{T<:AbstractFloat,L<:AbstractJacobianSolve} <: AbstractCoup
 end
 
 DirectCoupling(; tolerance=1e-9, max_iterations::Integer=100,
-               linsolve::AbstractJacobianSolve=DenseSolve()) =
+               linsolve::AbstractJacobianSolve=ArrowheadSolve()) =
     DirectCoupling(float(tolerance), Int(max_iterations), linsolve)
 
 # The group kernels below take every value they need as an *argument*. Written
@@ -376,7 +399,11 @@ function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M
         # than -Inf, because Inf arithmetic in the elimination makes NaN.
         Jgg = _jgg_quokka(tau, kPoverE, -one(T) / eps(T), Val(NG))
 
-        dEgas, dR = solve_arrowhead(J00, J0g, Jg0, Jgg, -F0, -Fg)
+        # Arrowhead by default, and by the same assumption `DirectCoupling`
+        # makes: `Jgg` is a vector because a group's transfer sees no other
+        # group's. `DenseSolve` factorises the same system without assuming it,
+        # which is what the two agreeing is a test of.
+        dEgas, dR = solve_jacobian(m.linsolve, J00, J0g, Jg0, Jgg, -F0, -Fg)
 
         # Guard against a Newton step that overshoots past the radiation
         # temperature: snap to radiative equilibrium, which is where the
@@ -452,10 +479,10 @@ function solve_coupling(m::DirectCoupling, s::CouplingState{NG,M,T}) where {NG,M
         Jgg = one(T) - s.dt * J.rad_rad
 
         # How that system is solved is the caller's choice, and defaults to the
-        # general one. `Jgg` is a vector rather than a matrix only because `J`'s
-        # group block is diagonal today (see `CouplingJacobian`); the arrowhead
-        # elimination is that fact turned into an algorithm, and `m.linsolve` is
-        # where a user says they have checked it still holds.
+        # `O(NG)` elimination. `Jgg` is a vector rather than a matrix only
+        # because `J`'s group block is diagonal today (see `CouplingJacobian`);
+        # the arrowhead is that fact turned into an algorithm, and `DenseSolve`
+        # is the same solve without it, which is what keeps the fact honest.
         dEgas, dErad = solve_jacobian(m.linsolve, J00, J0g, Jg0, Jgg, -F0, -Fg)
         Egas = max(Egas + dEgas, s.cv * s.Tfloor)
         Erad += dErad
