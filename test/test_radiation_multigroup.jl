@@ -16,7 +16,9 @@
 
 using Hydro3D: gbase, multigroup_source_step!, group_opacities, group_centers,
                enforce_state!, radiation_source_step!, IMX, IEGAS, IFRZ,
-               CouplingState, coupling_rhs, coupling_jacobian, solve_coupling, sumvec
+               CouplingState, coupling_rhs, coupling_jacobian, solve_coupling, sumvec,
+               solve_jacobian, maxabs
+using LinearAlgebra: cond          # only, so Hydro3D's own `dot`/`norm` still win
 
 "Group energies of a Planck spectrum at `Trad`, written into every interior cell."
 function set_planck!(sim, Trad)
@@ -265,6 +267,94 @@ end
         @test isapprox(exact.Egas, zeroed.Egas; rtol=1e-8)
         @test isapprox(sumvec(exact.Erad), sumvec(zeroed.Erad); rtol=1e-8)
         @test exact.iterations < zeroed.iterations
+    end
+end
+
+@testset "the two Jacobian solves agree" begin
+    # `solve_arrowhead` is an `O(NG)` elimination that is exact only because the
+    # Jacobian's group block is diagonal, and until `DenseSolve` existed the
+    # linear solve itself was never compared with anything: both in-tree solvers
+    # called it, so they could agree with each other and both be wrong. What
+    # checked it before was indirect -- the grey driver's own inline 2x2 solve,
+    # at one group, through a converged Newton answer -- and Newton stops on the
+    # residual of the true equations, so a damaged matrix mostly hides in the
+    # iteration count. A general LU of the same matrix is the direct check.
+    # Detuning the elimination by one part in a thousand fails the two
+    # assertions below, which is what "direct" is supposed to mean.
+    #
+    # A temperature-dependent opacity is used throughout, so that `dkappa/dT`
+    # fills the Jacobian's first row and column. With a constant opacity the
+    # elimination would be tested on a matrix simpler than the one it meets.
+    law(k0) = UserOpacity(planck=(rho, T) -> k0 * T^2, dplanck_dT=(rho, T) -> 2k0 * T)
+
+    "The Newton matrix `I - dt J` in blocks, and a right-hand side with something in it."
+    function newton_system(s, NG)
+        J = coupling_jacobian(s, 1.4 * s.Egas, 1.3 * s.Erad)
+        (one(Float64) - s.dt * J.gas_gas, -s.dt * J.gas_rad, -s.dt * J.rad_gas,
+         one(Float64) - s.dt * J.rad_rad, 0.37 * s.Egas,
+         SVec{NG,Float64}(ntuple(g -> (0.1 + 0.9g / NG) * s.Erad[g], NG)...))
+    end
+
+    for NG in (1, 4, 8), k0 in (1e-6, 1.0, 1e3, 1e9)   # thin, marginal, thick, very thick
+        s = cell_state(; NG, opacity=law(k0))
+        J00, J0g, Jg0, Jgg, F0, Fg = newton_system(s, NG)
+        a0, ag = solve_jacobian(ArrowheadSolve(), J00, J0g, Jg0, Jgg, F0, Fg)
+        d0, dg = solve_jacobian(DenseSolve(), J00, J0g, Jg0, Jgg, F0, Fg)
+        x = [a0; [ag[g] for g in 1:NG]]
+        y = [d0; [dg[g] for g in 1:NG]]
+        rel = maximum(abs, x - y) / maximum(abs, y)
+
+        A = zeros(NG + 1, NG + 1)
+        A[1, 1] = J00
+        for g in 1:NG
+            A[1, 1+g] = J0g[g]
+            A[1+g, 1] = Jg0[g]
+            A[1+g, 1+g] = Jgg[g]
+        end
+
+        # Two algorithms for one system agree to `eps * cond`, not to `eps`: each
+        # is backward stable, so each returns the exact answer to a slightly
+        # different matrix, and the conditioning is what turns that into a
+        # difference in the answers. The bound is therefore written with `cond`
+        # in it. It matters only in the last row of this loop -- at `tau = 1e6`
+        # the Newton matrix has a condition number of 2e8 and no fixed 1e-12
+        # would be honest -- and everywhere else the two agree to 1e-16.
+        @test rel <= 8 * eps() * cond(A)
+        k0 <= 1e3 && @test rel < 1e-12
+        # ... and both are actually solving the stated system, not agreeing on a
+        # shared misreading of it
+        @test maximum(abs, A * y - [F0; [Fg[g] for g in 1:NG]]) <=
+              1e-12 * cond(A) * maximum(abs, y)
+    end
+
+    # End to end the two take the same Newton path -- same matrix, same update to
+    # round-off, so the same iterate and the same iteration count. This is the
+    # assertion that would fail if `linsolve` ever stopped being a choice of how
+    # to solve and became a choice of what to solve.
+    for NG in (1, 4, 8), k0 in (1e-6, 1.0, 1e9)
+        s = cell_state(; NG, opacity=law(k0))
+        a = solve_coupling(DirectCoupling(linsolve=ArrowheadSolve()), s)
+        d = solve_coupling(DirectCoupling(), s)
+        @test a.converged && d.converged
+        @test a.iterations == d.iterations
+        @test isapprox(a.Egas, d.Egas; rtol=1e-12)
+        @test maxabs(a.Erad - d.Erad) <= 1e-12 * maxabs(d.Erad)
+    end
+
+    # The cost of the default, asserted rather than described. Measured inside a
+    # function: at global scope `@allocated` would be measuring dynamic dispatch
+    # on a non-const global and not the solver.
+    function coupling_bytes(method, s)
+        solve_coupling(method, s)                        # compile and warm up
+        minimum(@allocated(solve_coupling(method, s)) for _ in 1:3)
+    end
+    for NG in (1, 4, 8)
+        s = cell_state(; NG, opacity=law(1.0))
+        @test coupling_bytes(DirectCoupling(linsolve=ArrowheadSolve()), s) == 0
+        @test coupling_bytes(QuokkaCoupling(), s) == 0
+        # ... and the dense default does allocate. Stated in its docstring, and
+        # here, rather than discovered in a profile.
+        @test coupling_bytes(DirectCoupling(), s) > 0
     end
 end
 

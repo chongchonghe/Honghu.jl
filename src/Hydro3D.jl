@@ -41,6 +41,11 @@ module Hydro3D
 
 using Printf
 using Dates          # provenance timestamps only; a stdlib, not a package
+# Two names, not the package: `DenseSolve` factorises the coupling's Newton
+# matrix with them (see `coupling_solvers.jl`). Imported selectively because
+# LinearAlgebra exports `dot` and `norm`, which `staticvec.jl` defines for `SVec`
+# as its own -- a blanket `using` would make those definitions an error.
+using LinearAlgebra: lu!, ldiv!
 
 # --- core types and kernels --------------------------------------------------
 include("staticvec.jl")
@@ -87,6 +92,7 @@ export LevermoreClosure, EddingtonClosure
 # multigroup radiation
 export RadiationGroups, ngroups, planck_integral, planck_fractions
 export AbstractCoupling, QuokkaCoupling, DirectCoupling, AdaptiveCoupling
+export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 
 # numerics
 export PCM, PLM, PPM

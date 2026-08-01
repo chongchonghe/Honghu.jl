@@ -51,7 +51,8 @@ package to load rather than throwing `MethodError`. Two worked examples:
   matter-radiation coupling. The two hand-written coupling solvers beside it
   need no packages, so the solver still starts on a machine with neither.
 
-The `[deps]` list is currently `Printf` and `Dates`, both stdlibs. Keeping the
+The `[deps]` list is currently `Printf`, `Dates` and `LinearAlgebra` (two names
+from it, `lu!` and `ldiv!`, for `DenseSolve`), all stdlibs. Keeping the
 *solver* that light is still worth something — this code is meant to run on
 compute nodes where a large tree is a liability, and a hard dependency is the one
 tier every user pays for. So the bar for `[deps]` is real, but it is a bar, not a
@@ -162,6 +163,7 @@ Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`,
 - The **opacity law travels on the state**, not a frozen pair of numbers, so `coupling_rhs` evaluates `kappa(T)` at whatever temperature it is called with. Without that the `dkappa/dT` term in the Jacobian would be the derivative of something the residual cannot see, and a Rosenbrock method would be worse off with it than without.
 - An opacity supplies its derivative through `dkappa_dT` / `group_opacity_dT`, defaulting to zero. Zero costs iterations, not correctness. Measured on a `PowerLawOpacity`: the exact term cuts mean Newton iterations by 25–40% in the intermediate regime, and by nothing at all deep in equilibrium, where the correction is proportional to `B_g - E_g`.
 - The optically-thin shortcut, the equilibrium-overshoot guard and `apply_energy_floors` are **not** ODE terms and are deliberately outside `coupling_rhs`. The header of `src/coupling.jl` says where each lives.
+- The arrowhead elimination is an **assumption, not a truth**: it is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today. So `DirectCoupling` takes a `linsolve` (`AbstractJacobianSolve`) and defaults to the general `DenseSolve`; `ArrowheadSolve()` is the opt-in `O(NG)`, zero-allocation path, and is what `QuokkaCoupling` still uses unconditionally. Add a term that couples groups directly (Compton redistribution, line overlap) and the arrowhead goes silently wrong while the dense assembly needs only to write a block where it writes a diagonal.
 
 ## Source terms
 

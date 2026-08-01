@@ -239,9 +239,13 @@ The exact Jacobian of [`coupling_rhs`](@ref), in four blocks:
   - `rad_rad` : `d(dE_g/dt)/dE_g`, *diagonal* -- group `g`'s rate sees no other
     group's energy, only the gas temperature they all share
 
-That structure is why the linear solves in `coupling_solvers.jl` are arrowheads
-and cost `O(NG)` rather than `O(NG^3)`, and it is a property of the physics
-rather than of any solver, which is why it is stated here.
+That structure is what the arrowhead elimination in `coupling_solvers.jl`
+exploits to cost `O(NG)` rather than `O(NG^3)`. It is a property of the physics
+rather than of any solver, which is why it is stated here -- and why it is an
+assumption rather than a guarantee: a term that moved energy between groups
+directly (Compton redistribution, overlapping lines) would make `rad_rad` a
+matrix, and every solver that assumed otherwise would be quietly wrong. See
+[`AbstractJacobianSolve`](@ref), which is where that choice is made explicit.
 """
 struct CouplingJacobian{NG,T<:AbstractFloat}
     gas_gas::T
