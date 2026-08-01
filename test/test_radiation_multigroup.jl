@@ -185,6 +185,15 @@ function cell_state(; NG=4, opacity, Tgas=1.3, Trad=0.5, rho=1.0, cv=1.0, dt=1e-
                                                      1e-10, 1e-30)
 end
 
+# A temperature-dependent opacity of adjustable strength, so that `dkappa/dT`
+# fills the first row and column of every Jacobian these tests build. Defined
+# once at file scope rather than inside each testset that wants it, and not only
+# to avoid three copies: an anonymous function gets a fresh type per syntactic
+# location, that type lands in `CouplingState`'s fourth parameter, and every
+# distinct `CouplingState` makes OrdinaryDiffEq specialise its entire integrator
+# stack again. Three copies of this line cost about six seconds of compilation.
+law(k0) = UserOpacity(planck=(rho, T) -> k0 * T^2, dplanck_dT=(rho, T) -> 2k0 * T)
+
 @testset "the coupling Jacobian is the derivative of the coupling right-hand side" begin
     # The test that pins the refactor. `coupling_rhs` and `coupling_jacobian` are
     # the single source of truth for the coupling physics: `DirectCoupling` builds
@@ -287,10 +296,9 @@ end
     # same matrix is the direct check. Detuning the elimination by one part in a
     # thousand fails the two assertions below, which is what "direct" means.
     #
-    # A temperature-dependent opacity is used throughout, so that `dkappa/dT`
-    # fills the Jacobian's first row and column. With a constant opacity the
-    # elimination would be tested on a matrix simpler than the one it meets.
-    law(k0) = UserOpacity(planck=(rho, T) -> k0 * T^2, dplanck_dT=(rho, T) -> 2k0 * T)
+    # The file-scope `law` is used throughout, so that `dkappa/dT` fills the
+    # Jacobian's first row and column. With a constant opacity the elimination
+    # would be tested on a matrix simpler than the one it meets.
 
     "The Newton matrix `I - dt J` in blocks, and a right-hand side with something in it."
     function newton_system(s, NG)
@@ -332,17 +340,27 @@ end
               1e-12 * cond(A) * maximum(abs, y)
     end
 
-    # End to end, and for *both* solvers, since both default to the elimination:
-    # each takes the same Newton path under either linear solve -- same matrix,
-    # same update to round-off, so the same iterate and the same iteration count.
-    # This is the assertion that would fail if `linsolve` ever stopped being a
-    # choice of how to solve and became a choice of what to solve. It covers
-    # `QuokkaCoupling` too, whose `tau <= 0` sentinel is a large *finite* number
-    # precisely so that a general factorisation of its matrix is possible.
-    for NG in (1, 4, 8), k0 in (1e-6, 1.0, 1e9), M in (QuokkaCoupling, DirectCoupling)
+    # End to end, and for *both* solvers, since both hand-written Newton loops
+    # default to the elimination: each takes the same Newton path under either
+    # linear solve -- same matrix, same update to round-off, so the same iterate
+    # and the same iteration count. This is the assertion that would fail if
+    # `linsolve` ever stopped being a choice of how to solve and became a choice
+    # of what to solve. It covers `QuokkaCoupling` too, whose `tau <= 0` sentinel
+    # is a large *finite* number precisely so that a general factorisation of its
+    # matrix is possible.
+    #
+    # `DirectCoupling` is asked for `NewtonStepper` explicitly, because `linsolve`
+    # is that stepper's alone: `ImplicitEulerStepper` factorises the full matrix
+    # itself and ignores the keyword. Under the default stepper this loop would
+    # be comparing two identical calls and would pass whatever the elimination
+    # did. (That the *default* linear solve is still the elimination is pinned by
+    # the allocation testset below, where only it can be zero bytes.)
+    handwritten = (ls -> QuokkaCoupling(linsolve=ls),
+                   ls -> DirectCoupling(linsolve=ls, stepper=NewtonStepper()))
+    for NG in (1, 4, 8), k0 in (1e-6, 1.0, 1e9), M in handwritten
         s = cell_state(; NG, opacity=law(k0))
-        a = solve_coupling(M(), s)                          # ArrowheadSolve, the default
-        d = solve_coupling(M(linsolve=DenseSolve()), s)
+        a = solve_coupling(M(ArrowheadSolve()), s)
+        d = solve_coupling(M(DenseSolve()), s)
         @test a.converged && d.converged
         @test a.iterations == d.iterations
         @test isapprox(a.Egas, d.Egas; rtol=1e-12)
@@ -355,33 +373,133 @@ end
     # it with a residual still to solve, and a large finite entry is also what
     # lets `DenseSolve` factorise the same matrix instead of throwing.
     op = FrequencyOpacity((nu, rho, T) -> nu < 2.0 ? 1e3 * T^2 : 0.0)
-    for NG in (4, 8), M in (QuokkaCoupling, DirectCoupling)
+    for NG in (4, 8), M in handwritten
         s = cell_state(; NG, opacity=op)
-        a = solve_coupling(M(), s)
-        d = solve_coupling(M(linsolve=DenseSolve()), s)
+        a = solve_coupling(M(ArrowheadSolve()), s)
+        d = solve_coupling(M(DenseSolve()), s)
         @test a.converged && d.converged
         @test isapprox(a.Egas, d.Egas; rtol=1e-12)
         @test maxabs(a.Erad - d.Erad) <= 1e-12 * maxabs(d.Erad)
     end
 
-    # The cost of each path, asserted rather than described. Measured inside a
-    # function: at global scope `@allocated` would be measuring dynamic dispatch
-    # on a non-const global and not the solver.
+    # `linsolve` is not merely unused on the `ImplicitEuler` path, it is *inert*:
+    # same answer bit for bit, same iteration count, same bytes. Asserting that
+    # is what turns "documented as ignored" into something that stays true.
+    for NG in (1, 4)
+        s = cell_state(; NG, opacity=law(1e3))
+        a = solve_coupling(DirectCoupling(), s)
+        d = solve_coupling(DirectCoupling(linsolve=DenseSolve()), s)
+        @test a.Egas === d.Egas
+        @test a.Erad == d.Erad
+        @test a.iterations == d.iterations
+    end
+end
+
+@testset "the two backward-Euler steppers agree" begin
+    # `DirectCoupling` builds one residual and one Jacobian and hands them to a
+    # stepper. Two steppers are provided, and they share `coupling_rhs`,
+    # `coupling_jacobian` and nothing else -- not the residual, not the opening
+    # iterate, not the convergence test, not the linear algebra. The hand-written
+    # `newton_solve` and OrdinaryDiffEq's `ImplicitEuler` are therefore two
+    # genuinely independent implementations of one discretisation, and this is
+    # the testset that says so.
+    #
+    # It is worth more than the `QuokkaCoupling` comparison next door: that one
+    # compares two loops written in this repository, and a misconception shared
+    # between them would survive it.
+    for NG in (1, 2, 4, 8), k0 in (1e-9, 1e-6, 1e-2, 1.0, 1e2, 1e3, 1e6, 1e9)
+        s = cell_state(; NG, opacity=law(k0))
+        ie = solve_coupling(DirectCoupling(), s)                        # ImplicitEuler
+        nw = solve_coupling(DirectCoupling(stepper=NewtonStepper()), s) # newton_solve
+        @test ie.converged && nw.converged
+
+        # The bound is written as a fraction of the tolerance the two were
+        # *asked* for, rather than as a number that happens to pass. Both stop
+        # when the residual is under `1e-9` times the cell's total energy, so
+        # `1e-9 * Etot` is all either promises and two answers satisfying it
+        # could legitimately differ by twice that. They differ by far less: the
+        # worst case over this whole sweep is 0.0051 of the tolerance, at
+        # `tau ~ 0.1` where each takes a different number of steps to get inside
+        # it. Twenty times that leaves the bound tight enough to catch a stepper
+        # that has genuinely started solving something else.
+        Etot = s.Egas + (s.c / s.chat) * sumvec(s.Erad)
+        @test max(abs(ie.Egas - nw.Egas), maxabs(ie.Erad - nw.Erad)) <= 0.1e-9 * Etot
+
+        # ... and they get there the same way. Two independent iterations, from
+        # different opening iterates and under different convergence tests,
+        # taking the same number of Newton steps to within one is a much stronger
+        # statement than the answers agreeing, and it is what would break first
+        # if either stepper's Jacobian went subtly wrong.
+        @test abs(ie.iterations - nw.iterations) <= 1
+    end
+
+    # ... and end to end, through a run rather than a single cell. The bounds are
+    # tighter than the `QuokkaCoupling`-against-`DirectCoupling` comparison
+    # below, and should be: those are two discretisations agreeing, these are two
+    # implementations of one. Measured worst case 3.3e-8 in `R` and 3.7e-12 in
+    # `U`, both at `kappa = 1e-2`, where the groups exchange so little that what
+    # is left is the tolerance itself.
+    for kappa in (1e-2, 1.0, 1e2, 1e4)
+        a = mg_box(; kappa, coupling=DirectCoupling())
+        b = mg_box(; kappa, coupling=DirectCoupling(stepper=NewtonStepper()))
+        run!(a; tmax=1e-2, verbose=false)
+        run!(b; tmax=1e-2, verbose=false)
+        @test a.diag.newton_failures == 0
+        @test b.diag.newton_failures == 0
+        @test isapprox(a.R, b.R; rtol=1e-7)
+        @test isapprox(a.U, b.U; rtol=1e-10)
+    end
+end
+
+@testset "what each coupling path costs in allocation" begin
+    # Asserted rather than described, for every combination of solver, stepper
+    # and linear solve, because each of the three has a zero-byte path and a
+    # path that cannot be zero, and which is which is the whole argument for the
+    # defaults. Measured inside a function: at global scope `@allocated` would be
+    # measuring dynamic dispatch on a non-const global and not the solver.
     function coupling_bytes(method, s)
         solve_coupling(method, s)                        # compile and warm up
         minimum(@allocated(solve_coupling(method, s)) for _ in 1:3)
     end
+
     for NG in (1, 4, 8)
         s = cell_state(; NG, opacity=law(1.0))
-        # Both defaults are allocation-free, which is half of why the arrowhead
-        # is the default at all.
+
+        # The package default, and the one every production run takes. Zero, and
+        # it stays zero: `test_performance.jl` asserts the same thing through the
+        # whole source step, and this is the per-cell statement of it.
         @test coupling_bytes(QuokkaCoupling(), s) == 0
-        @test coupling_bytes(DirectCoupling(), s) == 0
-        # ... and the reference path does allocate, and cannot not: a `Matrix` is
-        # heap storage however small `NG` is. Stated in `DenseSolve`'s docstring,
-        # and here, rather than discovered in a profile.
-        @test coupling_bytes(QuokkaCoupling(linsolve=DenseSolve()), s) > 0
-        @test coupling_bytes(DirectCoupling(linsolve=DenseSolve()), s) > 0
+        # `DirectCoupling`'s hand-written stepper, likewise -- which is why it
+        # was kept once a library backward Euler existed.
+        @test coupling_bytes(DirectCoupling(stepper=NewtonStepper()), s) == 0
+
+        # `DenseSolve` allocates and cannot not: a `Matrix` is heap storage
+        # however small `NG` is, and both hand-written Newton loops pay the same
+        # bill for it because they call the same linear solve.
+        qd = coupling_bytes(QuokkaCoupling(linsolve=DenseSolve()), s)
+        dd = coupling_bytes(DirectCoupling(stepper=NewtonStepper(),
+                                           linsolve=DenseSolve()), s)
+        @test qd > 0
+        @test dd > 0
+        @test qd == dd
+
+        # The default stepper goes through `solve`, which builds an integrator, a
+        # nonlinear solver, their caches and a solution object per cell. It is
+        # emphatically not free, and this is the assertion that keeps that fact
+        # from being forgotten -- the previous version of this testset said
+        # `DirectCoupling() == 0`, which was true only while the default was the
+        # hand-written loop. Bounded on both sides: below, because the whole
+        # point is that it allocates; above, so that a regression that doubles it
+        # is caught rather than shrugged at.
+        ie = coupling_bytes(DirectCoupling(), s)
+        @test 4_000 < ie < 20_000
+        # ... and it is far more than either hand-written path costs, including
+        # the one that assembles a dense matrix every iteration.
+        @test ie > 4 * dd
+
+        # The reference solver allocates too, for the same reason and to the same
+        # order.
+        @test 4_000 < coupling_bytes(AdaptiveCoupling(), s) < 20_000
     end
 end
 

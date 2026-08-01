@@ -9,7 +9,7 @@ Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler 
 ## Commands
 
 ```bash
-julia --project=. -t 4 test/runtests.jl             # full suite, ~25 s, 688 tests
+julia --project=. -t 4 test/runtests.jl             # full suite, ~70 s, 1217 tests
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw docs/figures/
 julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a figure)
 julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
@@ -36,42 +36,70 @@ The tiers, strongest preference first:
 
 | Tier | What goes there | Cost to a user who doesn't use it |
 |:---|:---|:---|
-| `[weakdeps]` + `ext/` | anything not needed to *solve* -- plotting, ODE solvers, IO formats, analysis | nothing |
+| `[weakdeps]` + `ext/` | a feature a user can plausibly not want at all — plotting, IO formats, analysis | nothing |
 | `[extras]` / test target | anything used only by the test suite | nothing |
-| `[deps]` | genuinely required to integrate the equations | paid by everyone, every run |
+| `[deps]` | anything the package itself calls, on any path a user might take | load and precompile time, paid by everyone, every run |
 
-Prefer a weak dependency whenever the feature is optional, because the extension
-mechanism makes that free: the methods appear when the user loads the package and
-are absent otherwise. `src/plotting.jl` is the pattern -- stubs and docstrings in
-`src/`, implementations in `ext/`, and a fallback that tells the caller which
-package to load rather than throwing `MethodError`. Two worked examples:
+Prefer a weak dependency when the feature is genuinely optional, because the
+extension mechanism makes that free: the methods appear when the user loads the
+package and are absent otherwise. `src/plotting.jl` is the pattern — stubs and
+docstrings in `src/`, implementations in `ext/`, and a fallback that tells the
+caller which package to load rather than throwing `MethodError`. **`Plots`** is
+the worked example, and now the only one: the four plotting entry points live in
+`ext/Hydro3DPlotsExt.jl`, and a compute node never pays for the ~100-package
+plotting stack.
 
-- **`Plots`** — the four plotting entry points, in `ext/Hydro3DPlotsExt.jl`.
-- **`OrdinaryDiffEq`** — `AdaptiveCoupling`, the error-controlled
-  matter-radiation coupling. The two hand-written coupling solvers beside it
-  need no packages, so the solver still starts on a machine with neither.
+`OrdinaryDiffEq` used to be the second, and is not any more. It is a hard
+dependency, and the reasoning is worth keeping because it is what the tiers
+actually mean:
 
-The `[deps]` list is currently `Printf`, `Dates` and `LinearAlgebra` (two names
-from it, `lu!` and `ldiv!`, for `DenseSolve`), all stdlibs. Keeping the
-*solver* that light is still worth something — this code is meant to run on
-compute nodes where a large tree is a liability, and a hard dependency is the one
-tier every user pays for. So the bar for `[deps]` is real, but it is a bar, not a
-wall: if integrating the equations genuinely needs a package, add it.
+- Two solvers need it — `AdaptiveCoupling`, the error-controlled reference, and
+  `ImplicitEulerStepper`, which `DirectCoupling` now defaults to. A solver behind
+  an extension boundary is one that most checkouts never run: OrdinaryDiffEq was
+  simply not installed here, `test_coupling_adaptive.jl` skipped itself, and the
+  suite reported a clean 1027 passes with a third of the coupling code
+  unexercised. A dependency that is *required for a code path* does not belong in
+  `[weakdeps]`, whatever it costs.
+- What it costs, measured: `using Hydro3D` goes from 0.035 s to 1.53 s, and a
+  fresh install precompiles ~190 packages instead of none. Wall time of a run is
+  unaffected. That is real and it is the price of the decision.
+- Three `[deps]` entries, not one. OrdinaryDiffEq 7 is a slim meta-package that
+  exports only Tsit5, the Verner methods, `Rosenbrock23`, `Rodas5P` and `FBDF`;
+  `ImplicitEuler` comes from `OrdinaryDiffEqSDIRK` and `NLNewton` from
+  `OrdinaryDiffEqNonlinearSolve`. Both are already inside OrdinaryDiffEq's own
+  closure, so naming them adds a line to Project.toml and nothing to the manifest
+  or the load time.
+- **Import selectively.** `using OrdinaryDiffEq: ODEProblem, ODEFunction, …` and
+  not `using OrdinaryDiffEq`, because it exports `step!` and so does this
+  package; a blanket import would make `step!(sim)` ambiguous for every user with
+  both in scope. `using LinearAlgebra: lu!, ldiv!` is there for the same reason
+  (`dot` and `norm`), and the two comments in `src/Hydro3D.jl` say so.
+
+The `[deps]` list is `Printf`, `Dates`, `LinearAlgebra` (all stdlibs) and the
+three OrdinaryDiffEq packages. The bar for `[deps]` is still real — this code is
+meant to run on compute nodes where a large tree is a liability — but it is a
+bar, not a wall, and "the package calls it" clears it.
 
 Three things were considered and written in-tree instead, each on merit rather
 than principle, and each is worth revisiting if the calculus changes:
 
 - `StaticArrays` — would replace `src/staticvec.jl`, 58 lines that are already
   allocation-free and deliberately *not* an `AbstractArray` so a stray broadcast
-  cannot allocate.
+  cannot allocate. Note that this one is now *load-bearing* for the ODE solvers:
+  an `SVec`'s element type is fixed, so no dual number can flow through
+  `coupling_rhs`, which is why they are handed an analytic Jacobian and `tgrad`.
 - `HDF5` / `WriteVTK` — would replace a validated ~200-line writer in
   `src/output.jl`.
-- a generic nonlinear solver — slower than the hand-written 2×2 Newton whose
-  Jacobian inverts analytically, and slower than the arrowhead elimination in
-  `src/coupling_solvers.jl`, which is `O(NG)` and forms no matrix.
+- a generic nonlinear solver — the arrowhead elimination in `src/newton.jl` is
+  `O(NG)` and forms no matrix, and `QuokkaCoupling` around it is 0 bytes and
+  ~1 μs a cell. `ImplicitEuler` is now in the tree as the measurement of that
+  claim rather than an assertion of it: at four groups it is 10 kB and 8× the
+  wall time for the same answer to the same tolerance.
 
 What has not changed: keep hot kernels allocation-free, and don't let a
-dependency into an inner loop without measuring what it costs there.
+dependency into an inner loop without measuring what it costs there. The package
+default, `QuokkaCoupling`, still allocates nothing per cell and touches none of
+the above.
 
 ## Source layout
 
@@ -80,9 +108,13 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | File | Contents |
 |:---|:---|
 | `staticvec.jl` | `SVec{N,T}`, a stack-allocated fixed-size vector. Deliberately *not* an `AbstractArray`, so a stray broadcast cannot allocate. |
+| `newton.jl` | `newton_solve` on a bordered (arrowhead) system, and the two linear solves it can use — `ArrowheadSolve`, `DenseSolve`. No physics: the caller supplies a residual and its Jacobian, which is what lets the coupling's backward-Euler stepper be tuned without touching the coupling. |
 | `constants.jl` | `CGS` submodule. The code itself is unit-agnostic. |
 | `eos.jl` | `AbstractEOS`, `IdealGas`. Energies are volumetric; `cv` is specific. |
 | `opacity.jl` | `AbstractOpacity` and four concrete laws. Planck / energy / flux means are distinguished; `dkappa_dT` is the optional temperature derivative the coupling's exact Jacobian needs. |
+| `coupling.jl` | `AbstractCoupling`, `CouplingState`, `coupling_rhs` / `coupling_jacobian` — the single source of truth for the coupling physics. |
+| `coupling_solvers.jl` | `QuokkaCoupling`, `DirectCoupling`, and the `AbstractBackwardEuler` stepper choice. |
+| `coupling_ode.jl` | The two OrdinaryDiffEq-backed solvers — `ImplicitEulerStepper` and `AdaptiveCoupling` — and the `ODEFunction` they share. |
 | `grid.jl` | `CartesianGrid`, sweep index ranges, and the threading helpers `threaded_jk` / `reduce_max_jk`. |
 | `variables.jl` | State-vector layout and pointwise conversions. |
 | `boundary.jl` | `BoundaryCondition` subtypes and ghost filling. |
@@ -156,14 +188,20 @@ Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`,
 
 ### The multigroup coupling solvers
 
-`NG >= 2` does not use the driver above. It packs each cell into a `CouplingState` and hands it to an `AbstractCoupling` (`src/coupling.jl`, `src/coupling_solvers.jl`, and the `AdaptiveCoupling` extension). Those solvers **do** carry the `dkappa/dT` term, so their Jacobians are exact:
+`NG >= 2` does not use the driver above. It packs each cell into a `CouplingState` and hands it to an `AbstractCoupling` (`src/coupling.jl`, `src/coupling_solvers.jl`, `src/coupling_ode.jl`). Those solvers **do** carry the `dkappa/dT` term, so their Jacobians are exact:
 
-- `coupling_rhs` and `coupling_jacobian` are the single source of truth. `DirectCoupling`'s residual is `u - u0 - dt f(u)` and its Newton matrix `I - dt J`, generated, not hand-derived; `AdaptiveCoupling` hands `J` to `ODEFunction`.
+- `coupling_rhs` and `coupling_jacobian` are the single source of truth. `DirectCoupling`'s residual is `u - u0 - dt f(u)` and its Jacobian `I - dt J`, generated, not hand-derived; `AdaptiveCoupling` hands `J` to `ODEFunction`.
+- `DirectCoupling` does not *solve* them either. It builds the residual and the Jacobian as two closures and hands them to an `AbstractBackwardEuler` stepper, so the iteration can be tuned or replaced without touching any coupling physics. Two steppers exist and must agree:
+  - `ImplicitEulerStepper()` — OrdinaryDiffEq's `ImplicitEuler`, `adaptive = false`, one step of length `dt`. **The default.** Its `NLNewton` is tuned (`max_iter`, `always_new = true`, `check_div = false`, `κ = 1e-4`) so it solves the same problem rather than a looser one; the reasons are in its docstring. It allocates ~10 kB a cell and cannot not.
+  - `NewtonStepper()` — `newton_solve` from `src/newton.jl`. Zero bytes, 2.4–120× faster.
+  - The pair is a genuinely independent cross-check: they share `coupling_rhs` and `coupling_jacobian` and nothing else — not the residual form, the opening iterate, the convergence test or the linear algebra — so `test/test_radiation_multigroup.jl` asserting that they agree to 0.005 of the requested tolerance, and take the same number of Newton steps to within one, tests more than two in-tree loops agreeing ever could.
+- `linsolve` belongs to `NewtonStepper` alone. `ImplicitEuler` factorises the full matrix itself (equivalent to `DenseSolve`) and ignores the keyword — which is asserted, not just documented, and which means the *default* `DirectCoupling()` makes no arrowhead assumption at all. A `linsolve` comparison must therefore ask for `stepper = NewtonStepper()` explicitly or it compares two identical calls.
+- Every distinct `CouplingState{NG,M,T,O}` makes OrdinaryDiffEq specialise its whole integrator stack again, ~2–3 s of compilation each. It is why the test suite defines its opacity helpers once at file scope, and why a run pays this once rather than per cell.
 - `QuokkaCoupling` is a separate formulation and stays hand-derived. `R_g` is the integrated transfer, not a state variable, so there is no `dR_g/dt` to differentiate — it is a different discretisation, not a change of variables. It shares `coupling_rhs` (its opening guess is one explicit step of it) and nothing else.
 - The **opacity law travels on the state**, not a frozen pair of numbers, so `coupling_rhs` evaluates `kappa(T)` at whatever temperature it is called with. Without that the `dkappa/dT` term in the Jacobian would be the derivative of something the residual cannot see, and a Rosenbrock method would be worse off with it than without.
 - An opacity supplies its derivative through `dkappa_dT` / `group_opacity_dT`, defaulting to zero. Zero costs iterations, not correctness. Measured on a `PowerLawOpacity`: the exact term cuts mean Newton iterations by 25–40% in the intermediate regime, and by nothing at all deep in equilibrium, where the correction is proportional to `B_g - E_g`.
 - The optically-thin shortcut, the equilibrium-overshoot guard and `apply_energy_floors` are **not** ODE terms and are deliberately outside `coupling_rhs`. The header of `src/coupling.jl` says where each lives.
-- The arrowhead elimination is an **assumption, not a truth**: it is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today, not of radiation. Both `QuokkaCoupling` and `DirectCoupling` take a `linsolve` (`AbstractJacobianSolve`) and **default to `ArrowheadSolve()`** — `O(NG)`, no matrix formed, zero bytes per cell. Defaulting to an assumption is acceptable only because this one is *checked*: `DenseSolve` solves the same system without it, and `test/test_radiation_multigroup.jl` asserts the two agree block by block and end to end. That cross-check is what licenses the default, and it exists because the failure would be quiet — Newton stops on the residual of the true equations, so a damaged matrix cannot converge to a wrong answer, only fail to converge and bump `newton_failures`. Add a term that couples groups directly (Compton redistribution, line overlap) and switch to `DenseSolve`, which needs only to write a block where it writes a diagonal; the arrowhead has nowhere to put the entries at all.
+- The arrowhead elimination is an **assumption, not a truth**: it is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today, not of radiation. `QuokkaCoupling` and `DirectCoupling`'s `NewtonStepper` take a `linsolve` (`AbstractJacobianSolve`) and **default to `ArrowheadSolve()`** — `O(NG)`, no matrix formed, zero bytes per cell. Defaulting to an assumption is acceptable only because this one is *checked*: `DenseSolve` solves the same system without it, and `test/test_radiation_multigroup.jl` asserts the two agree block by block and end to end. That cross-check is what licenses the default, and it exists because the failure would be quiet — Newton stops on the residual of the true equations, so a damaged matrix cannot converge to a wrong answer, only fail to converge and bump `newton_failures`. Add a term that couples groups directly (Compton redistribution, line overlap) and switch to `DenseSolve`, which needs only to write a block where it writes a diagonal; the arrowhead has nowhere to put the entries at all.
 
 ## Source terms
 

@@ -13,9 +13,9 @@
 #
 # This file defines the *interface*: a per-cell `CouplingState` carrying
 # everything a solver needs, and `solve_coupling` dispatching on an
-# `AbstractCoupling`. The solvers live in `coupling_solvers.jl`, and a third one
-# backed by an adaptive ODE integrator lives in the OrdinaryDiffEq extension,
-# because a general ODE stack is not something this package will depend on.
+# `AbstractCoupling`. The two hand-written solvers live in `coupling_solvers.jl`,
+# and the two backed by OrdinaryDiffEq -- `DirectCoupling`'s default backward-Euler
+# stepper and the error-controlled reference solver -- live in `coupling_ode.jl`.
 #
 # Keeping the state explicit costs one small immutable struct per cell and buys
 # the thing this code exists for: a new integrator is a new subtype and a new
@@ -65,9 +65,8 @@ Three are provided:
   - [`QuokkaCoupling`](@ref)  -- backward Euler in Quokka's replaced base
     variables `(E_gas, R_g)`, the default;
   - [`DirectCoupling`](@ref)  -- backward Euler in the natural variables
-    `(E_gas, E_g)`;
-  - `AdaptiveCoupling`        -- an error-controlled ODE solve, available when
-    OrdinaryDiffEq (or DifferentialEquations) is loaded.
+    `(E_gas, E_g)`, by either of two [`AbstractBackwardEuler`](@ref) steppers;
+  - [`AdaptiveCoupling`](@ref) -- an error-controlled ODE solve.
 
 They solve the same equations and should agree to their tolerances; that they
 do is a test, and the reason the interface exists at all.
@@ -275,9 +274,11 @@ Newton iterations by 25 to 40 per cent wherever the coupling is neither
 transparent nor already in equilibrium, and by nothing at all where it is: the
 correction is proportional to `B_g - E_g`.
 
-Shared by every solver: `DirectCoupling`'s Newton matrix is `I - dt * J`
-verbatim, and the adaptive solver hands `J` straight to `ODEFunction` rather
-than paying `1 + NG` extra right-hand side evaluations to difference one.
+Shared by every solver: [`NewtonStepper`](@ref)'s Newton matrix is `I - dt * J`
+verbatim, and the two OrdinaryDiffEq-backed solvers hand `J` straight to
+`ODEFunction` rather than paying `1 + NG` extra right-hand side evaluations to
+difference one -- which they could not do anyway, since an `SVec`'s element type
+is fixed and no dual number can flow through [`coupling_rhs`](@ref).
 """
 @inline function coupling_jacobian(s::CouplingState{NG,M,T}, Egas,
                                    Erad::SVec{NG,T}) where {NG,M,T}

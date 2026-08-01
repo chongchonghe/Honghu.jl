@@ -15,6 +15,7 @@ const P = Hydro3D.Problems
     include("test_hydro.jl")
     include("test_radiation.jl")
     include("test_radiation_multigroup.jl")
+    include("test_coupling_adaptive.jl")
     include("test_io.jl")
     include("test_plotting.jl")
     include("test_extensions.jl")
@@ -22,22 +23,22 @@ const P = Hydro3D.Problems
     include("test_performance.jl")
 end
 
-# `AdaptiveCoupling` -- the third coupling solver, and the three-way agreement
-# between the solvers -- lives in a package extension, so testing it means
-# `using OrdinaryDiffEq`. That package also exports `step!`, which every other
-# test file here calls unqualified, so it cannot be loaded into this session
-# without breaking them. Run it in a subprocess instead, and only when the
-# package is actually installed.
-let ode = Base.PkgId(Base.UUID("1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"), "OrdinaryDiffEq")
-    script = joinpath(@__DIR__, "test_coupling_adaptive.jl")
-    if Base.locate_package(ode) === nothing
-        println("\nOrdinaryDiffEq is not installed; skipping ", basename(script))
-    else
-        println("\nrunning ", basename(script), " in a subprocess ...")
-        run(`$(Base.julia_cmd()) --project=$(Base.active_project()) $script`)
-    end
-end
-
+# `test_coupling_adaptive.jl` used to run in a subprocess, and only when
+# OrdinaryDiffEq happened to be installed. It is an ordinary `include` above now,
+# and both halves of that arrangement are gone on purpose:
+#
+#   * the subprocess was there because `using OrdinaryDiffEq` in this session
+#     would have shadowed `step!`, which every other file here calls unqualified.
+#     `Hydro3D.jl` imports six names rather than the package, so there is nothing
+#     left to collide with.
+#   * the skip was there because the package was a weak dependency. It is a hard
+#     one now, and a test that quietly skips itself when a *required* dependency
+#     is missing is the worst of both worlds -- this checkout had OrdinaryDiffEq
+#     uninstalled and the third coupling solver untested, and the suite reported
+#     1027 passes without a word about it. There is deliberately no conditional
+#     path here to restore: without the dependency the package does not load and
+#     the suite fails at line 2.
+#
 # The verification figures are the visual counterpart of the tests above: same
 # problems, same reference solutions, drawn instead of asserted. They are off by
 # default because they re-run every problem at production resolution (a couple

@@ -1,6 +1,6 @@
 # Hydro3D.jl
 
-A three-dimensional radiation-hydrodynamics code in pure Julia. Solving needs nothing outside the standard library; plotting is a weak dependency that activates only if you load Plots.
+A three-dimensional radiation-hydrodynamics code in pure Julia. Three standard libraries and OrdinaryDiffEq, which the matter-radiation coupling's reference solver and default implicit stepper are built on; plotting is a weak dependency that activates only if you load Plots.
 
 Hydro3D solves the Euler equations coupled to the grey two-moment (M1) radiation transport equations on a uniform Cartesian grid. It is a rewrite of [Hydro.jl](../Hydro.jl) following the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
 
@@ -40,7 +40,9 @@ Radiation subcycles inside each hydro step at the reduced speed of light $\hat{c
 
 ## Install and run
 
-Requires Julia 1.9 or newer. The solver depends only on `Printf` and `Dates`, both Julia standard libraries, so there is nothing to install. `Plots` is optional: load it and the plotting methods appear (see [Plotting](#plotting)); leave it out and the ~100-package plotting stack never enters the picture, which matters on a compute node.
+Requires Julia 1.9 or newer. The dependencies are three standard libraries — `Printf`, `Dates` and `LinearAlgebra` — and `OrdinaryDiffEq`, which two pieces of the matter-radiation coupling are built on: `AdaptiveCoupling`, the error-controlled reference solver, and `ImplicitEulerStepper`, the backward-Euler stepper `DirectCoupling` defaults to. That is a real cost and it is worth stating plainly: `using Hydro3D` takes 1.5 s rather than 0.035 s, and a first install precompiles around 190 packages. It buys a library implementation of the implicit step to check the hand-written ones against, and neither is on the path of the default solver, whose time and allocation are unchanged.
+
+`Plots` is optional: load it and the plotting methods appear (see [Plotting](#plotting)); leave it out and the ~100-package plotting stack never enters the picture, which matters on a compute node.
 
 ```julia
 using Pkg; Pkg.develop(path = "hydro3d.jl")
@@ -268,15 +270,16 @@ Call any of them without Plots loaded and you get an error telling you to load i
 
 ```
 hydro3d.jl/
-  Project.toml   dependencies: Printf, Dates (both stdlibs); Plots is a weak dependency
+  Project.toml   deps: Printf, Dates, LinearAlgebra (stdlibs) and OrdinaryDiffEq;
+                 Plots is a weak dependency
   README.md      this file
   CLAUDE.md      invariants, performance traps, and a per-file guide to src/
   logs.md        development log: what was asked for, what was built, why
-  src/           the package -- 28 files, one concern each
+  src/           the package -- 29 files, one concern each
     riemann/     one Riemann solver per file, mirroring Quokka's headers
     problems/    built-in problems, exact solutions, per-problem metrics
   ext/           plotting methods, loaded only when Plots is present
-  test/          688 tests in eleven files, plus benchmarks.jl
+  test/          1217 tests in thirteen files, plus benchmarks.jl
   docs/          make_figures.jl, make_animations.jl, and the generated figures/
   examples/      sod_1d, kelvin_helmholtz_2d, sedov_3d, compare_schemes,
                  marshak_wave, radiation_shadow, radiating_blast_3d

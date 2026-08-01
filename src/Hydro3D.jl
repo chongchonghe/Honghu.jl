@@ -42,20 +42,35 @@ module Hydro3D
 using Printf
 using Dates          # provenance timestamps only; a stdlib, not a package
 # Two names, not the package: `DenseSolve` factorises the coupling's Newton
-# matrix with them (see `coupling_solvers.jl`). Imported selectively because
-# LinearAlgebra exports `dot` and `norm`, which `staticvec.jl` defines for `SVec`
-# as its own -- a blanket `using` would make those definitions an error.
+# matrix with them (see `newton.jl`). Imported selectively because LinearAlgebra
+# exports `dot` and `norm`, which `staticvec.jl` defines for `SVec` as its own --
+# a blanket `using` would make those definitions an error.
 using LinearAlgebra: lu!, ldiv!
+
+# Six names, not the package, and for the same reason: OrdinaryDiffEq exports
+# `step!`, which this package also exports, so a blanket `using` would leave that
+# one name ambiguous for anyone with both in scope -- `step!(sim)` would have to
+# be spelled `Hydro3D.step!`. Naming what is used keeps `step!` this package's.
+#
+# The two coupling solvers in `coupling_ode.jl` need all six: `ImplicitEuler` for
+# `DirectCoupling`'s default stepper, `Rosenbrock23` for `AdaptiveCoupling`'s
+# default algorithm, and the rest to state the problem and read the answer.
+# `ImplicitEuler` and `NLNewton` come from sub-packages because OrdinaryDiffEq 7
+# is a slim meta-package that exports neither; see Project.toml.
+using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23
+using OrdinaryDiffEqSDIRK: ImplicitEuler
+using OrdinaryDiffEqNonlinearSolve: NLNewton
 
 # --- core types and kernels --------------------------------------------------
 include("staticvec.jl")
+include("newton.jl")     # Newton on a bordered system; knows no physics
 include("constants.jl")
 include("planck.jl")     # RadiationGroups, needed by the multigroup opacity below
 include("eos.jl")
 include("opacity.jl")
 include("coupling.jl")            # per-cell matter-radiation coupling interface
 include("coupling_solvers.jl")    # ... and the two in-tree solvers
-include("coupling_adaptive.jl")   # ... and the reference solver's stub
+include("coupling_ode.jl")        # ... and the two backed by OrdinaryDiffEq
 include("grid.jl")
 include("variables.jl")
 include("boundary.jl")
@@ -93,6 +108,7 @@ export LevermoreClosure, EddingtonClosure
 export RadiationGroups, ngroups, planck_integral, planck_fractions
 export AbstractCoupling, QuokkaCoupling, DirectCoupling, AdaptiveCoupling
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
+export AbstractBackwardEuler, NewtonStepper, ImplicitEulerStepper
 
 # numerics
 export PCM, PLM, PPM

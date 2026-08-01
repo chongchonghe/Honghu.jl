@@ -3,41 +3,52 @@ uuid = "dadb9192-06c8-4952-8646-5842d530648b"
 authors = ["ChongChong He <che1234@umd.edu> and contributors"]
 version = "0.1.0"
 
+# Three stdlibs and one package tree.
+#
+# OrdinaryDiffEq supplies two of the three matter-radiation coupling solvers:
+# `AdaptiveCoupling`, the error-controlled reference, and `ImplicitEulerStepper`,
+# the backward-Euler stepper `DirectCoupling` defaults to. Version 7 of it is a
+# deliberately slim meta-package -- it exports Tsit5, the Verner methods,
+# Rosenbrock23, Rodas5P and FBDF, and nothing else -- so the two pieces this code
+# names explicitly come from the sub-packages that define them:
+# `ImplicitEuler` from OrdinaryDiffEqSDIRK and `NLNewton` from
+# OrdinaryDiffEqNonlinearSolve. Both are already in the dependency closure of
+# OrdinaryDiffEq itself, so they cost nothing beyond the line in this file:
+# adding them left the manifest unchanged and the load time unmoved.
+#
+# What the tree does cost, measured on this machine: `using Hydro3D` goes from
+# 0.035 s to 1.53 s, and a fresh install has ~190 packages to precompile instead
+# of none. That is the price of the decision, paid by everyone on every run.
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
+OrdinaryDiffEqNonlinearSolve = "127b3ac7-2247-4354-8eb6-78cf4e7c58e8"
+OrdinaryDiffEqSDIRK = "2d112036-d095-4a1e-ab9a-08536f3ecdbf"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
-# Two weak dependencies, both for things that are not solving.
-#
-# Plots: `plotstate`, `plotpanels`, `animate_run` and `plotcompare` only acquire
-# methods once the user has loaded Plots. Solving stays free of the ~100-package
-# plotting stack, which matters on a compute node.
-#
-# OrdinaryDiffEq: `AdaptiveCoupling` is an error-controlled reference solver for
-# the matter-radiation coupling, used to check the two in-tree backward-Euler
-# solvers. A general ODE stack is a fine thing to *verify* against and a poor
-# thing to require, so it stays behind the extension boundary.
+# Plotting is not solving: `plotstate`, `plotpanels`, `animate_run` and
+# `plotcompare` only acquire methods once the user has loaded Plots, so a run on
+# a compute node never pays for the ~100-package plotting stack.
 [weakdeps]
-OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 
 [extensions]
-Hydro3DOrdinaryDiffEqExt = "OrdinaryDiffEq"
 Hydro3DPlotsExt = "Plots"
 
 [compat]
-# 7 is what the extension is tested against. It supplies its own `jac` and
-# `tgrad` through `ODEFunction`, so it never asks the integrator to differentiate
+# 7 is what this is tested against. The coupling supplies its own `jac` and
+# `tgrad` through `ODEFunction`, so it never asks an integrator to differentiate
 # anything and never touches the `autodiff` specifier that changed shape in 7.
 OrdinaryDiffEq = "7"
+OrdinaryDiffEqNonlinearSolve = "2"
+OrdinaryDiffEqSDIRK = "2"
 Plots = "1"
 julia = "1.9"
 
 [extras]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
-OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "BenchmarkTools", "OrdinaryDiffEq"]
+test = ["Test", "BenchmarkTools"]
