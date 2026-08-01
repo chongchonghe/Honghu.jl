@@ -26,8 +26,9 @@ Hydro3DOrdinaryDiffEqExt = "OrdinaryDiffEq"
 Hydro3DPlotsExt = "Plots"
 
 [compat]
-# 7 and not 6: the extension asks its integrator for a finite-difference
-# Jacobian, and how you say that changed to an ADTypes specifier in 7.
+# 7 is what the extension is tested against. It supplies its own `jac` and
+# `tgrad` through `ODEFunction`, so it never asks the integrator to differentiate
+# anything and never touches the `autodiff` specifier that changed shape in 7.
 OrdinaryDiffEq = "7"
 Plots = "1"
 julia = "1.9"

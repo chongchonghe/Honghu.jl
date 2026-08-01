@@ -81,7 +81,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `staticvec.jl` | `SVec{N,T}`, a stack-allocated fixed-size vector. Deliberately *not* an `AbstractArray`, so a stray broadcast cannot allocate. |
 | `constants.jl` | `CGS` submodule. The code itself is unit-agnostic. |
 | `eos.jl` | `AbstractEOS`, `IdealGas`. Energies are volumetric; `cv` is specific. |
-| `opacity.jl` | `AbstractOpacity` and three concrete laws. Planck / energy / flux means are distinguished. |
+| `opacity.jl` | `AbstractOpacity` and four concrete laws. Planck / energy / flux means are distinguished; `dkappa_dT` is the optional temperature derivative the coupling's exact Jacobian needs. |
 | `grid.jl` | `CartesianGrid`, sweep index ranges, and the threading helpers `threaded_jk` / `reduce_max_jk`. |
 | `variables.jl` | State-vector layout and pointwise conversions. |
 | `boundary.jl` | `BoundaryCondition` subtypes and ghost filling. |
@@ -147,11 +147,21 @@ Structure, and why each piece is there:
 
 - The **outer loop** exists only for the lagged `v·F` work term; with `beta_order = 0` or hydro disabled it runs once.
 - `tau = dt * rho * kappa_P * chat` is the optical depth across `chat*dt`. When `tau` is negligible the residual can never be balanced, so there is an explicit optically-thin shortcut. Without it the iteration burns all 100 steps in transparent cells.
-- The Jacobian holds `kappa_P/kappa_E` fixed. That affects the convergence rate only, not the converged answer.
+- The Jacobian of *this* driver holds `kappa_P/kappa_E` fixed — it drops `d(kappa_P/kappa_E)/dT`. The residual does not: the opacity is re-evaluated at the current iterate's temperature every Newton step, as in Quokka. Dropping the derivative affects the convergence rate only, not the converged answer, because Newton still stops on the residual of the true equations.
 - `J11 = -big` (a large finite number) rather than `-Inf` when `tau <= 0`: `Inf` arithmetic in the 2×2 solve produces `NaN`.
 - Floors are applied at the end by moving energy between `Eint` and `Erad`, so total energy is still conserved.
 
 Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`, which takes one step a hundred million times longer than the coupling time, and `radhydro_shock`, the Lowrie & Edwards Mach 3 radiative shock. The second is the sensitive one -- its Zel'dovich spike only appears if the velocity-dependent coupling terms, the implicit solve and the shock capturing are all correct together, so it is the test that will catch a subtle regression here.
+
+### The multigroup coupling solvers
+
+`NG >= 2` does not use the driver above. It packs each cell into a `CouplingState` and hands it to an `AbstractCoupling` (`src/coupling.jl`, `src/coupling_solvers.jl`, and the `AdaptiveCoupling` extension). Those solvers **do** carry the `dkappa/dT` term, so their Jacobians are exact:
+
+- `coupling_rhs` and `coupling_jacobian` are the single source of truth. `DirectCoupling`'s residual is `u - u0 - dt f(u)` and its Newton matrix `I - dt J`, generated, not hand-derived; `AdaptiveCoupling` hands `J` to `ODEFunction`.
+- `QuokkaCoupling` is a separate formulation and stays hand-derived. `R_g` is the integrated transfer, not a state variable, so there is no `dR_g/dt` to differentiate — it is a different discretisation, not a change of variables. It shares `coupling_rhs` (its opening guess is one explicit step of it) and nothing else.
+- The **opacity law travels on the state**, not a frozen pair of numbers, so `coupling_rhs` evaluates `kappa(T)` at whatever temperature it is called with. Without that the `dkappa/dT` term in the Jacobian would be the derivative of something the residual cannot see, and a Rosenbrock method would be worse off with it than without.
+- An opacity supplies its derivative through `dkappa_dT` / `group_opacity_dT`, defaulting to zero. Zero costs iterations, not correctness. Measured on a `PowerLawOpacity`: the exact term cuts mean Newton iterations by 25–40% in the intermediate regime, and by nothing at all deep in equilibrium, where the correction is proportional to `B_g - E_g`.
+- The optically-thin shortcut, the equilibrium-overshoot guard and `apply_energy_floors` are **not** ODE terms and are deliberately outside `coupling_rhs`. The header of `src/coupling.jl` says where each lives.
 
 ## Source terms
 

@@ -39,7 +39,9 @@ Use it to verify, not to run.
   - `alg`    : the integrator, or `nothing` for the default (`Rosenbrock23`).
     Any stiff `OrdinaryDiffEq` algorithm works -- `TRBDF2()`, `KenCarp4()`,
     `Rodas5P()`. An explicit method will stall: `chat rho kappa dt` reaches
-    `1e8` in an optically thick cell.
+    `1e8` in an optically thick cell. Whichever you choose, it is handed the
+    coupling's analytic Jacobian and an exact `df/dt`, so no algorithm here ever
+    differentiates the right-hand side numerically.
 
 **Requires `using OrdinaryDiffEq`** (or `using DifferentialEquations`, which
 loads it). OrdinaryDiffEq is a weak dependency, so nothing is downloaded and

@@ -15,7 +15,8 @@
 #     multigroup solver can get wrong while every total still looks right.
 
 using Hydro3D: gbase, multigroup_source_step!, group_opacities, group_centers,
-               enforce_state!, radiation_source_step!, IMX, IEGAS, IFRZ
+               enforce_state!, radiation_source_step!, IMX, IEGAS, IFRZ,
+               CouplingState, coupling_rhs, coupling_jacobian, solve_coupling, sumvec
 
 "Group energies of a Planck spectrum at `Trad`, written into every interior cell."
 function set_planck!(sim, Trad)
@@ -71,12 +72,12 @@ end
 @testset "one group reproduces the grey driver" begin
     # The two drivers solve the same equations by different routes: the grey one
     # with the 2x2 Newton written out inline, the multigroup one through
-    # `solve_coupling`. They are not bit-for-bit identical, and cannot be: the
-    # grey iteration opens with the linearised solution as its first guess while
-    # `QuokkaCoupling` opens at `R = 0`, so the two walk to the same root along
-    # different paths and stop on different sides of the last ulp. They must
-    # agree to round-off, which is far tighter than the 1e-9 they are asked to
-    # converge to, and that is the assertion worth making.
+    # `solve_coupling`. They are not bit-for-bit identical, and cannot be: they
+    # open from the same linearised transfer but form and test their residuals
+    # in a different order, so the two walk to the same root along paths that
+    # stop on different sides of the last ulp. They must agree to round-off,
+    # which is far tighter than the 1e-9 they are asked to converge to, and that
+    # is the assertion worth making.
     sim, _ = P.marshak_wave(nx=32)
     for _ in 1:5
         step!(sim)                      # a state with real structure in it
@@ -96,16 +97,41 @@ end
         @test Rm != R0 || kappa == 0.0    # something actually happened
     end
 
+    # ... and with an opacity that depends on temperature, which is the case that
+    # separates the two drivers. Both re-evaluate `kappa` at the current iterate,
+    # so both converge to the root of the same residual. When the multigroup path
+    # froze the opacity for the whole solve instead, it converged to a *different*
+    # root and the two drivers disagreed by 1e-4 here -- a discrepancy no constant
+    # opacity can show, which is why this loop exists alongside the one above.
+    #
+    # They agree to their convergence tolerance rather than to round-off, because
+    # the two Jacobians differ: the grey driver drops `d(kappa_P/kappa_E)/dT` and
+    # the multigroup solvers keep it, so they take different paths to the same
+    # answer and stop at different points inside the tolerance ball.
+    for n in (-3.0, 2.0), kappa0 in (1e-1, 1e3)
+        rad = RadiationPhysics(c=1.0, chat=1.0, a_rad=1.0, beta_order=0,
+                               opacity=PowerLawOpacity(; kappa0, rho0=1.0, T0=1.0, n))
+        U, R = copy(U0), copy(R0)
+        radiation_source_step!(U, R, sim.eos, rad, sim.grid, 1e-3, nothing, 0.0,
+                               sim.floors; update_momentum=false)
+        Um, Rm = copy(U0), copy(R0)
+        multigroup_source_step!(Um, Rm, sim.eos, rad, sim.grid, 1e-3, nothing, 0.0,
+                                sim.floors; update_momentum=false)
+        @test isapprox(Um, U; rtol=1e-8)
+        @test isapprox(Rm, R; rtol=1e-8)
+        @test Rm != R0
+    end
+
     # With the velocity-dependent terms on there is a lagged outer iteration on
     # the `v.F` work term as well, and the momentum kick and the flux damping to
     # get right; the two drivers must still track each other. The velocity
     # changes sign across the box so both signs of the work term are exercised.
     #
-    # `failures == 0` is asserted rather than assumed: `QuokkaCoupling` opens its
-    # iteration at `R = 0`, so a work term more negative than the cell's thermal
-    # emission makes its first implied group energy negative and the iteration
-    # never recovers (see the note at the end of this file). Every regime this
-    # comparison covers is one where it does converge.
+    # `failures == 0` is asserted rather than assumed: a work term more negative
+    # than the cell's thermal emission used to make `QuokkaCoupling`'s first
+    # implied group energy negative, and the iteration never recovered (see the
+    # note at the end of this file). Every regime this comparison covers is one
+    # where it does converge.
     c, chat = 100.0, 10.0
     for kappa in (1e-2, 1.0, 1e2, 1e4)
         rad = RadiationPhysics(; c, chat, a_rad=0.2, opacity=ConstantOpacity(kappa),
@@ -144,6 +170,102 @@ end
     default = grey_run(Hydro3D.GREY)
     @test grey_run(RadiationGroups([0.0, Inf])) == default
     @test grey_run(RadiationGroups([1e-4, 1e4])) == default
+end
+
+"One cell's `CouplingState`, out of equilibrium, in code units."
+function cell_state(; NG=4, opacity, Tgas=1.3, Trad=0.5, rho=1.0, cv=1.0, dt=1e-3,
+                    c=1.0, chat=1.0, arad=1.0, kB=1.0)
+    grp = NG == 1 ? Hydro3D.GREY : RadiationGroups(0.1, 20.0, NG)
+    Erad = (arad * Trad^4) * planck_fractions(grp, Trad, kB)
+    z = zero(SVec{NG,Float64})
+    CouplingState{NG,NG + 1,Float64,typeof(opacity)}(cv * Tgas, Erad, z, z, rho, cv,
+                                                     opacity, dt, c, chat, arad, kB, grp,
+                                                     1e-10, 1e-30)
+end
+
+@testset "the coupling Jacobian is the derivative of the coupling right-hand side" begin
+    # The test that pins the refactor. `coupling_rhs` and `coupling_jacobian` are
+    # the single source of truth for the coupling physics: `DirectCoupling` builds
+    # its Newton matrix as `I - dt J`, and the adaptive solver hands `J` to its
+    # integrator. If `J` ever stops being the derivative of the right-hand side,
+    # both are quietly solving something other than what they report.
+    #
+    # It is written with a *temperature-dependent* opacity on purpose. The
+    # `dkappa/dT` terms are the whole content of "exact" here, and with a constant
+    # opacity they are all zero and the test would pass without ever seeing them.
+    kap(rho, T) = 1e2 * T^2
+    dkap(rho, T) = 2e2 * T
+    law = UserOpacity(planck=kap, dplanck_dT=dkap)
+
+    "The (1+NG)x(1+NG) Jacobian as a dense matrix."
+    function dense(s, Egas, Erad, NG)
+        j = coupling_jacobian(s, Egas, Erad)
+        J = zeros(NG + 1, NG + 1)
+        J[1, 1] = j.gas_gas
+        for g in 1:NG
+            J[1, 1+g] = j.gas_rad[g]
+            J[1+g, 1] = j.rad_gas[g]
+            J[1+g, 1+g] = j.rad_rad[g]
+        end
+        J
+    end
+
+    # Central differences of `coupling_rhs`. The step is scaled by the largest
+    # component rather than by each one: the Wien-tail groups hold 1e-30 of the
+    # spectrum, and a step proportional to *that* differences a quantity of order
+    # one against itself and measures nothing but round-off.
+    function fd(s, Egas, Erad, NG; h_rel=1e-6)
+        u = [Egas; [Erad[g] for g in 1:NG]]
+        rhs(v) = begin
+            E = SVec{NG,Float64}(ntuple(g -> v[1+g], NG)...)
+            a, b = coupling_rhs(s, v[1], E)
+            [a; [b[g] for g in 1:NG]]
+        end
+        J = zeros(NG + 1, NG + 1)
+        step = h_rel * maximum(abs, u)
+        for k in 1:(NG+1)
+            up = copy(u); up[k] += step
+            um = copy(u); um[k] -= step
+            J[:, k] = (rhs(up) - rhs(um)) / (2step)
+        end
+        J
+    end
+
+    for NG in (1, 4)
+        s = cell_state(; NG, opacity=law)
+        # away from the state's own temperature, so a Jacobian that silently
+        # froze the opacity at `s.Egas` would be caught
+        Egas = 1.4 * s.Egas
+        Erad = 1.3 * s.Erad
+        A = dense(s, Egas, Erad, NG)
+        B = fd(s, Egas, Erad, NG)
+        @test maximum(abs, A - B) / maximum(abs, B) < 1e-6
+
+        # ... and the `dkappa/dT` terms are actually present: an opacity with the
+        # same law but no declared derivative gives a *different* Jacobian.
+        blind = cell_state(; NG, opacity=UserOpacity(kap))
+        C = dense(blind, Egas, Erad, NG)
+        @test maximum(abs, A - C) / maximum(abs, B) > 1e-3
+        @test maximum(abs, C - B) / maximum(abs, B) > 1e-3
+    end
+end
+
+@testset "the exact Jacobian changes the rate, not the root" begin
+    # Newton stops on the residual of the true equations however good the matrix
+    # that got it there, so declaring `dkappa/dT` must not move the answer. What
+    # it moves is the iteration count, and by enough to be worth the interface.
+    kap(rho, T) = 1e2 * T^2
+    law = UserOpacity(planck=kap, dplanck_dT=(rho, T) -> 2e2 * T)
+    blind = UserOpacity(kap)
+
+    for method in (QuokkaCoupling(), DirectCoupling()), NG in (1, 4)
+        exact = solve_coupling(method, cell_state(; NG, opacity=law))
+        zeroed = solve_coupling(method, cell_state(; NG, opacity=blind))
+        @test exact.converged && zeroed.converged
+        @test isapprox(exact.Egas, zeroed.Egas; rtol=1e-8)
+        @test isapprox(sumvec(exact.Erad), sumvec(zeroed.Erad); rtol=1e-8)
+        @test exact.iterations < zeroed.iterations
+    end
 end
 
 @testset "the two couplings agree" begin

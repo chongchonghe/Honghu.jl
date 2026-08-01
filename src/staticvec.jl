@@ -41,6 +41,9 @@ end
 @inline Base.:+(a::SVec, s::Number) = SVec(map(x -> x + s, a.data))
 @inline Base.:+(s::Number, a::SVec) = a + s
 @inline Base.:-(a::SVec, s::Number) = SVec(map(x -> x - s, a.data))
+# ... and the other way round, so that `I - dt * J` can be written as it reads
+# when `J` is the diagonal block of a Jacobian.
+@inline Base.:-(s::Number, a::SVec) = SVec(map(x -> s - x, a.data))
 
 # Elementwise products and quotients between two group vectors. Multigroup
 # coupling is full of them -- `kappaP .* fourPiB`, `Erad ./ kappaPoverE` -- and

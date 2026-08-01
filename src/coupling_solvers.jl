@@ -1,6 +1,23 @@
-# The two in-tree coupling solvers. Both take one backward-Euler step; they
-# differ only in what they call the unknowns, and that difference is the whole
-# point of keeping them both.
+# The two in-tree coupling solvers. Both take one backward-Euler step of the ODE
+# defined by `coupling_rhs`; they differ in what they call the second unknown,
+# and that difference is the whole point of keeping them both.
+#
+# `DirectCoupling` is generated: its residual is `u - u0 - dt f(u)` and its
+# Jacobian `I - dt J`, both straight from `coupling_rhs` / `coupling_jacobian`,
+# so it has no physics of its own to keep in step.
+#
+# `QuokkaCoupling` is a separate formulation, kept separate on purpose. It takes
+# the *integrated transfer* `R_g` as its unknown, which does not exist until a
+# step length has been chosen, so its Jacobian cannot be generated from a
+# Jacobian of the right-hand side; see the derivation in the middle of its Newton
+# loop. It shares the right-hand side (its opening guess is one explicit step of
+# it) and nothing else.
+#
+# `QuokkaCoupling` also carries the two globalisations that are properties of the
+# *iteration* and not of the equations -- the optically-thin shortcut and the
+# equilibrium-overshoot guard -- and both solvers finish with
+# `apply_energy_floors`. The note at the top of `coupling.jl` says why those
+# three live here rather than in the right-hand side.
 
 """
     QuokkaCoupling(; tolerance = 1e-9, max_iterations = 100)
@@ -19,6 +36,10 @@ time a hundred million times shorter than `dt`.
 The Jacobian is an arrowhead -- diagonal in the groups, plus one dense row and
 one dense column for the gas -- so it inverts in `O(NG)` by elimination rather
 than `O(NG^3)`, with no matrix ever formed. See [`solve_arrowhead`](@ref).
+
+It is also hand-derived rather than taken from [`coupling_jacobian`](@ref), and
+has to be: `R_g` is not a state variable, so there is no `dR_g/dt` to
+differentiate. The derivation is written out in the Newton loop.
 """
 struct QuokkaCoupling{T<:AbstractFloat} <: AbstractCoupling
     tolerance::T
@@ -33,6 +54,11 @@ QuokkaCoupling(; tolerance=1e-9, max_iterations::Integer=100) =
 
 Backward Euler in the natural variables `(E_gas, E_g)`, with the same arrowhead
 Jacobian structure and the same Newton iteration.
+
+Nothing about it is hand-derived: the residual is `u - u0 - dt f(u)` with `f` =
+[`coupling_rhs`](@ref), and the Newton matrix is `I - dt * J` with `J` =
+[`coupling_jacobian`](@ref). The arrowhead survives because `J`'s group block is
+diagonal.
 
 This is the textbook formulation, and it exists here to be compared against
 [`QuokkaCoupling`](@ref): the two solve the same equations to the same
@@ -108,30 +134,36 @@ end
 @inline _ratio(a::SVec{NG,T}, b::SVec{NG,T}, ::Val{NG}) where {NG,T} =
     SVec{NG,T}(ntuple(g -> iszero(b[g]) ? one(T) : a[g] / b[g], Val(NG))...)
 
+# The opacity's own temperature dependence, as it enters QuokkaCoupling's
+# `dE_g/dE_gas`: `(dkappaP B - dkappaE E) / kappaE`, and zero for a group with no
+# energy-mean opacity, which cannot absorb and so has no such term.
+@inline _dkappa_term(dkP::SVec{NG,T}, dkE, kE, B, Erad, ::Val{NG}) where {NG,T} =
+    SVec{NG,T}(ntuple(g -> iszero(kE[g]) ? zero(T) :
+                           (dkP[g] * B[g] - dkE[g] * Erad[g]) / kE[g], Val(NG))...)
+
 # --- Quokka's replaced base variables ----------------------------------------
 
 function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}
     cscale = s.c / s.chat
-    # tau_g is the optical depth across chat*dt: the number of absorption times
-    # the step spans. It is the scaling that makes this formulation work, and it
-    # is held at its old-state value throughout, as in Quokka.
-    tau = (s.dt * s.chat * s.rho) * s.kappaP
-    kPoverE = _ratio(s.kappaP, s.kappaE, Val(NG))
+    kdt = s.dt * s.chat * s.rho
 
     Egas = s.Egas
     Erad = s.Erad
     Etot0 = s.Egas + cscale * (sumvec(s.Erad) + sumvec(s.src))
 
     # Open from the *linearised* transfer at the old state, not from R = 0.
-    # Starting at zero makes the first implied group energy
+    # `R_g = dt rate_g + work_g` evaluated at the old state is exactly the shared
+    # right-hand side taken explicitly -- one forward Euler transfer -- so this
+    # opening guess is the physics of `coupling_rhs` and not a second copy of it.
+    #
+    # Starting at zero instead makes the first implied group energy
     # kappaPoverE (B + work/tau), which goes negative whenever the lagged v.F
     # work term is negative and outweighs the cell's thermal emission. The
     # equilibrium guard below then snaps the gas to its floor and the iteration
     # never recovers, emptying the cell. The grey driver in `source_terms.jl`
     # has always opened this way; the multigroup path had not, and every
     # negative-velocity cell of a beta_order = 1 run drained to the floor.
-    Rvec = mul(tau, thermal_emission(s, gas_temperature_of(s, Egas)) -
-                    divide(s.Erad, kPoverE)) + s.work
+    Rvec = s.dt * last(coupling_rhs(s, Egas, s.Erad)) + s.work
 
     n = 0
     converged = false
@@ -140,6 +172,17 @@ function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M
         Tgas = gas_temperature_of(s, Egas)
         fourPiBoverC = thermal_emission(s, Tgas)
         dB_dT = thermal_emission_dT(s, Tgas)
+        kappaP, kappaE = coupling_opacity(s, Tgas)
+        dkappaP, dkappaE = coupling_opacity_dT(s, Tgas)
+
+        # tau_g is the optical depth across chat*dt: the number of absorption
+        # times the step spans, and the scaling that makes this formulation
+        # work. Recomputed here rather than frozen at the old temperature,
+        # because the opacity is a function of the iterate -- Quokka's
+        # `tau = dt * rho * kappaP * chat` sits inside its loop for the same
+        # reason.
+        tau = kdt * kappaP
+        kPoverE = _ratio(kappaP, kappaE, Val(NG))
 
         # Given R, the group energies follow in closed form -- this is the
         # inversion that the replacement buys, and why no group energy ever
@@ -169,9 +212,33 @@ function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M
             break
         end
 
+        # --- the hand-derived Jacobian, and why it has to be hand-derived -----
+        #
+        # `R_g` is not a state variable, so there is no `dR_g/dt` and
+        # `coupling_jacobian` cannot produce these entries. `R_g` is the
+        # *integrated* transfer over the step and carries `dt` inside `tau`;
+        # this is a different discretisation of the same ODE, not a change of
+        # variables applied to `DirectCoupling`'s. (A change of variables would
+        # give an invertible map between unknowns at fixed `dt`; here the second
+        # unknown does not exist until a step length is chosen.)
+        #
+        # Chain rule through the closed-form `Erad(R)`:
+        #
+        #   dF_g/dR_g = (dF_g/dE_g)(dE_g/dR_g) + explicit
+        #             = 1 * (-kappaPoverE/tau)  + (-1)
+        #   dF_g/dE_gas = dE_g/dE_gas
+        #             = [dkappaP_g B_g + kappaP_g dB_g/dT - dkappaE_g E_g]
+        #               / (kappaE_g cv)
+        #
+        # The second is the shared `rad_gas` block divided by `chat rho kappaE`,
+        # which is what differentiating `R_g = dt rate_g + work_g` at fixed `R`
+        # gives; written out here because the division is singular at
+        # `kappaE = 0` and the branch belongs with the rest of this formulation.
         J00 = one(T)
         J0g = cscale * one_svec(Val(NG), T)
-        Jg0 = mul(kPoverE, dB_dT) / s.cv
+        Jg0 = (mul(kPoverE, dB_dT) +
+               _dkappa_term(dkappaP, dkappaE, kappaE, fourPiBoverC, Erad,
+                            Val(NG))) / s.cv
         # tau <= 0 means the group cannot exchange: a large finite number rather
         # than -Inf, because Inf arithmetic in the elimination makes NaN.
         Jgg = _jgg_quokka(tau, kPoverE, -one(T) / eps(T), Val(NG))
@@ -217,7 +284,7 @@ function solve_coupling(m::DirectCoupling, s::CouplingState{NG,M,T}) where {NG,M
     # deficiency of this implementation; it is the conditioning that Quokka's
     # replaced base variables are designed to avoid, and stating it here is what
     # makes the comparison against `QuokkaCoupling` an honest one.
-    tau_max = maxabs(kdt * s.kappaP)
+    tau_max = maxabs(kdt * first(coupling_opacity(s, gas_temperature_of(s, s.Egas))))
     tol = max(m.tolerance, 4 * eps(T) * max(tau_max, one(T)))
 
     Egas = s.Egas
@@ -227,14 +294,14 @@ function solve_coupling(m::DirectCoupling, s::CouplingState{NG,M,T}) where {NG,M
     converged = false
     while n < m.max_iterations
         n += 1
-        Tgas = gas_temperature_of(s, Egas)
-        fourPiBoverC = thermal_emission(s, Tgas)
-        dB_dT = thermal_emission_dT(s, Tgas)
 
-        # Backward Euler residuals in (Egas, Erad) directly.
-        exch = kdt * (mul(s.kappaP, fourPiBoverC) - mul(s.kappaE, Erad))
-        F0 = Egas - s.Egas + cscale * (sumvec(exch) + sumvec(s.work))
-        Fg = Erad - s.Erad - s.src - (exch + s.work)
+        # Backward Euler, written out as `u - u0 - dt f(u)` and nothing else: the
+        # constant increments `src` and `work` are the whole-step contributions
+        # of terms the right-hand side carries as `(src + work)/dt`, so they
+        # integrate to themselves and appear undivided here.
+        fgas, frad = coupling_rhs(s, Egas, Erad)
+        F0 = (Egas - s.Egas) - s.dt * fgas + cscale * sumvec(s.work)
+        Fg = (Erad - s.Erad) - s.dt * frad - s.src - s.work
 
         scale = max(abs(Etot0), eps(T))
         if max(abs(F0), maxabs(Fg)) <= tol * scale
@@ -242,11 +309,15 @@ function solve_coupling(m::DirectCoupling, s::CouplingState{NG,M,T}) where {NG,M
             break
         end
 
-        dexch_dEgas = (kdt / s.cv) * mul(s.kappaP, dB_dT)
-        J00 = one(T) + cscale * sumvec(dexch_dEgas)
-        J0g = -cscale * kdt * s.kappaE
-        Jg0 = -dexch_dEgas
-        Jgg = one(T) + kdt * s.kappaE
+        # ... and its Jacobian is `I - dt J` with nothing hand-derived, which is
+        # the point: this solver has no formulation of its own to keep in step
+        # with the physics. The arrowhead survives because `J`'s group block is
+        # diagonal (see `CouplingJacobian`).
+        J = coupling_jacobian(s, Egas, Erad)
+        J00 = one(T) - s.dt * J.gas_gas
+        J0g = -s.dt * J.gas_rad
+        Jg0 = -s.dt * J.rad_gas
+        Jgg = one(T) - s.dt * J.rad_rad
 
         dEgas, dErad = solve_arrowhead(J00, J0g, Jg0, Jgg, -F0, -Fg)
         Egas = max(Egas + dEgas, s.cv * s.Tfloor)

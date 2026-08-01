@@ -17,8 +17,38 @@ Supertype for opacity laws. A concrete subtype must implement
 
 each returning a *specific* opacity (cm² g⁻¹ in CGS), so that the absorption
 coefficient is `rho * kappa`.
+
+Optionally it may also implement [`dkappa_dT`](@ref)`(op, rho, T)`, which makes
+the matter-radiation coupling's Newton Jacobian exact. The default is zero,
+which is exact for an opacity that does not depend on temperature and merely
+slower for one that does.
 """
 abstract type AbstractOpacity end
+
+"""
+    dkappa_dT(op, rho, T) -> (dkappaP_dT, dkappaE_dT)
+
+Temperature derivatives of the Planck- and energy-mean opacities.
+
+The coupling solves `d E_g/dt = chat rho (kappa_P,g B_g(T) - kappa_E,g E_g)` by
+Newton's method, so the exact Jacobian carries `dkappa_P/dT * B_g` and
+`-dkappa_E/dT * E_g` alongside `kappa_P dB_g/dT`. Supplying these derivatives is
+what makes it exact.
+
+**The default is zero.** A zero derivative does not change where the iteration
+converges -- the residual it is driven to zero is still the residual of the true
+equations -- only how fast it gets there. So it is safe everywhere, and exact
+wherever `kappa` is independent of `T`.
+"""
+@inline function dkappa_dT(::AbstractOpacity, rho, Tgas)
+    z = zero(float(typeof(Tgas)))
+    return (z, z)
+end
+
+# A user-supplied derivative that was not supplied. Dispatch rather than an
+# `=== nothing` test, so the zero is a compile-time constant.
+@inline _dkappa_call(::Nothing, rho, Tgas) = zero(float(typeof(Tgas)))
+@inline _dkappa_call(f, rho, Tgas) = f(rho, Tgas)
 
 """
     ConstantOpacity(kappa)
@@ -40,6 +70,8 @@ end
 @inline planck_opacity(op::ConstantOpacity, rho, T) = op.planck
 @inline energy_mean_opacity(op::ConstantOpacity, rho, T) = op.energy
 @inline flux_mean_opacity(op::ConstantOpacity, rho, T) = op.flux
+# `dkappa_dT` falls through to the `AbstractOpacity` default, which for a
+# constant is not a fallback but the exact answer.
 
 """
     PowerLawOpacity(; kappa0, rho0 = 1.0, T0 = 1.0, m = 0.0, n = 0.0)
@@ -68,24 +100,47 @@ end
 @inline energy_mean_opacity(op::PowerLawOpacity, rho, T) = _powerlaw(op, rho, T)
 @inline flux_mean_opacity(op::PowerLawOpacity, rho, T) = _powerlaw(op, rho, T)
 
+# A power law differentiates to itself: `dkappa/dT = n kappa / T`, exactly, and
+# with no second evaluation of the law. At `T <= 0` the law itself is clamped,
+# so its derivative there is zero rather than the `n kappa / 0` of the formula.
+@inline function dkappa_dT(op::PowerLawOpacity, rho, Tgas)
+    k = _powerlaw(op, rho, Tgas)
+    d = Tgas > 0 ? op.n * k / Tgas : zero(k)
+    return (d, d)
+end
+
 """
     UserOpacity(f)
-    UserOpacity(; planck, energy = planck, flux = planck)
+    UserOpacity(; planck, energy = planck, flux = planck,
+                  dplanck_dT = nothing, denergy_dT = dplanck_dT)
 
 Opacity defined by user callables `f(rho, T) -> kappa`.
+
+`dplanck_dT` and `denergy_dT` are optional callables of the same signature
+giving `dkappa/dT`. Supplying them makes the coupling's Newton Jacobian exact;
+leaving them out substitutes zero, which costs iterations but not the root (see
+[`dkappa_dT`](@ref)).
 """
-struct UserOpacity{P,E,F} <: AbstractOpacity
+struct UserOpacity{P,E,F,DP,DE} <: AbstractOpacity
     planck::P
     energy::E
     flux::F
+    dplanck_dT::DP
+    denergy_dT::DE
 end
 
 UserOpacity(f) = UserOpacity(f, f, f)
-UserOpacity(; planck, energy=planck, flux=planck) = UserOpacity(planck, energy, flux)
+UserOpacity(planck, energy, flux) = UserOpacity(planck, energy, flux, nothing, nothing)
+UserOpacity(; planck, energy=planck, flux=planck,
+            dplanck_dT=nothing, denergy_dT=dplanck_dT) =
+    UserOpacity(planck, energy, flux, dplanck_dT, denergy_dT)
 
 @inline planck_opacity(op::UserOpacity, rho, T) = op.planck(rho, T)
 @inline energy_mean_opacity(op::UserOpacity, rho, T) = op.energy(rho, T)
 @inline flux_mean_opacity(op::UserOpacity, rho, T) = op.flux(rho, T)
+
+@inline dkappa_dT(op::UserOpacity, rho, Tgas) =
+    (_dkappa_call(op.dplanck_dT, rho, Tgas), _dkappa_call(op.denergy_dT, rho, Tgas))
 
 # --- multigroup ---------------------------------------------------------------
 #
@@ -110,7 +165,19 @@ that actually varies with frequency, or use [`FrequencyOpacity`](@ref).
 @inline group_opacity(op::AbstractOpacity, nu, rho, T) = planck_opacity(op, rho, T)
 
 """
-    FrequencyOpacity(f; grey = nothing)
+    group_opacity_dT(op, nu, rho, T) -> Real
+
+`dkappa/dT` of the group centred on `nu`: the companion of
+[`group_opacity`](@ref), and what the coupling's exact Jacobian needs.
+
+Defaults to the grey Planck-mean derivative, which for the constant-opacity
+model is the right answer in every group. Zero unless the law supplies one.
+"""
+@inline group_opacity_dT(op::AbstractOpacity, nu, rho, Tgas) =
+    first(dkappa_dT(op, rho, Tgas))
+
+"""
+    FrequencyOpacity(f; grey = nothing, dkappa_dT = nothing, dgrey_dT = nothing)
 
 Opacity from a callable `f(nu, rho, T) -> kappa`, evaluated at each group centre.
 
@@ -123,15 +190,29 @@ A frequency-dependent law has no single grey value, so the grey entry points
 throw unless `grey` gives one explicitly. That is deliberate: silently
 collapsing `kappa(nu)` to some arbitrary frequency is how a multigroup opacity
 ends up quietly driving a single-group run.
+
+`dkappa_dT(nu, rho, T)` and `dgrey_dT(rho, T)` are the optional temperature
+derivatives, per group and grey respectively. They default to zero, which leaves
+the coupling's Jacobian inexact -- costing Newton convergence rate, not the root
+it converges to (see [`dkappa_dT`](@ref)).
 """
-struct FrequencyOpacity{F,G} <: AbstractOpacity
+struct FrequencyOpacity{F,G,D,DG} <: AbstractOpacity
     kappa::F
     grey::G
+    dkappa_dT::D
+    dgrey_dT::DG
 end
 
-FrequencyOpacity(f; grey=nothing) = FrequencyOpacity(f, grey)
+FrequencyOpacity(f; grey=nothing, dkappa_dT=nothing, dgrey_dT=nothing) =
+    FrequencyOpacity(f, grey, dkappa_dT, dgrey_dT)
 
 @inline group_opacity(op::FrequencyOpacity, nu, rho, T) = op.kappa(nu, rho, T)
+
+@inline _dkappa_call(::Nothing, nu, rho, Tgas) = zero(float(typeof(Tgas)))
+@inline _dkappa_call(f, nu, rho, Tgas) = f(nu, rho, Tgas)
+
+@inline group_opacity_dT(op::FrequencyOpacity, nu, rho, Tgas) =
+    _dkappa_call(op.dkappa_dT, nu, rho, Tgas)
 
 function _grey(op::FrequencyOpacity, rho, T)
     op.grey === nothing && throw(ArgumentError(
@@ -143,6 +224,11 @@ end
 @inline planck_opacity(op::FrequencyOpacity, rho, T) = _grey(op, rho, T)
 @inline energy_mean_opacity(op::FrequencyOpacity, rho, T) = _grey(op, rho, T)
 @inline flux_mean_opacity(op::FrequencyOpacity, rho, T) = _grey(op, rho, T)
+
+@inline function dkappa_dT(op::FrequencyOpacity, rho, Tgas)
+    d = _dkappa_call(op.dgrey_dT, rho, Tgas)
+    return (d, d)
+end
 
 """
     group_opacities(op, groups, rho, T) -> SVec{NG}
@@ -157,4 +243,20 @@ exactly the path it did before multigroup existed.
     NG == 1 && return SVec{1,T}(T(planck_opacity(op, rho, Tgas)))
     nu = group_centers(groups)
     return SVec{NG,T}(ntuple(g -> T(group_opacity(op, nu[g], rho, Tgas)), Val(NG))...)
+end
+
+"""
+    group_opacities_dT(op, groups, rho, T) -> SVec{NG}
+
+`dkappa/dT` in each group: [`group_opacities`](@ref) differentiated with respect
+to temperature, and the piece [`coupling_jacobian`](@ref) needs to be exact.
+
+Zero unless the opacity law supplies a derivative, which is exact for every
+temperature-independent law and an approximation for the rest.
+"""
+@inline function group_opacities_dT(op::AbstractOpacity, groups::RadiationGroups{NG,M,T},
+                                    rho, Tgas) where {NG,M,T}
+    NG == 1 && return SVec{1,T}(T(first(dkappa_dT(op, rho, Tgas))))
+    nu = group_centers(groups)
+    return SVec{NG,T}(ntuple(g -> T(group_opacity_dT(op, nu[g], rho, Tgas)), Val(NG))...)
 end

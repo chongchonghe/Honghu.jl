@@ -22,6 +22,22 @@ const P = Hydro3D.Problems
     include("test_performance.jl")
 end
 
+# `AdaptiveCoupling` -- the third coupling solver, and the three-way agreement
+# between the solvers -- lives in a package extension, so testing it means
+# `using OrdinaryDiffEq`. That package also exports `step!`, which every other
+# test file here calls unqualified, so it cannot be loaded into this session
+# without breaking them. Run it in a subprocess instead, and only when the
+# package is actually installed.
+let ode = Base.PkgId(Base.UUID("1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"), "OrdinaryDiffEq")
+    script = joinpath(@__DIR__, "test_coupling_adaptive.jl")
+    if Base.locate_package(ode) === nothing
+        println("\nOrdinaryDiffEq is not installed; skipping ", basename(script))
+    else
+        println("\nrunning ", basename(script), " in a subprocess ...")
+        run(`$(Base.julia_cmd()) --project=$(Base.active_project()) $script`)
+    end
+end
+
 # The verification figures are the visual counterpart of the tests above: same
 # problems, same reference solutions, drawn instead of asserted. They are off by
 # default because they re-run every problem at production resolution (a couple

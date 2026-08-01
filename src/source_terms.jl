@@ -302,9 +302,9 @@ end
 #
 # The opacity is piecewise constant across a group, so the Planck, energy and
 # flux means coincide (see `opacity.jl`) and one `group_opacities` call serves
-# all three. That is why `kappaP` and `kappaE` of the `CouplingState` below are
-# the same vector, and why the `(kappa_F - kappa_E) E` term the grey driver
-# carries has no counterpart here.
+# all three. That is why `coupling_opacity` returns the same vector twice, and
+# why the `(kappa_F - kappa_E) E` term the grey driver carries has no
+# counterpart here.
 
 """
     _group_component(R, i, j, k, Val(NG), Val(C)) -> SVec{NG}
@@ -409,9 +409,13 @@ function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
             F0y = _group_component(R, i, j, k, Val(NG), Val(IFRY))
             F0z = _group_component(R, i, j, k, Val(NG), Val(IFRZ))
 
-            # Opacities and heat capacity are frozen at the old temperature for
-            # the whole solve, as in Quokka: that sets how fast the iteration
-            # converges, not what it converges to.
+            # The heat capacity is frozen at the old temperature for the whole
+            # solve, as in Quokka; that sets how fast the iteration converges,
+            # not what it converges to. The *opacity* is not: the law itself
+            # goes on the `CouplingState` and every solver re-evaluates it at
+            # the temperature it is currently at, which is what Quokka's
+            # `ComputeModelDependentKappaEAndKappaP` does inside its Newton loop
+            # and what makes an exact Jacobian possible at all.
             Tfloor = temperature(eos, rho, internal_energy(eos, rho, floors.pressure))
             Tg = max(temperature(eos, rho, Eint0), Tfloor)
             cv = heat_capacity(eos, rho, Tg)
@@ -444,9 +448,11 @@ function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
 
             for _ in 1:maxouter
                 res = solve_coupling(method,
-                                     CouplingState{NG,M,T}(Eint0, Erad0, src, work, rho,
-                                                           cv, kap, kap, dt, c, chat,
-                                                           arad, kB, grp, Tfloor, efloor))
+                                     CouplingState{NG,M,T,typeof(op)}(Eint0, Erad0, src,
+                                                                      work, rho, cv, op,
+                                                                      dt, c, chat, arad,
+                                                                      kB, grp, Tfloor,
+                                                                      efloor))
                 Eint = res.Egas
                 Erad = res.Erad
                 citers += res.iterations

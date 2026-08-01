@@ -57,6 +57,48 @@ end
     @test Hydro3D.flux_mean_opacity(u, 3.0, 4.0) == 12.0
 end
 
+@testset "opacity temperature derivatives" begin
+    # `dkappa_dT` is what makes the coupling's Newton Jacobian exact. Zero is the
+    # documented default, and for a law with no temperature dependence it is not
+    # a default but the right answer.
+    @test Hydro3D.dkappa_dT(ConstantOpacity(planck=1.0, energy=2.0), 1.0, 100.0) ==
+          (0.0, 0.0)
+
+    # a power law differentiates to n kappa / T, and that had better match a
+    # difference of the law itself
+    pl = PowerLawOpacity(kappa0=5.0, rho0=2.0, T0=10.0, m=1.0, n=-3.5)
+    T, h = 20.0, 1e-6
+    numeric = (Hydro3D.planck_opacity(pl, 4.0, T + h) -
+               Hydro3D.planck_opacity(pl, 4.0, T - h)) / (2h)
+    dP, dE = Hydro3D.dkappa_dT(pl, 4.0, T)
+    @test dP ≈ numeric rtol = 1e-8
+    @test dE == dP
+    @test Hydro3D.dkappa_dT(PowerLawOpacity(kappa0=5.0, n=0.0), 1.0, 3.0) == (0.0, 0.0)
+    @test Hydro3D.dkappa_dT(pl, 4.0, 0.0) == (0.0, 0.0)     # the law is clamped there
+
+    # user-supplied derivatives, and zero when they are not supplied
+    @test Hydro3D.dkappa_dT(UserOpacity((rho, T) -> rho * T), 3.0, 4.0) == (0.0, 0.0)
+    ud = UserOpacity(planck=(rho, T) -> rho * T, dplanck_dT=(rho, T) -> rho)
+    @test Hydro3D.dkappa_dT(ud, 3.0, 4.0) == (3.0, 3.0)     # denergy_dT defaults to it
+    ud2 = UserOpacity(planck=(rho, T) -> rho * T, energy=(rho, T) -> 2rho * T,
+                      dplanck_dT=(rho, T) -> rho, denergy_dT=(rho, T) -> 2rho)
+    @test Hydro3D.dkappa_dT(ud2, 3.0, 4.0) == (3.0, 6.0)
+
+    # per group, and the frequency-dependent hook
+    grp = RadiationGroups(1.0, 100.0, 3)
+    @test all(Tuple(Hydro3D.group_opacities_dT(ConstantOpacity(1.0), grp, 1.0, 5.0)) .== 0)
+    dpl = Hydro3D.group_opacities_dT(pl, grp, 4.0, T)
+    @test all(Tuple(dpl) .≈ dP)                              # grey law, same in every group
+    fo = FrequencyOpacity((nu, rho, T) -> nu * T; dkappa_dT=(nu, rho, T) -> nu)
+    @test Tuple(Hydro3D.group_opacities_dT(fo, grp, 1.0, 5.0)) ==
+          Tuple(Hydro3D.group_centers(grp))
+    # ... and zero when the law declines to give one
+    @test all(Tuple(Hydro3D.group_opacities_dT(FrequencyOpacity((nu, rho, T) -> nu * T),
+                                               grp, 1.0, 5.0)) .== 0)
+    # one group takes the grey derivative
+    @test Hydro3D.group_opacities_dT(pl, RadiationGroups([0.0, Inf]), 4.0, T)[1] ≈ dP
+end
+
 @testset "limiters" begin
     for lim in (MinMod(), MonotonizedCentral(), VanLeer(), Sweby(1.5))
         # monotonicity: zero slope at an extremum, sign preserved otherwise
