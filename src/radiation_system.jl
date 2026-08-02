@@ -1,15 +1,17 @@
-# Grey two-moment (M1) radiation transport: physics parameters, variable
-# conversion, the HLL flux sweep, and the radiation CFL condition.
+# Two-moment (M1) radiation transport, grey or multigroup: physics parameters,
+# variable conversion, the HLL flux sweep, and the radiation CFL condition.
 
 """
     RadiationPhysics(; c, chat = c, a_rad, opacity,
+                     groups = GREY, k_B = 1,
                      closure = LevermoreClosure(),
+                     coupling = QuokkaCoupling(),
                      beta_order = 1,
                      tolerance = 1e-9,
                      max_iterations = 100,
                      max_outer_iterations = 5)
 
-Parameters of the grey two-moment radiation module.
+Parameters of the two-moment (M1) radiation module, grey or multigroup.
 
   - `c`       : speed of light, in the same units as the rest of the problem.
   - `chat`    : reduced speed of light. Using `chat < c` relaxes the radiation
@@ -20,6 +22,22 @@ Parameters of the grey two-moment radiation module.
   - `a_rad`   : radiation constant `4σ/c`, so that the equilibrium radiation
     energy density is `a_rad T⁴`.
   - `opacity` : an [`AbstractOpacity`](@ref).
+  - `groups`  : a [`RadiationGroups`](@ref). The default, [`GREY`](@ref), is the
+    single group spanning every frequency, and reproduces grey radiation exactly;
+    `ngroups > 1` puts the whole radiation module on the multigroup path, from
+    the state-vector length down to the coupling solver.
+  - `k_B`     : Boltzmann constant. It is read *only* to turn a group edge into
+    `x = energy_unit * edge / (k_B T)` for the Planck fractions, so it matters
+    only when the group edges are in physical units -- pass `CGS.k_B` alongside
+    `energy_unit = CGS.h_planck` for edges in Hz. A grey run computes no
+    fractions and never reads it, and unit-free edges given directly in units of
+    `k_B T` want the default `1`; wrong in either of those cases it costs
+    nothing, wrong in the physical-units case it moves energy between groups.
+  - `coupling` : the implicit matter-radiation solver used when `ngroups > 1`, an
+    `AbstractCoupling` -- [`QuokkaCoupling`](@ref) (the default,
+    allocation-free), [`DirectCoupling`](@ref) or [`AdaptiveCoupling`](@ref). A
+    grey run ignores it and uses [`radiation_source_step!`](@ref)'s own 2×2
+    Newton driver.
   - `closure`  : [`LevermoreClosure`](@ref) (the M1 default) or
     [`EddingtonClosure`](@ref), which fixes `chi = 1/3`. Use the latter only to
     reproduce reference solutions derived under the P1 approximation; it cannot

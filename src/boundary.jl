@@ -49,7 +49,18 @@ struct Reflecting <: BoundaryCondition end
     Fixed(state)
 
 Hold the ghost cells at a constant *conserved* state. `state` is a tuple or
-`SVec` of length `NHYDRO` (hydro boundaries) or `NRAD` (radiation boundaries).
+`SVec` covering the whole state vector: `NHYDRO` values on a hydro boundary, and
+on a radiation boundary `NRAD * ngroups`, the groups contiguous and four
+components each, so a two-group state is
+
+    (E₁, Fx₁, Fy₁, Fz₁, E₂, Fx₂, Fy₂, Fz₂)
+
+This is the one place a multigroup problem has to write its group structure out
+by hand -- nothing splits a boundary state the way `set_initial_conditions!`
+splits a scalar `Erad` -- and a state of the wrong length is a
+`DimensionMismatch` at the first ghost fill, not a silent grey boundary.
+`Hydro3D.Problems.marshak_vaytet` builds one from [`planck_fractions`](@ref) and
+is the worked example.
 
 Used e.g. to drive a Marshak wave by imposing an incident radiation energy
 density and flux at the low-x face.
@@ -65,15 +76,16 @@ Fixed(state::AbstractVector) = Fixed(Tuple(state))
     FunctionBC(f)
 
 Hold the ghost cells at a *conserved* state computed from position and time,
-`f(x, y, z, t) -> NTuple` or `SVec` of length `NHYDRO` (hydro boundaries) or
-`NRAD` (radiation boundaries).
+`f(x, y, z, t) -> NTuple` or `SVec` of length `NHYDRO` on a hydro boundary and
+`NRAD * ngroups` on a radiation one, with the same group-contiguous layout
+[`Fixed`](@ref) documents.
 
 The time-dependent counterpart of [`Fixed`](@ref), which ignores the `t` it is
 handed. Covers a driven inflow, a source that switches on, or a boundary profile
 that varies across the face:
 
 ```julia
-# a beam whose intensity ramps up over one light-crossing time
+# a beam whose intensity ramps up over one light-crossing time (one group)
 FunctionBC((x, y, z, t) -> (min(t, 1.0), 0.999 * min(t, 1.0), 0.0, 0.0))
 ```
 

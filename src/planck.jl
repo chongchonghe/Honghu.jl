@@ -60,9 +60,10 @@ end
 `NG` frequency groups defined by `NG + 1` monotonically increasing `edges`.
 
 `energy_unit` converts an edge to an energy, so that `x = energy_unit * edge /
-(k_B T)`: pass `CGS.h` to give the edges in Hz, `CGS.eV` to give them in
-electron volts, or leave it at `1` to give them directly in units of `k_B T`,
-which is what the unit-free test problems do.
+(k_B T)`: pass `CGS.h_planck` to give the edges in Hz, as
+`Hydro3D.Problems.marshak_vaytet` does, or leave it at `1` to give them as
+energies in whatever units `k_B` is in -- which for the unit-free test problems,
+where `k_B = 1`, means directly in units of `T`.
 
 The outermost edges are the integration limits, so the first group collects
 everything below `edges[1]` and the last everything above `edges[end]` -- the

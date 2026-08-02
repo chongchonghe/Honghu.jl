@@ -366,36 +366,12 @@ function marshak_vaytet(; n::Integer=64, nx::Integer=n, ngroups::Integer=4, Lx=2
     set_initial_conditions!(sim) do x, y, z
         (rho=rho0, T=T_initial, Erad=a_rad * T_initial^4, Fx=0.0)
     end
-    _set_planck_groups!(sim, T_initial)
+    # A scalar `Erad` is a total, and `set_initial_conditions!` splits it over
+    # the groups by the Planck spectrum at the temperature it implies -- here
+    # `T_initial`, exactly. So the interior starts as a 300 K blackbody without
+    # this problem writing a single group by hand; only the wall, which is a
+    # *boundary*, still has to.
     return sim, 1.36e-7
-end
-
-# `set_initial_conditions!` takes a single `Erad` and writes it into group 1,
-# which is the whole spectrum only when the run is grey. A multigroup problem
-# has to spread the energy over its groups itself, and then refill the ghost
-# cells and re-establish the between-steps admissibility invariant.
-function _set_planck_groups!(sim, Trad)
-    phys = sim.radiation
-    g = sim.grid
-    NG = ngroups(phys)
-    frac = planck_fractions(phys.groups, Trad, phys.k_B)
-    E = phys.a_rad * Trad^4
-    for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1], gr in 1:NG
-        b = Hydro3D.gbase(gr)
-        sim.R[b+Hydro3D.IERAD, i, j, k] = E * frac[gr]
-        sim.R[b+Hydro3D.IFRX, i, j, k] = 0.0
-        sim.R[b+Hydro3D.IFRY, i, j, k] = 0.0
-        sim.R[b+Hydro3D.IFRZ, i, j, k] = 0.0
-    end
-    Hydro3D.fill_ghosts!(sim.R, sim.radiation_boundaries, g, sim.t)
-    Hydro3D.enforce_state!(sim)
-    # `set_initial_conditions!` ran `enforce_state!` on a state whose groups
-    # 2..NG were still empty and counted one radiation repair per cell for it.
-    # Those repairs are an artefact of the two-stage setup, not of the problem,
-    # and leaving them in the counters would make `nrepaired(sim) == 0` -- the
-    # invariant the radiation tests assert -- untestable here.
-    reset_diagnostics!(sim)
-    return sim
 end
 
 """
@@ -403,9 +379,11 @@ end
 
 Radiation energy density summed over every frequency group, over the interior.
 
-`field(sim, :Erad)` and [`radiation_temperature`](@ref) read group 1, which is
-the whole spectrum in a grey run and a fraction of it in a multigroup one; this
-is what a multigroup diagnostic wants instead.
+Redundant, and kept only because `default_metrics(marshak_vaytet)` and
+`test/test_radiation_multigroup.jl` call it: `first(field(sim, :Erad))` sums the
+groups too and returns the identical array, as does
+[`radiation_temperature`](@ref) for the temperature it implies. Prefer the
+accessors in new code — this dates from before they learned about groups.
 """
 function total_erad(sim)
     g = sim.grid

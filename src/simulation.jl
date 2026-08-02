@@ -302,6 +302,13 @@ Recognised keys:
 Ghost cells are filled from the boundary conditions afterwards, so `f` is only
 called on interior cells.
 
+The radiation keys are *totals*, whatever the group structure: `Erad` and the
+fluxes are split over the frequency groups by the Planck spectrum at the
+radiation temperature `Erad` implies, so a multigroup run starts in equilibrium
+rather than with everything piled into group 1. A multigroup problem therefore
+needs no group-aware initial condition of its own; a [`Fixed`](@ref) radiation
+boundary still does, since nothing splits a boundary state.
+
 ```julia
 set_initial_conditions!(sim) do x, y, z
     x < 0.5 ? (rho = 1.0, p = 1.0) : (rho = 0.125, p = 0.1)
