@@ -4,7 +4,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Overview
 
-Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with a method-of-lines scheme (HLLC or LLF) and grey two-moment (M1) radiation with an HLL solver and an IMEX PD-ARS integrator. It exists as a bench for prototyping algorithms and test problems destined for Quokka, so structural fidelity to Quokka is a design goal: a kernel written here should transliterate across, and back. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `../quokka` and is the reference to check against when a numerical detail is in doubt.
+Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with a method-of-lines scheme (HLLC or LLF) and two-moment (M1) radiation — grey, or in `NG` frequency groups — with an HLL solver and an IMEX PD-ARS integrator. It exists as a bench for prototyping algorithms and test problems destined for Quokka, so structural fidelity to Quokka is a design goal: a kernel written here should transliterate across, and back. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `../quokka` and is the reference to check against when a numerical detail is in doubt.
 
 ## Commands
 
@@ -110,6 +110,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `staticvec.jl` | `SVec{N,T}`, a stack-allocated fixed-size vector. Deliberately *not* an `AbstractArray`, so a stray broadcast cannot allocate. |
 | `newton.jl` | `newton_solve` on a bordered (arrowhead) system, and the two linear solves it can use — `ArrowheadSolve`, `DenseSolve`. No physics: the caller supplies a residual and its Jacobian, which is what lets the coupling's backward-Euler stepper be tuned without touching the coupling. |
 | `constants.jl` | `CGS` submodule. The code itself is unit-agnostic. |
+| `planck.jl` | The normalised incomplete Planck integral (two series, no table), `RadiationGroups`, the group centres and the Planck fractions. Included before `opacity.jl`, which needs the group type. |
 | `eos.jl` | `AbstractEOS`, `IdealGas`. Energies are volumetric; `cv` is specific. |
 | `opacity.jl` | `AbstractOpacity` and four concrete laws. Planck / energy / flux means are distinguished; `dkappa_dT` is the optional temperature derivative the coupling's exact Jacobian needs. |
 | `coupling.jl` | `AbstractCoupling`, `CouplingState`, `coupling_rhs` / `coupling_jacobian` — the single source of truth for the coupling physics. |
@@ -123,8 +124,8 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `riemann/hllc.jl`, `riemann/llf.jl` | One solver per file, mirroring Quokka's `HLLC.hpp` / `LLF.hpp`. Pointwise, canonical (normal = x) form. |
 | `riemann_radiation.jl` | M1 closure, Eddington tensor, `hll_radiation`. |
 | `hydro_system.jl` | `Floors`, `cons2prim!` / `enforce_floors!`, the flux sweep, flux divergence, hydro CFL. |
-| `radiation_system.jl` | `RadiationPhysics`, state repair, the HLL flux sweep, radiation CFL. |
-| `source_terms.jl` | The implicit matter-radiation coupling — the hardest file. |
+| `radiation_system.jl` | `RadiationPhysics`, the group layout (`ngroups`, `nradvars`, `gbase`), state repair, the HLL flux sweep, radiation CFL. |
+| `source_terms.jl` | The implicit matter-radiation coupling — the hardest file. Two drivers, chosen by dispatch on `NG`: the grey 2×2 Newton written out inline, and `multigroup_source_step!`, which hands each cell to an `AbstractCoupling`. |
 | `integrators.jl` | SSP-RK tableaux and the IMEX PD-ARS constants. |
 | `simulation.jl` | `Simulation`, workspaces, right-hand sides, stage drivers, `run!`. |
 | `output.jl` | VTK, text line-outs, checkpoints. |

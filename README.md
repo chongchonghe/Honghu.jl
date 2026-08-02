@@ -2,7 +2,7 @@
 
 A three-dimensional radiation-hydrodynamics code in pure Julia. Three standard libraries and OrdinaryDiffEq, which the matter-radiation coupling's reference solver and default implicit stepper are built on; plotting is a weak dependency that activates only if you load Plots.
 
-Hydro3D solves the Euler equations coupled to the grey two-moment (M1) radiation transport equations on a uniform Cartesian grid. It is a rewrite of [Hydro.jl](../Hydro.jl) following the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
+Hydro3D solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — on a uniform Cartesian grid. It is a rewrite of [Hydro.jl](../Hydro.jl) following the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
 
 | Kelvin-Helmholtz instability | M1 radiation shadow |
 |:---:|:---:|
@@ -23,6 +23,8 @@ $$\partial_t E_r + \frac{\hat{c}}{c}\nabla\cdot\mathbf{F}_r = S, \qquad \partial
 
 where $\mathbb{T}(\mathbf{f})$ is the Eddington tensor built from the reduced flux $\mathbf{f} = \mathbf{F}_r/(cE_r)$. M1 interpolates between the correct free-streaming limit ($\mathbb{T}\to\hat{n}\hat{n}$, radiation travels in straight lines and casts shadows) and the diffusion limit ($\mathbb{T}\to\mathbb{I}/3$), which is what distinguishes it from flux-limited diffusion.
 
+That pair of equations is carried once per frequency group. One group is grey and is the default; see [Multigroup radiation](#multigroup-radiation).
+
 ## Numerical method
 
 Space and time are separated by the **method of lines**: a spatial operator $L(U) = -(F_{i+1/2}-F_{i-1/2})/\Delta x$ is assembled once per stage, and the stages are pure ODE updates.
@@ -34,13 +36,16 @@ Space and time are separated by the **method of lines**: a spatial operator $L(U
 | Radiation Riemann solver | `HLL` on the M1 system with frozen-Eddington-tensor wave speeds (Skinner & Ostriker 2013; Balsara 1999) |
 | Hydro time integration | SSP Runge-Kutta, first to third order (`ForwardEuler`, `SSPRK2`, `SSPRK3`) |
 | Radiation time integration | **IMEX PD-ARS**: transport explicit, stiff matter coupling implicit; second order and asymptotic-preserving |
-| Matter-radiation coupling | 2×2 Newton-Raphson per cell in $(E_\mathrm{int}, R)$, with an analytic flux/momentum update and a lagged outer iteration for the $\mathbf{v}\cdot\mathbf{F}$ work term |
+| Matter-radiation coupling, grey | 2×2 Newton-Raphson per cell in $(E_\mathrm{int}, R)$, with an analytic flux/momentum update and a lagged outer iteration for the $\mathbf{v}\cdot\mathbf{F}$ work term |
+| Matter-radiation coupling, $N_g$ groups | a $(1+N_g)$-dimensional implicit solve per cell, by one of three interchangeable [coupling solvers](#matter-radiation-coupling-solvers) |
 
 Radiation subcycles inside each hydro step at the reduced speed of light $\hat{c}$. A degenerate direction (`n[d] == 1`) carries no ghost cells and is skipped entirely, so 1D and 2D problems cost what they should.
 
 ## Install and run
 
-Requires Julia 1.9 or newer. The dependencies are three standard libraries — `Printf`, `Dates` and `LinearAlgebra` — and `OrdinaryDiffEq`, which two pieces of the matter-radiation coupling are built on: `AdaptiveCoupling`, the error-controlled reference solver, and `ImplicitEulerStepper`, the backward-Euler stepper `DirectCoupling` defaults to. That is a real cost and it is worth stating plainly: `using Hydro3D` takes 1.5 s rather than 0.035 s, and a first install precompiles around 190 packages. It buys a library implementation of the implicit step to check the hand-written ones against, and neither is on the path of the default solver, whose time and allocation are unchanged.
+Requires Julia 1.9 or newer. The dependencies are three standard libraries — `Printf`, `Dates` and `LinearAlgebra` — and `OrdinaryDiffEq`, which two pieces of the matter-radiation coupling are built on: `AdaptiveCoupling`, the error-controlled reference solver, and `ImplicitEulerStepper`, the backward-Euler stepper `DirectCoupling` defaults to. `OrdinaryDiffEqSDIRK` and `OrdinaryDiffEqNonlinearSolve` are named alongside it, because version 7 of the meta-package exports neither `ImplicitEuler` nor `NLNewton`; both already sit inside its own dependency closure, so the two extra lines add nothing to the manifest or the load time.
+
+That is a real cost and it is worth stating plainly: `using Hydro3D` takes 1.5 s rather than 0.035 s, and a first install precompiles around 190 packages instead of none. What it does not cost is run time — no integrator is on the path of the default coupling solver, whose wall time and allocation per cell are unchanged — and what it buys is a library implementation of the implicit step to check the hand-written ones against.
 
 `Plots` is optional: load it and the plotting methods appear (see [Plotting](#plotting)); leave it out and the ~100-package plotting stack never enters the picture, which matters on a compute node.
 
@@ -95,6 +100,7 @@ run!(sim; tmax, outdir = "kh", dtout = 0.02)
 | `radiation_diffusion` | static diffusion limit against an analytic Gaussian |
 | `matter_coupling` | stiff energy exchange, equilibrium and exact energy conservation |
 | `marshak_wave` | non-equilibrium radiation-driven heat wave |
+| `marshak_vaytet` | the same wave with a $\nu^{-2}$ opacity and $N_g$ groups, which a grey run cannot reproduce |
 | `radhydro_shock` | Mach 3 radiative shock against the Lowrie & Edwards semi-analytic solution |
 | `radiation_shadow` | M1 casting a sharp shadow behind an opaque clump |
 
@@ -178,7 +184,7 @@ Problems with an exact solution carry their own metrics (`default_metrics`, one 
 Every figure below is regenerated by `julia --project=. -t auto docs/make_figures.jl`, or by running the test suite with `--figures`. Each compares the code against something independent: an exact Riemann solution, an analytic diffusion solution, a measured convergence slope, or a similarity solution.
 
 ```bash
-julia --project=. -t 4 test/runtests.jl             # 644 tests, ~20 s
+julia --project=. -t 4 test/runtests.jl             # 1217 tests, ~70 s
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw the figures below
 ```
 
@@ -195,7 +201,7 @@ julia --project=. -t auto test/runtests.jl --figures # ... and redraw the figure
 
 **Mach 3 radiative shock** (Lowrie & Edwards 2008), against the semi-analytic solution. This is the most demanding one-dimensional problem in the suite: an optically thick, strongly coupled shock with a radiative precursor ahead of the front and, just behind it, a *Zel'dovich spike* where the matter temperature overshoots its own downstream value ($4.26$ against $3.66$). The spike appears only if the velocity-dependent coupling terms, the implicit solve and the shock capturing are all correct at once. Relative $L_1$ error in $T_\mathrm{rad}$ is $0.19\%$ at 256 cells, against the $1\%$ Quokka asks for.
 
-The test suite (`julia --project=. -t 4 test/runtests.jl`, 454 tests, ~12 s) checks, among other things:
+The test suite (`julia --project=. -t 4 test/runtests.jl`, 1217 tests, ~70 s) checks, among other things:
 
 - **Order of accuracy** on smooth advection: PCM 1, PLM 2, PPM 2.3. PPM stops short of 3 because the Colella-Woodward monotonicity constraint drops to a limited line at the two extrema of the sine wave; this matches the same limiter in Athena++ and Quokka.
 - **Toro's five shock tubes**, including the "123" near-vacuum problem and both strong blasts, all staying positive with no help from the floors.
@@ -206,6 +212,8 @@ The test suite (`julia --project=. -t 4 test/runtests.jl`, 454 tests, ~12 s) che
 - **Stiff coupling**: a single step $10^{5}$ times longer than the coupling time still lands on radiative equilibrium, conserving $E_\mathrm{int} + (c/\hat{c})E_r$ to $10^{-13}$.
 - **Radiative shock**: relative $L_1$ error in $T_\mathrm{rad}$ of $0.19\%$ at 256 cells against the semi-analytic solution, with the Zel'dovich spike converging to $4.21$ from an exact $4.26$ and no positivity floors triggered.
 - **Radiation force**: momentum transfer matches $\Delta p = (\rho\kappa/c)F_0(1-e^{-\hat{c}\rho\kappa t})/(\hat{c}\rho\kappa)$ to 1%, converging at second order.
+- **Multigroup against grey**: at one group the multigroup source step reproduces the grey driver to round-off, over $\kappa$ from 0 to $10^9$; an optically thick cell relaxes onto $a_rT^4f_g(T)$ group by group, at its own temperature, not merely onto the right total.
+- **The three coupling solvers agree**, deep in equilibrium and in the transparent limit, and away from both the two one-step solvers converge onto the error-controlled one at the measured rate 2 — the local error of a single backward-Euler step, with no accumulation to turn it into 1.
 
 ## Performance
 
@@ -229,7 +237,7 @@ Per-kernel breakdown at $64^3$, one sweep or one pass each:
 
 The implicit coupling dominates a radiation step, as it should: it is a Newton solve per cell. Allocation per step is flat in the grid size (138 KiB for hydrodynamics, 250 KiB with radiation, all of it threading overhead), and `test/test_performance.jl` asserts that every hot kernel stays below 8 bytes per cell — a regression test for a boxing bug that once cost 12 kB per cell.
 
-**Memory.** Buffers scale as roughly `72 * ncells * 8` bytes when radiation is enabled, `35 * ncells * 8` without, where `ncells` includes ghost cells. A $128^3$ radiation-hydrodynamics run needs about 1.4 GB; pure hydrodynamics at $128^3$ needs about 0.7 GB.
+**Memory.** Buffers scale as roughly `72 * ncells * 8` bytes when grey radiation is enabled, `35 * ncells * 8` without, where `ncells` includes ghost cells. A $128^3$ radiation-hydrodynamics run needs about 1.4 GB; pure hydrodynamics at $128^3$ needs about 0.7 GB. Every radiation buffer is `4 * ngroups` components wide, so the radiation share of that figure — about half of it in a grey run — scales with the number of frequency groups.
 
 ## Output
 
@@ -270,12 +278,17 @@ Call any of them without Plots loaded and you get an error telling you to load i
 
 ```
 hydro3d.jl/
-  Project.toml   deps: Printf, Dates, LinearAlgebra (stdlibs) and OrdinaryDiffEq;
+  Project.toml   deps: Printf, Dates, LinearAlgebra (stdlibs) and OrdinaryDiffEq
+                 with its SDIRK and NonlinearSolve sub-packages;
                  Plots is a weak dependency
   README.md      this file
   CLAUDE.md      invariants, performance traps, and a per-file guide to src/
   logs.md        development log: what was asked for, what was built, why
-  src/           the package -- 29 files, one concern each
+  future.md      work not done, with enough detail to start; known bugs
+  src/           the package -- 33 files, one concern each
+    planck.jl    the incomplete Planck integral and RadiationGroups
+    newton.jl    Newton on a bordered system, and the two linear solves
+    coupling*.jl the coupling interface and the three solvers behind it
     riemann/     one Riemann solver per file, mirroring Quokka's headers
     problems/    built-in problems, exact solutions, per-problem metrics
   ext/           plotting methods, loaded only when Plots is present
@@ -299,6 +312,78 @@ Hydro3D.energy_mean_opacity(op::KramersOpacity, rho, T) = Hydro3D.planck_opacity
 ```
 
 The same pattern works for `AbstractEOS`, `AbstractOpacity`, `AbstractLimiter`, `AbstractReconstruction`, `AbstractIntegrator`, `AbstractRiemannSolver`, `AbstractClosure` and `BoundaryCondition`. `test/test_extensions.jl` defines a toy subtype of every one of them and runs a simulation with it, so it doubles as copy-paste documentation of exactly which methods each interface needs.
+
+## Multigroup radiation
+
+The radiation field can be resolved into $N_g$ frequency groups. Each group carries its own energy density and flux through the same M1 solver, and exchanges energy with the gas through its own opacity:
+
+$$\partial_t E_g + \frac{\hat{c}}{c}\nabla\cdot\mathbf{F}_g = \hat{c}\rho\left(\kappa_{P,g}\,a_rT^4f_g(T) - \kappa_{E,g}E_g\right), \qquad g = 1,\dots,N_g,$$
+
+where $f_g(T)$ is the fraction of a Planck spectrum at $T$ that falls in group $g$ — a difference of the normalised incomplete Planck integral $P(x) = (15/\pi^4)\int_0^x t^3/(e^t-1)\,\mathrm{d}t$ evaluated at the group edges, with $x = h\nu/k_BT$. Quokka tabulates $P$ and interpolates; here two series compute it, the Bernoulli expansion below $x = 1$ and the exponential tail above, so there is no table to regenerate. The last group takes $1 - \sum(\mathrm{rest})$, so the fractions sum to exactly one whatever the edges are and the total emitted energy is $a_rT^4$ to round-off.
+
+**One group is grey, and is the default.** `ngroups` is a type parameter, so every kernel specialises on it and a single-group run takes the code path it took before multigroup existed — the same 2×2 source driver, the same allocation, the same answers to round-off. That equivalence is a test, not an intention.
+
+**Groups.** `RadiationGroups` takes $N_g + 1$ increasing edges, or a range and a count. `energy_unit` says what an edge *means*: `energy_unit * edge` must be an energy, since what the Planck fraction needs is $x = \mathrm{energy}/k_BT$. Pass `CGS.h_planck` to give the edges in Hz; leave it at `1` to give them directly in units of $k_BT$, which is what the unit-free test problems do.
+
+```julia
+RadiationGroups([0.1, 1.0, 5.0, 20.0])                                # three groups, edges in units of k_B T
+RadiationGroups(6e10, 6e14, 4; energy_unit = Hydro3D.CGS.h_planck)    # four log-spaced groups, edges in Hz
+RadiationGroups(6e10, 6e14, 4; spacing = :linear)                     # :log is the default, since a Planck spectrum spans decades
+```
+
+The outermost edges are integration limits rather than cuts: the first group collects everything below `edges[1]` and the last everything above `edges[end]`. `0.0` and `Inf` are legal, and the grey default is exactly `RadiationGroups([0.0, Inf])`.
+
+**Opacity.** The opacity is **piecewise constant across a group**, evaluated at the geometric mean $\sqrt{\nu_g\nu_{g+1}}$ of the group's edges — Quokka's `piecewise_constant_opacity`. Averaging a constant against any weight returns it, so the Planck, energy and flux means coincide inside a group and one number per group serves all three. `FrequencyOpacity(f)` takes `f(nu, rho, T)`; any other `AbstractOpacity` used with several groups gives the same $\kappa$ in every group, which is a genuine configuration — Vaytet's constant-opacity model — rather than an accident. A frequency-dependent law has no grey value, so `FrequencyOpacity` throws if a single-group run asks it for one, instead of quietly collapsing $\kappa(\nu)$ to some arbitrary frequency.
+
+**A run.** Pass `groups`, and `k_B` in whatever units the rest of the problem uses:
+
+```julia
+using Hydro3D
+const CGS = Hydro3D.CGS
+
+groups = RadiationGroups(6e10, 6e14, 4; energy_unit = CGS.h_planck)
+rad = RadiationPhysics(c = CGS.c_light, a_rad = CGS.a_rad, k_B = CGS.k_B,
+                       groups = groups, beta_order = 0,
+                       opacity = FrequencyOpacity((nu, rho, T) -> 2000.0 * (nu / 4e13)^-2))
+
+sim = Simulation(n = (64, 1, 1), xhi = (20.0, 1.0, 1.0), radiation = rad, hydro = false,
+                 eos = IdealGas(gamma = 5/3, cv = 1.0),
+                 boundaries = Boundaries(Outflow()))
+set_initial_conditions!(sim) do x, y, z
+    (rho = 1e-3, T = 300.0, Erad = CGS.a_rad * 300.0^4)
+end
+run!(sim, tmax = 1e-8)
+```
+
+A scalar `Erad` in an initial condition is a **total**, split over the groups by the Planck spectrum at the radiation temperature it implies — the only spectrum a single number carries — so a multigroup run starts in equilibrium rather than with everything piled into group 1. A `Fixed` radiation boundary is the one place a group structure has to be written out by hand: its state is the whole radiation vector, `4 * ngroups` long. `Hydro3D.Problems.marshak_vaytet` builds one from `planck_fractions` and is the worked example.
+
+Diagnostics stay grey-shaped by default. `field(sim, :Erad)`, `:Fx`, `:reduced_flux` and `radiation_temperature` are summed over the groups, so they mean the same thing in a grey run and a multigroup one; a trailing number picks one group out, as in `field(sim, :Erad_2)`, and `available_fields` lists the per-group names only when there is more than one group.
+
+## Matter-radiation coupling solvers
+
+The implicit energy exchange is a $(1+N_g)$-dimensional stiff solve per cell, and which solver takes it is a property of `RadiationPhysics`:
+
+```julia
+rad = RadiationPhysics(c = 1.0, a_rad = 1.0, opacity = ConstantOpacity(1e3),
+                       groups = groups, coupling = DirectCoupling())
+```
+
+All three solve the same equations, and every Jacobian in the file is exact — each carries the opacity's own $\mathrm{d}\kappa/\mathrm{d}T$, which is why the opacity law travels with the cell state rather than a frozen pair of numbers. `DirectCoupling` and `AdaptiveCoupling` are *generated* from `coupling_rhs` and `coupling_jacobian` and so have no physics of their own to keep in step; `QuokkaCoupling` is a different discretisation in different unknowns, sharing the right-hand side only through its opening guess and hand-deriving the rest. That independence is what makes the three agreeing a check rather than three copies of one derivation, and the suite asserts that they do. They differ in how the step is taken:
+
+| Solver | What it is, and when to reach for it |
+|:---|:---|
+| `QuokkaCoupling()` | **The default, and what to run production with.** Backward Euler in Quokka's replaced base variables $(E_\mathrm{gas}, R_g)$, where $R_g$ is the energy handed from the gas to group $g$ over the step. Writing the unknown as the *transfer* moves the optical depth $\tau = \hat{c}\rho\kappa\Delta t$ out of the residual, so the conditioning stops tracking it and one step can cross a coupling time $10^8$ times shorter than $\Delta t$. Allocates nothing per cell. |
+| `DirectCoupling()` | Backward Euler in the natural variables $(E_\mathrm{gas}, E_g)$, with nothing hand-derived: the residual is $u - u_0 - \Delta t\,f(u)$ and its Jacobian $I - \Delta t\,J$, both generated. Use it as the independent check on the default, and to measure what the base-variable replacement buys — its residual is a difference of two nearly-cancelling terms, so its achievable tolerance degrades in proportion to $\tau$. |
+| `AdaptiveCoupling()` | An error-controlled stiff integrator (`Rosenbrock23` by default) over the same step. **A reference, not a production solver**: it says what the coupling ODE's answer *is*, so the one-step solvers can be checked against a controlled error rather than an assumed one. It takes tens of internal steps per cell per timestep: 2 to 70 times the wall time of a hand-written Newton step, and 8–13 kB a cell where that costs nothing. |
+
+`DirectCoupling` takes two further knobs, and they are not interchangeable:
+
+- `stepper` — how the implicit step is driven to a root. `ImplicitEulerStepper()`, the default, is OrdinaryDiffEq's `ImplicitEuler` run non-adaptively over one step of length $\Delta t$, which is backward Euler and nothing else; `NewtonStepper()` is the hand-written iteration, which allocates nothing and is 2.4 to 120 times faster. They share the right-hand side and the Jacobian and *nothing* else — not the residual form, the opening iterate, the convergence test or the linear algebra — which is what makes them a cross-check rather than two copies of one loop.
+- `linsolve` — how each Newton step's $(1+N_g)\times(1+N_g)$ system is inverted, and **`NewtonStepper`'s alone**, since `ImplicitEuler` brings its own. `ArrowheadSolve()`, the default here and for `QuokkaCoupling`, eliminates the diagonal group block into the gas row in $O(N_g)$ and forms no matrix; `DenseSolve()` factorises the same system without assuming that structure. The arrowhead is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today rather than a truth about radiation — add Compton redistribution or overlapping lines and switch to `DenseSolve`.
+
+Cells that hit `max_iterations` are counted in `newton_failures` and reported by `run!` rather than throwing, so a solver failing on part of a grid shows up in the run summary rather than silently. It is worth reading: the default has a known convergence failure on a steeply falling opacity from a gas much hotter than the radiation, recorded with a reproduction in [`future.md`](future.md), and `DirectCoupling` solves that cell correctly.
+
+None of this is consulted by a grey run: with one group the coupling is the 2×2 driver in `src/source_terms.jl`, tuned by `RadiationPhysics`'s own `tolerance` and `max_iterations`, and `coupling` is ignored.
 
 ## Source terms
 
@@ -341,7 +426,8 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 ## Limitations
 
 - Uniform grid only — no mesh refinement, no MPI, no GPU.
-- Grey (single-group) radiation. No multigroup, dust, chemistry, or self-gravity.
+- No dust, chemistry, or self-gravity.
+- Multigroup opacity is piecewise constant across a group. Quokka's other models, which fit a power law across each group and so must keep the Planck, energy and flux means apart, are not implemented; neither is any term that moves energy between groups directly, such as Compton redistribution.
 - Shared-memory threading only, so problem sizes are bounded by one node's memory.
 - A reduced speed of light rescales the radiation diffusion coefficient by $\hat{c}/c$; use $\hat{c}=c$ when the static diffusion limit matters quantitatively.
 - **The hydrodynamics–radiation split is first order in time.** Each subsystem is second or third order on its own — SSP-RK3 for the Euler equations, the second-order IMEX PD-ARS scheme for radiation — but `step!` advances one and then the other, which is Lie splitting and contributes an $O(\Delta t)$ error. This is the same split Quokka uses, and it is invisible whenever the radiation is subcycled hard enough that the splitting error is below the spatial error, which is the usual case. Strang splitting the two subsystems would fix it and is not implemented; *source terms* are already Strang-split (see [`strang_sources`](#source-terms)).
@@ -354,6 +440,7 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 - Levermore (1984), *JQSRT* 31, 149 — M1 closure
 - Skinner & Ostriker (2013), *ApJS* 206, 21 — M1 wave speeds, reduced speed of light
 - Chu et al. (2019), *JCP* 389, 62 — IMEX PD-ARS
+- Vaytet et al. (2011), *JQSRT* 112, 1323 — multigroup M1, and the frequency-dependent Marshak wave
 - Wibking & Krumholz (2022), *MNRAS* 512, 1430; He, Wibking & Krumholz (2024), *MNRAS* 531, 3906 — Quokka
 
 ## Author
