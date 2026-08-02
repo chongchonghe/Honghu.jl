@@ -4,7 +4,8 @@
 #   conserved   U = (rho, rho*vx, rho*vy, rho*vz, Etot)
 #   primitive   W = (rho, vx, vy, vz, p)
 #
-# Radiation (4 variables, grey two-moment / M1)
+# Radiation, M1: 4 variables *per frequency group*, groups stored contiguously,
+# so a state vector is `NRAD * ngroups` long. See `gbase` in radiation_system.jl.
 #   conserved   R = (Erad, Fx, Fy, Fz)
 #   primitive   V = (Erad, fx, fy, fz)      with f = F / (c Erad), |f| <= 1
 #
@@ -14,7 +15,7 @@
 
 "Number of hydrodynamic variables."
 const NHYDRO = 5
-"Number of radiation variables (grey M1)."
+"Number of M1 radiation variables *per frequency group*: energy density and three\nflux components. A grey run has one group, so the state vector is `NRAD` long;\nwith `NG` groups it is `NRAD * NG`."
 const NRAD = 4
 
 # conserved hydro

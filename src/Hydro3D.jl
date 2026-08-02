@@ -8,7 +8,8 @@ scheme: piecewise-constant, -linear or -parabolic reconstruction of the
 primitive variables, a choice of Riemann solver (HLLC or LLF), and a
 strong-stability-preserving Runge-Kutta integrator.
 
-Radiation is treated with the grey two-moment (M1) approximation. Transport uses
+Radiation is treated with the two-moment (M1) approximation, grey or resolved
+into `NG` frequency groups (see `RadiationGroups`). Transport uses
 an HLL solver built on the M1 closure, and the stiff matter-radiation coupling
 is solved implicitly, the two being combined by the second-order,
 asymptotic-preserving IMEX PD-ARS scheme. Radiation subcycles inside each hydro
