@@ -113,6 +113,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `planck.jl` | The normalised incomplete Planck integral (two series, no table), `RadiationGroups`, the group centres and the Planck fractions. Included before `opacity.jl`, which needs the group type. |
 | `eos.jl` | `AbstractEOS`, `IdealGas`. Energies are volumetric; `cv` is specific. |
 | `opacity.jl` | `AbstractOpacity` and four concrete laws. Planck / energy / flux means are distinguished; `dkappa_dT` is the optional temperature derivative the coupling's exact Jacobian needs. |
+| `rsla.jl` | `AbstractChatLimiter` and the pointwise `chat_factor`: the rule that makes the reduced speed of light local. The array drivers that apply it are in `radiation_system.jl`, as `source_terms.jl` holds the loop over cells for `coupling.jl`'s physics. |
 | `coupling.jl` | `AbstractCoupling`, `CouplingState`, `coupling_rhs` / `coupling_jacobian` — the single source of truth for the coupling physics. |
 | `coupling_solvers.jl` | `QuokkaCoupling`, `DirectCoupling`, and the `AbstractBackwardEuler` stepper choice. |
 | `coupling_ode.jl` | The two OrdinaryDiffEq-backed solvers — `ImplicitEulerStepper` and `AdaptiveCoupling` — and the `ODEFunction` they share. |
@@ -124,7 +125,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `riemann/hllc.jl`, `riemann/llf.jl` | One solver per file, mirroring Quokka's `HLLC.hpp` / `LLF.hpp`. Pointwise, canonical (normal = x) form. |
 | `riemann_radiation.jl` | M1 closure, Eddington tensor, `hll_radiation`. |
 | `hydro_system.jl` | `Floors`, `cons2prim!` / `enforce_floors!`, the flux sweep, flux divergence, hydro CFL. |
-| `radiation_system.jl` | `RadiationPhysics`, the group layout (`ngroups`, `nradvars`, `gbase`), state repair, the HLL flux sweep, radiation CFL. |
+| `radiation_system.jl` | `RadiationPhysics`, the group layout (`ngroups`, `nradvars`, `gbase`), state repair, the HLL flux sweep, radiation CFL, and the two drivers of the `chat` limiter (`update_chat!`, `radiation_pressure_dt`). |
 | `source_terms.jl` | The implicit matter-radiation coupling — the hardest file. Two drivers, chosen by dispatch on `NG`: the grey 2×2 Newton written out inline, and `multigroup_source_step!`, which hands each cell to an `AbstractCoupling`. |
 | `integrators.jl` | SSP-RK tableaux and the IMEX PD-ARS constants. |
 | `simulation.jl` | `Simulation`, workspaces, right-hand sides, stage drivers, `run!`. |
@@ -203,6 +204,38 @@ Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`,
 - An opacity supplies its derivative through `dkappa_dT` / `group_opacity_dT`, defaulting to zero. Zero costs iterations, not correctness. Measured on a `PowerLawOpacity`: the exact term cuts mean Newton iterations by 25–40% in the intermediate regime, and by nothing at all deep in equilibrium, where the correction is proportional to `B_g - E_g`.
 - The optically-thin shortcut, the equilibrium-overshoot guard and `apply_energy_floors` are **not** ODE terms and are deliberately outside `coupling_rhs`. The header of `src/coupling.jl` says where each lives.
 - The arrowhead elimination is an **assumption, not a truth**: it is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today, not of radiation. `QuokkaCoupling` and `DirectCoupling`'s `NewtonStepper` take a `linsolve` (`AbstractJacobianSolve`) and **default to `ArrowheadSolve()`** — `O(NG)`, no matrix formed, zero bytes per cell. Defaulting to an assumption is acceptable only because this one is *checked*: `DenseSolve` solves the same system without it, and `test/test_radiation_multigroup.jl` asserts the two agree block by block and end to end. That cross-check is what licenses the default, and it exists because the failure would be quiet — Newton stops on the residual of the true equations, so a damaged matrix cannot converge to a wrong answer, only fail to converge and bump `newton_failures`. Add a term that couples groups directly (Compton redistribution, line overlap) and switch to `DenseSolve`, which needs only to write a block where it writes a diagonal; the arrowhead has nowhere to put the entries at all.
+
+## The variable reduced speed of light
+
+`chat` is a field, not a number: `sim.rw.chat[g, i, j, k]`, recomputed at the
+start of every IMEX stage from the state that stage transports. `RadiationPhysics`
+carries a `chat_limiter` that decides it, and `ConstantChat()` -- the default --
+is the standard RSLA and a measured no-op, down to the ghost fills. Read
+`docs/rsla-findings.md` before changing anything here; it is where the
+measurements live.
+
+Four things about it that are not obvious from the code:
+
+- **The interface value is the minimum of the two adjacent cells.** Krumholz,
+  Wibking & He argue for this and then write `max` in their own algorithm
+  summary. The argument is right: an optically thick cell may locally run at the
+  full speed of light, and letting it set the signal speed of a flux into a
+  transparent neighbour would impose a CFL-violating speed where no source
+  damping exists to control the amplification.
+- **The stability bound carries the closure's signal speed, not `1/sqrt(3)`.**
+  The published `2/sqrt(3)` is twice the P1 speed and is too generous by
+  `sqrt(3)` wherever M1 free-streams -- which is where there is no damping to
+  spare. Without the correction the Vaytet Marshak wave is 130% wrong. See
+  `_signal_speed` and findings §2.
+- **The time step is set from the global `phi0`, never from the local `phi`.**
+  Cells at `phi = 1` are precisely the ones thick enough that the implicit
+  exchange stabilises them, and shrinking `dt` for them would forfeit the whole
+  point.
+- **One `phi` per cell, not per group.** A per-group `phi` breaks the identity
+  `Delta[e + sum_g E_g] = (1 - phi) Delta e` that makes the RSLA's
+  non-conservation a known function of the gas energy change; measured, it loses
+  45% of a cell's energy in 400 coupling steps. `per_group = true` restores the
+  published prescription. Findings §4.
 
 ## Source terms
 
