@@ -145,7 +145,8 @@ end
 
 """
     radhydro_shock(; n = 256, closure = EddingtonClosure(), beta_order = 1,
-                   chat_factor = 10.0, kwargs...) -> (sim, tmax)
+                   chat_factor = 10.0, chat_limiter = ConstantChat(),
+                   kwargs...) -> (sim, tmax)
 
 The Mach 3 radiative shock of Lowrie & Edwards (2008), in the form used by
 Quokka's `RadhydroShock` test. This is the most demanding one-dimensional
@@ -175,14 +176,18 @@ semi-analytic solution is derived under -- exactly as Quokka overrides
 `ComputeEddingtonFactor` for this problem. Pass `closure = LevermoreClosure()`
 to measure what that assumption costs; the difference is the closure error, not
 a scheme error. `chat_factor` scales the reduced speed of light, whose default
-of `10 (v_0 + c_s0)` is Quokka's.
+of `10 (v_0 + c_s0)` is Quokka's -- and which is already a fairly aggressive
+reduction, `phi0 = chat/c = 0.023`. `chat_factor = 433` recovers `chat = c` and
+is the reference a `chat_limiter` should be scored against.
 
 Compare against [`radhydro_shock_exact`](@ref); `tmax` is three shock-crossing
 times.
 """
 function radhydro_shock(; n::Integer=256, nx::Integer=n,
                         closure::AbstractClosure=EddingtonClosure(),
-                        beta_order::Integer=1, chat_factor=10.0, kwargs...)
+                        beta_order::Integer=1, chat_factor=10.0,
+                        chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
+                        kwargs...)
     a_rad = 1.0e-4
     sigma_a = 1.0e6
     c_s0 = 1.0
@@ -205,7 +210,7 @@ function radhydro_shock(; n::Integer=256, nx::Integer=n,
     shock_position = 0.0130
 
     eos = IdealGas(; gamma, cv)
-    rad = RadiationPhysics(; c, chat, a_rad, closure, beta_order,
+    rad = RadiationPhysics(; c, chat, a_rad, closure, beta_order, chat_limiter,
                            opacity=UserOpacity((rho, T) -> kappa_abs / rho))
 
     egas(rho, T) = rho * cv * T
@@ -281,7 +286,8 @@ function radiation_shadow(; n=(280, 112), kappa=1.0, rho_blob=1e3, rho_bg=1e-2,
 end
 
 """
-    marshak_vaytet(; n = 64, ngroups = 4, Lx = 20.0, coupling = QuokkaCoupling(),
+    marshak_vaytet(; n = 64, ngroups = 4, Lx = 20.0, chat_over_c = 1.0,
+                   chat_limiter = ConstantChat(), coupling = QuokkaCoupling(),
                    closure = LevermoreClosure(), kwargs...) -> (sim, tmax)
 
 The frequency-dependent Marshak wave of Vaytet et al. (2011), in the form of
@@ -301,7 +307,9 @@ front. The number of groups is the convergence parameter of the test, hence
 count it lists (4 gives `6e10, 6e11, 6e12, 6e13, 6e14`).
 
 Everything is CGS, the medium is static (`hydro = false`, `beta_order = 0`) and
-`chat = c`. The opacity is piecewise constant across a group, evaluated at the
+`chat = c` unless `chat_over_c` says otherwise. This problem is genuinely
+time-dependent, so the answer *does* depend on the reduced speed of light: it is
+the one here that measures what a `chat_limiter` buys. The opacity is piecewise constant across a group, evaluated at the
 group's geometric centre, which is Quokka's `piecewise_constant_opacity` model.
 
 The domain length is a keyword because the choice matters and Quokka keeps it in
@@ -320,6 +328,8 @@ Has a [`default_metrics`](@ref) method: the front position and the near-wall
 radiation temperature.
 """
 function marshak_vaytet(; n::Integer=64, nx::Integer=n, ngroups::Integer=4, Lx=20.0,
+                        chat_over_c=1.0,
+                        chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
                         coupling::Hydro3D.AbstractCoupling=QuokkaCoupling(),
                         closure::AbstractClosure=LevermoreClosure(), kwargs...)
     rho0 = 1.0e-3               # g cm^-3
@@ -342,9 +352,9 @@ function marshak_vaytet(; n::Integer=64, nx::Integer=n, ngroups::Integer=4, Lx=2
     # to prevent.
     opacity = FrequencyOpacity((nu, rho, T) -> kappa0 * (nu_pivot / nu)^2)
 
-    rad = RadiationPhysics(; c=c, chat=c, a_rad=a_rad, k_B=k_B, groups=groups,
-                           opacity=opacity, closure=closure, coupling=coupling,
-                           beta_order=0)
+    rad = RadiationPhysics(; c=c, chat=c * chat_over_c, a_rad=a_rad, k_B=k_B,
+                           groups=groups, opacity=opacity, closure=closure,
+                           coupling=coupling, chat_limiter=chat_limiter, beta_order=0)
 
     # The wall: a Planck spectrum at T_L with no net flux. The HLL solver then
     # supplies the inward flux set by the jump across the boundary, exactly as in

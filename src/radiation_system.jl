@@ -99,8 +99,10 @@ end
 # reason `GREY`'s edges are: `chat_factor` is called with `T` arguments in the
 # inner loop and a `Float64` `beta` in a `Float32` run would promote every one.
 _convert_limiter(l::ConstantChat, ::Type{T}) where {T} = l
-_convert_limiter(l::StabilityBound, ::Type{T}) where {T} = StabilityBound(T(l.beta))
-_convert_limiter(l::OpticalDepthFit, ::Type{T}) where {T} = OpticalDepthFit(T(l.s), T(l.p))
+_convert_limiter(l::StabilityBound, ::Type{T}) where {T} =
+    StabilityBound(T(l.beta), l.per_group)
+_convert_limiter(l::OpticalDepthFit, ::Type{T}) where {T} =
+    OpticalDepthFit(T(l.s), T(l.p), l.per_group)
 
 # `GREY` is a Float64 constant; a Float32 simulation needs its own copy.
 _convert_groups(g::RadiationGroups{NG,M,T}, ::Type{T}) where {NG,M,T} = g
@@ -370,6 +372,59 @@ end
 # `rad_fluxes!` and `radiation_timestep` above do.
 
 """
+    _grid_scales(grid) -> (dx_min, sum_d 1/dx_d)
+
+The two grid numbers the limiter needs, over the *active* directions only: the
+cell width its optical depth is measured across, and the reciprocal-width sum the
+CFL number is built from (the same one `radiation_timestep` forms).
+
+A free function because both callers capture the result in a threaded closure,
+and a variable assigned inside a loop in the enclosing scope would be boxed --
+every cell would then allocate. That is not hypothetical: written inline it cost
+54 bytes a cell.
+"""
+@inline function _grid_scales(g::CartesianGrid{T}) where {T}
+    dxmin = T(Inf)
+    invdx = zero(T)
+    for d in 1:3
+        if g.active[d]
+            dxmin = min(dxmin, g.dx[d])
+            invdx += one(T) / g.dx[d]
+        end
+    end
+    return (dxmin, invdx)
+end
+
+"""
+    _signal_speed(closure, R, i, j, k, g, c) -> sig
+
+The fastest signal the M1 system carries in group `g` of this cell, as a fraction
+of `chat`: `sqrt(chi(|F|/cE))`, the same wave speed estimate `m1_flux` hands the
+HLL solver.
+
+`1/sqrt(3)` where the radiation is isotropic and one where it free-streams. It is
+the `sig` of [`chat_factor`](@ref), and computing it locally rather than assuming
+the isotropic value is what keeps [`StabilityBound`](@ref) honest in a
+free-streaming cell -- which is exactly the cell that has no source damping to
+spare.
+"""
+@inline function _signal_speed(cl::AbstractClosure, R::AbstractArray{T,4}, i, j, k,
+                               gr::Integer, c::T) where {T}
+    b = gbase(gr)
+    @inbounds er = R[b+IERAD, i, j, k]
+    er > 0 || return one(T) / sqrt(T(3))
+    ce = c * er
+    @inbounds fx = R[b+IFRX, i, j, k] / ce
+    @inbounds fy = R[b+IFRY, i, j, k] / ce
+    @inbounds fz = R[b+IFRZ, i, j, k] / ce
+    f = sqrt(fx * fx + fy * fy + fz * fz)
+    # `amend_rad` keeps `f < 1` in the interior, but this also runs in ghost
+    # cells filled by a user boundary condition, which nothing has repaired.
+    f < 1 || return one(T)
+    return sqrt(eddington_factor(cl, f))
+end
+
+"""
     update_chat!(chat, U, R, eos, phys, grid, floors, dt)
 
 Fill the per-cell, per-group reduced speed of light `chat[g, i, j, k]` from the
@@ -400,22 +455,14 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
     c = phys.c
     phi0 = phys.chat / c
     op = phys.opacity
+    cl = phys.closure
     groups = phys.groups
     arad = phys.a_rad
 
-    # `dx_min` over the active directions only: a degenerate direction has no
-    # structure to be transparent to. `invdx` is the same sum `radiation_timestep`
-    # forms, so `nu0` is the CFL number this step actually runs at -- which is
-    # what the stability bound is derived for, and never larger than the nominal
-    # `C_r` the paper uses.
-    dxmin = T(Inf)
-    invdx = zero(T)
-    for d in 1:3
-        if g.active[d]
-            dxmin = min(dxmin, g.dx[d])
-            invdx += one(T) / g.dx[d]
-        end
-    end
+    # `nu0` is the CFL number this step actually runs at -- which is what the
+    # stability bound is derived for, and never larger than the nominal `C_r` the
+    # paper uses.
+    dxmin, invdx = _grid_scales(g)
     nu0 = phi0 * c * dt * invdx
 
     rhomin = floors.rho
@@ -444,9 +491,27 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
             prat = max(arad * Tgas^4, Erad) / pressure(eos, rho, Eint)
 
             kappa = group_opacities(op, groups, rho, Tgas)
-            for gr in 1:NG
-                tau_cell = rho * kappa[gr] * dxmin
-                chat[gr, i, j, k] = c * chat_factor(lim, phi0, nu0, tau_cell, prat)
+            if NG == 1 || per_group(lim)
+                for gr in 1:NG
+                    tau_cell = rho * kappa[gr] * dxmin
+                    sig = _signal_speed(cl, R, i, j, k, gr, c)
+                    chat[gr, i, j, k] = c * chat_factor(lim, phi0, nu0, tau_cell, prat, sig)
+                end
+            else
+                # One `phi` for the whole cell: see [`per_group`](@ref) for why.
+                # `phi` is monotone in `tau_cell` and decreasing in `sig`, so the
+                # most restrictive group is the most transparent, most strongly
+                # beamed one, and the two extremes can be taken separately.
+                tau_cell = T(Inf)
+                sig = T(1) / sqrt(T(3))
+                for gr in 1:NG
+                    tau_cell = min(tau_cell, rho * kappa[gr] * dxmin)
+                    sig = max(sig, _signal_speed(cl, R, i, j, k, gr, c))
+                end
+                ch = c * chat_factor(lim, phi0, nu0, tau_cell, prat, sig)
+                for gr in 1:NG
+                    chat[gr, i, j, k] = ch
+                end
             end
         end
     end
@@ -478,10 +543,7 @@ function radiation_pressure_dt(U::AbstractArray{T,4}, R::AbstractArray{T,4},
     c = phys.c
     phi0 = phys.chat / c
     arad = phys.a_rad
-    invdx = zero(T)
-    for d in 1:3
-        g.active[d] && (invdx += one(T) / g.dx[d])
-    end
+    invdx = last(_grid_scales(g))
     rhomin = floors.rho
     pmin = floors.pressure
 

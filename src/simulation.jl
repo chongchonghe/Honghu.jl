@@ -565,10 +565,18 @@ end
 @inline _rad_dt(sim::Simulation, ::ConstantChat) =
     radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
 
-_rad_dt(sim::Simulation, ::AbstractChatLimiter) =
-    min(radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation),
-        radiation_pressure_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid,
-                              sim.cfl_radiation, sim.floors))
+function _rad_dt(sim::Simulation, ::AbstractChatLimiter)
+    dt = radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
+    # The radiation-force channel is a loop through the *gas velocity*: an
+    # amplified flux perturbation accelerates the gas, and the gas re-seeds the
+    # radiation on the next step. With hydrodynamics disabled the gas cannot
+    # move and the loop is open, so the constraint is pure cost -- on the Vaytet
+    # Marshak wave, a static problem with hot radiation over cold gas, it was
+    # 5.4x the steps for no change in the answer.
+    sim.hydro_enabled || return dt
+    return min(dt, radiation_pressure_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid,
+                                         sim.cfl_radiation, sim.floors))
+end
 
 """
     timestep(sim)
