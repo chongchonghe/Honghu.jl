@@ -41,7 +41,7 @@ function _coupling_ode!(du, u, s::CouplingState{NG,M,T}, _) where {NG,M,T}
     Erad = SVec{NG,T}(ntuple(g -> @inbounds(u[1+g]), Val(NG))...)
     dEgas, dErad = coupling_rhs(s, @inbounds(u[1]), Erad)
     invdt = one(T) / s.dt
-    @inbounds du[1] = dEgas - (s.c / s.chat) * sumvec(s.work) * invdt
+    @inbounds du[1] = dEgas - dot(gas_scale(s), s.work) * invdt
     @inbounds for g in 1:NG
         du[1+g] = dErad[g] + (s.src[g] + s.work[g]) * invdt
     end
@@ -241,7 +241,7 @@ _default_alg() = Rosenbrock23()
 function solve_coupling(m::AdaptiveCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}
     # The energy the cell has to play with, and hence what `abstol` is a
     # fraction of. Same scale the one-step solvers measure their residual against.
-    scale = max(abs(s.Egas + (s.c / s.chat) * (sumvec(s.Erad) + sumvec(s.src))), eps(T))
+    scale = max(abs(s.Egas + dot(gas_scale(s), s.Erad + s.src)), eps(T))
 
     # Start on the absorption time, `1 / (chat rho kappa_P)`, capped at the step
     # itself. The integrator's own initial-step heuristic is a norm ratio, and at
@@ -249,7 +249,7 @@ function solve_coupling(m::AdaptiveCoupling, s::CouplingState{NG,M,T}) where {NG
     # three orders too large; the physical timescale is right there in the state,
     # so hand it over instead. Zero opacity gives `Inf` and the cap takes `dt`.
     kappaP = first(coupling_opacity(s, gas_temperature_of(s, s.Egas)))
-    dt0 = min(s.dt, one(T) / (s.chat * s.rho * maxabs(kappaP)))
+    dt0 = min(s.dt, one(T) / (maxabs(s.chat) * s.rho * maxabs(kappaP)))
 
     prob = ODEProblem{true}(_ode_function(), _ode_initial(s), (zero(T), s.dt), s)
     sol = solve(prob, m.alg === nothing ? _default_alg() : m.alg;

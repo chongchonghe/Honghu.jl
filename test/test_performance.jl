@@ -72,18 +72,18 @@ end
                          sim) < LIMIT
     @test bytes_per_cell(() -> Hydro3D.reconstruct!(rw.qL, rw.qR, rw.prim, PPM(), Val(1),
                                                     g, Hydro3D.NRAD), sim) < LIMIT
-    @test bytes_per_cell(() -> Hydro3D.rad_fluxes!(rw.flux, rw.qL, rw.qR, sim.R, rad,
-                                                   Val(1), g), sim) < LIMIT
+    @test bytes_per_cell(() -> Hydro3D.rad_fluxes!(rw.flux, rw.qL, rw.qR, sim.R,
+                                                   rw.chat, rad, Val(1), g), sim) < LIMIT
     # the one that regressed
-    @test bytes_per_cell(() -> Hydro3D.radiation_source_step!(sim.U, sim.R, sim.eos, rad,
-                                                              g, 1e-3, nothing, 0.0,
-                                                              sim.floors), sim) < LIMIT
+    @test bytes_per_cell(() -> Hydro3D.radiation_source_step!(sim.U, sim.R, rw.chat,
+                                                              sim.eos, rad, g, 1e-3,
+                                                              nothing, 0.0, sim.floors), sim) < LIMIT
     # and with beta_order = 0, which takes the other branch
     rad0 = RadiationPhysics(c=10.0, chat=1.0, a_rad=1.0, opacity=ConstantOpacity(1.0),
                             beta_order=0)
-    @test bytes_per_cell(() -> Hydro3D.radiation_source_step!(sim.U, sim.R, sim.eos, rad0,
-                                                              g, 1e-3, nothing, 0.0,
-                                                              sim.floors), sim) < LIMIT
+    @test bytes_per_cell(() -> Hydro3D.radiation_source_step!(sim.U, sim.R, rw.chat,
+                                                              sim.eos, rad0, g, 1e-3,
+                                                              nothing, 0.0, sim.floors), sim) < LIMIT
 end
 
 @testset "a full step scales linearly in cells" begin

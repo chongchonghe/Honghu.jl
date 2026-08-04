@@ -230,12 +230,12 @@ DirectCoupling(; tolerance=1e-9, max_iterations::Integer=100,
 # --- Quokka's replaced base variables ----------------------------------------
 
 function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}
-    cscale = s.c / s.chat
-    kdt = s.dt * s.chat * s.rho
+    cs = gas_scale(s)
+    kdt = (s.dt * s.chat) * s.rho
 
     Egas = s.Egas
     Erad = s.Erad
-    Etot0 = s.Egas + cscale * (sumvec(s.Erad) + sumvec(s.src))
+    Etot0 = s.Egas + dot(cs, s.Erad + s.src)
 
     # Open from the *linearised* transfer at the old state, not from R = 0.
     # `R_g = dt rate_g + work_g` evaluated at the old state is exactly the shared
@@ -267,7 +267,7 @@ function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M
         # because the opacity is a function of the iterate -- Quokka's
         # `tau = dt * rho * kappaP * chat` sits inside its loop for the same
         # reason.
-        tau = kdt * kappaP
+        tau = mul(kdt, kappaP)
         kPoverE = _ratio(kappaP, kappaE, Val(NG))
 
         # Given R, the group energies follow in closed form -- this is the
@@ -288,7 +288,7 @@ function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M
         thin = _thin_mask(tau, fourPiBoverC, scale, m.tolerance, Val(NG))
         Erad = _blend(thin, s.Erad + s.src, Erad, Val(NG))
 
-        F0 = Egas - s.Egas + cscale * sumvec(Rvec)
+        F0 = Egas - s.Egas + dot(cs, Rvec)
         Fg = _residual_g(thin, Erad, s.Erad, Rvec, s.src, Val(NG))
 
         # Convergence on the residual, scaled by the total energy in the cell so
@@ -321,7 +321,7 @@ function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M
         # gives; written out here because the division is singular at
         # `kappaE = 0` and the branch belongs with the rest of this formulation.
         J00 = one(T)
-        J0g = cscale * one_svec(Val(NG), T)
+        J0g = cs
         Jg0 = (mul(kPoverE, dB_dT) +
                _dkappa_term(dkappaP, dkappaE, kappaE, fourPiBoverC, Erad,
                             Val(NG))) / s.cv
@@ -359,9 +359,9 @@ end
 # --- the natural variables ----------------------------------------------------
 
 function solve_coupling(m::DirectCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}
-    cscale = s.c / s.chat
-    kdt = (s.dt * s.chat * s.rho)
-    Etot0 = s.Egas + cscale * (sumvec(s.Erad) + sumvec(s.src))
+    cs = gas_scale(s)
+    kdt = (s.dt * s.chat) * s.rho
+    Etot0 = s.Egas + dot(cs, s.Erad + s.src)
 
     # The residual of this formulation cannot be *evaluated* below a floor set by
     # the optical depth. Its group term is tau (B - E), and at the solution B and
@@ -376,7 +376,7 @@ function solve_coupling(m::DirectCoupling, s::CouplingState{NG,M,T}) where {NG,M
     # makes the comparison against `QuokkaCoupling` an honest one. It is stated
     # here, rather than in either stepper, because it is a fact about the base
     # variables and binds whichever stepper is asked to solve in them.
-    tau_max = maxabs(kdt * first(coupling_opacity(s, gas_temperature_of(s, s.Egas))))
+    tau_max = maxabs(mul(kdt, first(coupling_opacity(s, gas_temperature_of(s, s.Egas)))))
     rtol = max(m.tolerance, 4 * eps(T) * max(tau_max, one(T)))
     atol = rtol * max(abs(Etot0), eps(T))
 
@@ -403,8 +403,7 @@ function backward_euler(::NewtonStepper, m::DirectCoupling, s::CouplingState{NG,
     # is `u - u0 - dt f(u)` with nothing added to it, which is also exactly the
     # step `ImplicitEulerStepper` takes -- the two steppers can only agree if the
     # constants are folded identically, and here they visibly are.
-    cscale = s.c / s.chat
-    gas0 = s.Egas - cscale * sumvec(s.work)
+    gas0 = s.Egas - dot(gas_scale(s), s.work)
     rad0 = s.Erad + s.src + s.work
 
     function residual(u)

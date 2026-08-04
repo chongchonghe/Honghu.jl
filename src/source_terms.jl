@@ -73,14 +73,12 @@ This method is the grey (`NG == 1`) driver; a multigroup `phys` selects
 
 Returns a [`SourceStats`](@ref).
 """
-function radiation_source_step!(U::A, R::A, eos::AbstractEOS,
+function radiation_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
                                 phys::RadiationPhysics{1,M,T},
                                 g::CartesianGrid{T}, dt::T, source::S, t::T,
                                 floors::Floors{T};
                                 update_momentum::Bool=true) where {M,T,A<:AbstractArray{T,4},S}
     c = phys.c
-    chat = phys.chat
-    cscale = c / chat
     arad = phys.a_rad
     op = phys.opacity
     cl = phys.closure
@@ -108,6 +106,12 @@ function radiation_source_step!(U::A, R::A, eos::AbstractEOS,
             Eint0 = U[IEGAS, i, j, k] - Ekin0
             Erad0 = R[IERAD, i, j, k]
             Frad0 = SVec(R[IFRX, i, j, k], R[IFRY, i, j, k], R[IFRZ, i, j, k])
+
+            # The reduced speed of light is a per-cell quantity under a `chat`
+            # limiter; the matter source terms are never scaled by it, which is
+            # what `cscale` puts back on the gas side of every exchange.
+            chat = chatarr[1, i, j, k]
+            cscale = c / chat
 
             # external radiation source, converted to an energy density added
             # over this step (with the reduced-speed-of-light rescaling)
@@ -320,6 +324,18 @@ boxing trap CLAUDE.md records.
     SVec{NG,T}(ntuple(gr -> @inbounds(R[gbase(gr)+C, i, j, k]), Val(NG))...)
 
 """
+    _group_chat(chat, i, j, k, Val(NG)) -> SVec{NG}
+
+Each group's reduced speed of light at cell `(i, j, k)`.
+
+The same shape as [`_group_component`](@ref), and a free function for the same
+reason, but the `chat` array is `(NG, i, j, k)` rather than `(4NG, i, j, k)`:
+there is one speed per group, not four.
+"""
+@inline _group_chat(chat::AbstractArray{T,4}, i, j, k, ::Val{NG}) where {T,NG} =
+    SVec{NG,T}(ntuple(gr -> @inbounds(chat[gr, i, j, k]), Val(NG))...)
+
+"""
     _beta_force(closure, Erad, F0x, F0y, F0z, kappa, B, m1, m2, m3, c, chat*dt)
         -> (SVec{NG}, SVec{NG}, SVec{NG})
 
@@ -333,12 +349,12 @@ the outer-iteration variables it would box them.
 @inline function _beta_force(cl::AbstractClosure, Erad::SVec{NG,T}, F0x::SVec{NG,T},
                              F0y::SVec{NG,T}, F0z::SVec{NG,T}, kap::SVec{NG,T},
                              B::SVec{NG,T}, m1::T, m2::T, m3::T, c::T,
-                             cdt::T) where {NG,T}
+                             cdt::SVec{NG,T}) where {NG,T}
     v = ntuple(Val(NG)) do gr
         ce = c * Erad[gr]
         tedd = eddington_tensor(cl, F0x[gr] / ce, F0y[gr] / ce, F0z[gr] / ce)
-        pl = cdt * kap[gr] * B[gr]
-        pk = cdt * kap[gr] * Erad[gr]
+        pl = cdt[gr] * kap[gr] * B[gr]
+        pk = cdt[gr] * kap[gr] * Erad[gr]
         (pl * m1 + pk * (m1 * tedd[1, 1] + m2 * tedd[1, 2] + m3 * tedd[1, 3]),
          pl * m2 + pk * (m1 * tedd[2, 1] + m2 * tedd[2, 2] + m3 * tedd[2, 3]),
          pl * m3 + pk * (m1 * tedd[3, 1] + m2 * tedd[3, 2] + m3 * tedd[3, 3]))
@@ -368,15 +384,12 @@ that reduces to the grey source exactly.
 
 Returns a [`SourceStats`](@ref).
 """
-function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
+function multigroup_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
                                  phys::RadiationPhysics{NG,M,T},
                                  g::CartesianGrid{T}, dt::T, source::S, t::T,
                                  floors::Floors{T};
                                  update_momentum::Bool=true) where {NG,M,T,A<:AbstractArray{T,4},S}
     c = phys.c
-    chat = phys.chat
-    cscale = c / chat
-    cdt = chat * dt
     arad = phys.a_rad
     kB = phys.k_B
     op = phys.opacity
@@ -409,6 +422,16 @@ function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
             F0y = _group_component(R, i, j, k, Val(NG), Val(IFRY))
             F0z = _group_component(R, i, j, k, Val(NG), Val(IFRZ))
 
+            # The reduced speed of light is per cell *and* per group under a
+            # `chat` limiter: the groups form independent hyperbolic subsystems,
+            # so each carries its own optical depth and its own bound. The
+            # matter side is never scaled, so wherever a per-group radiation
+            # quantity lands on the gas it is divided by that group's own
+            # `chat/c` -- `c * divide(x, chatv)` below, the vector form of the
+            # scalar `cscale` this loop used to hoist.
+            chatv = _group_chat(chatarr, i, j, k, Val(NG))
+            cdt = chatv * dt
+
             # The heat capacity is frozen at the old temperature for the whole
             # solve, as in Quokka; that sets how fast the iteration converges,
             # not what it converges to. The *opacity* is not: the law itself
@@ -426,18 +449,19 @@ function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
             src = zero(SVec{NG,T})
             if S !== Nothing
                 x, y, z = cellcenter(g, i, j, k)
-                stot = T(source(x, y, z, t)) * dt / cscale
-                src = stot * planck_fractions(grp, Tg, kB)
+                stot = T(source(x, y, z, t)) / c
+                src = stot * mul(planck_fractions(grp, Tg, kB), cdt)
             end
 
-            # scale for the lagged-work convergence test
-            Eref = Eint0 + cscale * (sumvec(Erad0) + sumvec(src))
+            # scale for the lagged-work convergence test: the total energy of
+            # the cell measured on the gas side, group by group.
+            Eref = Eint0 + c * sumvec(divide(Erad0 + src, chatv))
 
             # The first work estimate uses the old momentum and flux, as the
             # grey driver's does, so a single outer iteration already carries it.
             work = keep_beta ?
-                   mul(mom0[1] * F0x + mom0[2] * F0y + mom0[3] * F0z, kap) *
-                   (cdt / (c * c)) : zero(SVec{NG,T})
+                   mul(mom0[1] * F0x + mom0[2] * F0y + mom0[3] * F0z,
+                       mul(kap, cdt / (c * c))) : zero(SVec{NG,T})
             Eint = Eint0
             Erad = Erad0
             Fx = F0x
@@ -450,7 +474,7 @@ function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
                 res = solve_coupling(method,
                                      CouplingState{NG,M,T,typeof(op)}(Eint0, Erad0, src,
                                                                       work, rho, cv, op,
-                                                                      dt, c, chat, arad,
+                                                                      dt, c, chatv, arad,
                                                                       kB, grp, Tfloor,
                                                                       efloor))
                 Eint = res.Egas
@@ -463,7 +487,7 @@ function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
                 kapF = group_opacities(op, grp, rho, Tnew)
 
                 # --- flux, momentum ------------------------------------------
-                denom = (rho * cdt) * kapF + one(T)
+                denom = mul(rho * cdt, kapF) + one(T)
                 if keep_beta
                     B = (arad * Tnew^4) * planck_fractions(grp, Tnew, kB)
                     vx, vy, vz = _beta_force(cl, Erad, F0x, F0y, F0z, kapF, B,
@@ -477,10 +501,12 @@ function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
                     Fz = divide(F0z, denom)
                 end
 
-                # the gas feels the sum of the per-group flux changes
+                # the gas feels the sum of the per-group flux changes, each
+                # converted back at its own group's reduced speed
                 mom1 = update_momentum ?
-                       mom0 - SVec(sumvec(Fx - F0x), sumvec(Fy - F0y),
-                                   sumvec(Fz - F0z)) / (c * chat) : mom0
+                       mom0 - SVec(sumvec(divide(Fx - F0x, chatv)),
+                                   sumvec(divide(Fy - F0y, chatv)),
+                                   sumvec(divide(Fz - F0z, chatv))) / c : mom0
 
                 keep_beta || break
 
@@ -489,13 +515,16 @@ function multigroup_source_step!(U::A, R::A, eos::AbstractEOS,
                 Ekin1 = dot(mom1, mom1) / (2 * rho)
                 Eint -= Ekin1 - Ekin0
 
-                work_prev = work
-                work = mul(mom1[1] * Fx + mom1[2] * Fy + mom1[3] * Fz, kapF) *
-                       (cdt / (c * c))
-                wtot = sumvec(work)
-                dwork = abs(wtot - sumvec(work_prev))
-                if wtot == 0 || cscale * dwork < lag_tol * Eref ||
-                   dwork <= T(1e-8) * abs(wtot)
+                # The convergence test is on the work as the *gas* sees it, so
+                # that a per-group `chat` cannot make one group's contribution
+                # look larger or smaller than the energy it actually moves.
+                gwork_prev = c * sumvec(divide(work, chatv))
+                work = mul(mom1[1] * Fx + mom1[2] * Fy + mom1[3] * Fz,
+                            mul(kapF, cdt / (c * c)))
+                gwork = c * sumvec(divide(work, chatv))
+                dwork = abs(gwork - gwork_prev)
+                if gwork == 0 || dwork < lag_tol * Eref ||
+                   dwork <= T(1e-8) * abs(gwork)
                     break
                 end
             end
@@ -533,7 +562,9 @@ end
 
 # `RadiationPhysics{1}` is the more specific method above, so a grey run never
 # reaches this one and its numbers are exactly what they were before multigroup.
-radiation_source_step!(U::A, R::A, eos::AbstractEOS, phys::RadiationPhysics{NG,M,T},
+radiation_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
+                       phys::RadiationPhysics{NG,M,T},
                        g::CartesianGrid{T}, dt::T, source::S, t::T, floors::Floors{T};
                        update_momentum::Bool=true) where {NG,M,T,A<:AbstractArray{T,4},S} =
-    multigroup_source_step!(U, R, eos, phys, g, dt, source, t, floors; update_momentum)
+    multigroup_source_step!(U, R, chatarr, eos, phys, g, dt, source, t, floors;
+                            update_momentum)

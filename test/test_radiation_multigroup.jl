@@ -20,6 +20,16 @@ using Hydro3D: gbase, multigroup_source_step!, group_opacities, group_centers,
                solve_jacobian, maxabs
 using LinearAlgebra: cond          # only, so Hydro3D's own `dot`/`norm` still win
 
+"""
+A constant `chat` array of the shape the source drivers want.
+
+The reduced speed of light is a per-cell, per-group field now (see
+`update_chat!`), and these tests drive the source step directly rather than
+through `step!`, so they have to supply one. Filling it with `phys.chat` is
+exactly what the default `ConstantChat` limiter does.
+"""
+const_chat(phys, grid) = fill!(Hydro3D.allocate(grid, ngroups(phys)), phys.chat)
+
 "Group energies of a Planck spectrum at `Trad`, written into every interior cell."
 function set_planck!(sim, Trad)
     phys = sim.radiation
@@ -89,11 +99,11 @@ end
         rad = RadiationPhysics(c=1.0, chat=1.0, a_rad=1.0, beta_order=0,
                                opacity=ConstantOpacity(kappa))
         U, R = copy(U0), copy(R0)
-        radiation_source_step!(U, R, sim.eos, rad, sim.grid, 1e-3, nothing, 0.0,
-                               sim.floors; update_momentum=false)
+        radiation_source_step!(U, R, const_chat(rad, sim.grid), sim.eos, rad, sim.grid,
+                               1e-3, nothing, 0.0, sim.floors; update_momentum=false)
         Um, Rm = copy(U0), copy(R0)
-        multigroup_source_step!(Um, Rm, sim.eos, rad, sim.grid, 1e-3, nothing, 0.0,
-                                sim.floors; update_momentum=false)
+        multigroup_source_step!(Um, Rm, const_chat(rad, sim.grid), sim.eos, rad, sim.grid,
+                                1e-3, nothing, 0.0, sim.floors; update_momentum=false)
         @test isapprox(Um, U; rtol=1e-14)
         @test isapprox(Rm, R; rtol=1e-14)
         @test Rm != R0 || kappa == 0.0    # something actually happened
@@ -114,11 +124,11 @@ end
         rad = RadiationPhysics(c=1.0, chat=1.0, a_rad=1.0, beta_order=0,
                                opacity=PowerLawOpacity(; kappa0, rho0=1.0, T0=1.0, n))
         U, R = copy(U0), copy(R0)
-        radiation_source_step!(U, R, sim.eos, rad, sim.grid, 1e-3, nothing, 0.0,
-                               sim.floors; update_momentum=false)
+        radiation_source_step!(U, R, const_chat(rad, sim.grid), sim.eos, rad, sim.grid,
+                               1e-3, nothing, 0.0, sim.floors; update_momentum=false)
         Um, Rm = copy(U0), copy(R0)
-        multigroup_source_step!(Um, Rm, sim.eos, rad, sim.grid, 1e-3, nothing, 0.0,
-                                sim.floors; update_momentum=false)
+        multigroup_source_step!(Um, Rm, const_chat(rad, sim.grid), sim.eos, rad, sim.grid,
+                                1e-3, nothing, 0.0, sim.floors; update_momentum=false)
         @test isapprox(Um, U; rtol=1e-8)
         @test isapprox(Rm, R; rtol=1e-8)
         @test Rm != R0
@@ -144,11 +154,11 @@ end
             (rho=1.0, p=1.0, vx=0.2 * sinpi(2x), Erad=1.0, Fx=0.5 * c)
         end
         U, R = copy(sim2.U), copy(sim2.R)
-        sg = radiation_source_step!(sim2.U, sim2.R, sim2.eos, rad, sim2.grid, 1e-3, nothing,
-                                    0.0, sim2.floors)
+        sg = radiation_source_step!(sim2.U, sim2.R, const_chat(rad, sim2.grid), sim2.eos, rad,
+                                    sim2.grid, 1e-3, nothing, 0.0, sim2.floors)
         Um, Rm = copy(U), copy(R)
-        sm = multigroup_source_step!(Um, Rm, sim2.eos, rad, sim2.grid, 1e-3, nothing, 0.0,
-                                     sim2.floors)
+        sm = multigroup_source_step!(Um, Rm, const_chat(rad, sim2.grid), sim2.eos, rad,
+                                     sim2.grid, 1e-3, nothing, 0.0, sim2.floors)
         @test sg.failures == 0 && sm.failures == 0
         @test isapprox(Um, sim2.U; rtol=1e-12)
         @test isapprox(Rm, sim2.R; rtol=1e-12)
@@ -180,8 +190,11 @@ function cell_state(; NG=4, opacity, Tgas=1.3, Trad=0.5, rho=1.0, cv=1.0, dt=1e-
     grp = NG == 1 ? Hydro3D.GREY : RadiationGroups(0.1, 20.0, NG)
     Erad = (arad * Trad^4) * planck_fractions(grp, Trad, kB)
     z = zero(SVec{NG,Float64})
+    # `chat` is per group now; a scalar argument means the same speed for all of
+    # them, which is what every test here wants unless it says otherwise.
+    chatv = chat isa SVec ? chat : SVec{NG,Float64}(ntuple(_ -> Float64(chat), NG)...)
     CouplingState{NG,NG + 1,Float64,typeof(opacity)}(cv * Tgas, Erad, z, z, rho, cv,
-                                                     opacity, dt, c, chat, arad, kB, grp,
+                                                     opacity, dt, c, chatv, arad, kB, grp,
                                                      1e-10, 1e-30)
 end
 
@@ -422,7 +435,7 @@ end
         # `tau ~ 0.1` where each takes a different number of steps to get inside
         # it. Twenty times that leaves the bound tight enough to catch a stepper
         # that has genuinely started solving something else.
-        Etot = s.Egas + (s.c / s.chat) * sumvec(s.Erad)
+        Etot = s.Egas + Hydro3D.dot(Hydro3D.gas_scale(s), s.Erad)
         @test max(abs(ie.Egas - nw.Egas), maxabs(ie.Erad - nw.Erad)) <= 0.1e-9 * Etot
 
         # ... and they get there the same way. Two independent iterations, from
@@ -650,7 +663,8 @@ end
         set_initial_conditions!(sim) do x, y, z
             (rho=1.0, p=1.0, vx=0.3, Erad=1.0, Fx=0.5)
         end
-        f() = radiation_source_step!(sim.U, sim.R, sim.eos, rad, sim.grid, 1e-3, nothing,
+        cc = const_chat(rad, sim.grid)
+        f() = radiation_source_step!(sim.U, sim.R, cc, sim.eos, rad, sim.grid, 1e-3, nothing,
                                      0.0, sim.floors; update_momentum=beta_order > 0)
         f()
         @test minimum(@allocated(f()) for _ in 1:3) / prod(sim.grid.n) < LIMIT

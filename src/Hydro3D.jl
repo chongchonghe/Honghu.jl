@@ -69,6 +69,7 @@ include("constants.jl")
 include("planck.jl")     # RadiationGroups, needed by the multigroup opacity below
 include("eos.jl")
 include("opacity.jl")
+include("rsla.jl")             # the variable reduced speed of light, pointwise
 include("coupling.jl")            # per-cell matter-radiation coupling interface
 include("coupling_solvers.jl")    # ... and the two in-tree solvers
 include("coupling_ode.jl")        # ... and the two backed by OrdinaryDiffEq
@@ -108,6 +109,7 @@ export LevermoreClosure, EddingtonClosure
 # multigroup radiation
 export RadiationGroups, ngroups, planck_integral, planck_fractions
 export AbstractCoupling, QuokkaCoupling, DirectCoupling, AdaptiveCoupling
+export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 export AbstractBackwardEuler, NewtonStepper, ImplicitEulerStepper
 

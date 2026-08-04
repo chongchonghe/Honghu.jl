@@ -54,10 +54,11 @@ function bench_kernels(n=64)
         ("reconstruct PLM", () -> Hydro3D.reconstruct!(hw.qL, hw.qR, hw.prim, PLM(), Val(1), g, 5)),
         ("reconstruct PPM", () -> Hydro3D.reconstruct!(hw.qL, hw.qR, hw.prim, PPM(), Val(1), g, 5)),
         ("HLLC sweep", () -> Hydro3D.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(1), g)),
-        ("HLL rad sweep", () -> Hydro3D.rad_fluxes!(rw.flux, rw.qL, rw.qR, sim.R, sim.radiation, Val(1), g)),
-        ("implicit source", () -> Hydro3D.radiation_source_step!(sim.U, sim.R, sim.eos,
-                                                                 sim.radiation, g, 1e-3,
-                                                                 nothing, 0.0, sim.floors)),
+        ("HLL rad sweep", () -> Hydro3D.rad_fluxes!(rw.flux, rw.qL, rw.qR, sim.R, rw.chat, sim.radiation, Val(1), g)),
+        ("implicit source", () -> Hydro3D.radiation_source_step!(sim.U, sim.R, rw.chat,
+                                                                 sim.eos, sim.radiation,
+                                                                 g, 1e-3, nothing, 0.0,
+                                                                 sim.floors)),
     )
     @printf("\n%-18s %12s %14s %12s\n", "kernel at $(n)^3", "ms", "ns/cell", "KiB")
     println("-"^60)

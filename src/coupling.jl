@@ -87,7 +87,12 @@ properties, and the step.
     what [`heat_capacity`](@ref) returns, so `T = E_gas / cv` directly
   - `opacity`   : the opacity law, evaluated at whatever temperature the solver
     is currently at (see [`coupling_opacity`](@ref))
-  - `dt`, `c`, `chat`, `a_rad`, `k_B`
+  - `dt`, `c`, `a_rad`, `k_B`
+  - `chat`      : the reduced speed of light *of each group*. One number per
+    group rather than one per cell because a [`AbstractChatLimiter`](@ref) sets
+    it from the group's own cell optical depth; with the default
+    [`ConstantChat`](@ref) every entry is the same `phys.chat`. The gas side of
+    the exchange is never scaled by it -- see [`coupling_rhs`](@ref).
   - `groups`    : the frequency group structure, for the Planck fractions
   - `Tfloor`, `Efloor` : admissibility floors on gas temperature and group energy
 
@@ -109,7 +114,7 @@ struct CouplingState{NG,M,T<:AbstractFloat,O<:AbstractOpacity}
     opacity::O
     dt::T
     c::T
-    chat::T
+    chat::SVec{NG,T}
     a_rad::T
     k_B::T
     groups::RadiationGroups{NG,M,T}
@@ -148,6 +153,20 @@ function solve_coupling end
 Gas temperature from internal energy, floored. `cv` is volumetric, so `E_int = cv T`.
 """
 @inline gas_temperature_of(s::CouplingState, Egas) = max(Egas / s.cv, s.Tfloor)
+
+"""
+    gas_scale(state) -> SVec{NG}
+
+`c / chat_g`: what one unit of group `g`'s radiation energy costs the gas.
+
+The reduced speed of light scales the radiation side of the exchange and not the
+matter side, so every quantity that crosses from one to the other picks this up.
+It is a vector because each group may run at its own reduced speed; with the
+default [`ConstantChat`](@ref) every entry is the same number and `dot(gas_scale(s), x)`
+is `(c/chat) * sum(x)`.
+"""
+@inline gas_scale(s::CouplingState{NG,M,T}) where {NG,M,T} =
+    SVec{NG,T}(ntuple(g -> s.c / s.chat[g], Val(NG))...)
 
 """
     thermal_emission(state, T) -> SVec{NG}
@@ -212,8 +231,13 @@ The right-hand side of the coupling ODE, without the external source: the rate
 at which gas internal energy is lost and each group's radiation energy gained.
 
 Shared by every solver, so all three integrate demonstrably the same equations.
-`c/chat` appears on the gas side because the reduced speed of light rescales the
-radiation energy but not the matter's response to it.
+
+The unscaled exchange rate `rho (kappa_P B_g - kappa_E E_g)` is formed first and
+then scaled two different ways: the *radiation* side by that group's `chat`, and
+the *gas* side by the full `c`. That asymmetry is the reduced speed of light
+approximation itself -- and writing it this way is what lets each group carry its
+own `chat` without the gas equation acquiring a group index it has no business
+having.
 
 The opacity is evaluated *here*, at `Egas`'s own temperature, rather than
 frozen by the caller. That is what makes [`coupling_jacobian`](@ref) the true
@@ -223,8 +247,8 @@ derivative of this function when `kappa` depends on temperature.
     Tgas = gas_temperature_of(s, Egas)
     fourPiBoverC = thermal_emission(s, Tgas)
     kappaP, kappaE = coupling_opacity(s, Tgas)
-    rate = (s.chat * s.rho) * (mul(kappaP, fourPiBoverC) - mul(kappaE, Erad))
-    return (-(s.c / s.chat) * sumvec(rate), rate)
+    exch = s.rho * (mul(kappaP, fourPiBoverC) - mul(kappaE, Erad))
+    return (-s.c * sumvec(exch), mul(s.chat, exch))
 end
 
 """
@@ -258,13 +282,14 @@ end
 
 The exact Jacobian of [`coupling_rhs`](@ref) at `(Egas, Erad)`.
 
-With `rate_g = chat rho (kappa_P,g B_g(T) - kappa_E,g E_g)` and `T = E_gas / cv`,
+With `exch_g = rho (kappa_P,g B_g(T) - kappa_E,g E_g)` and `T = E_gas / cv`,
 
-    d rate_g / d E_gas = chat rho (dkappaP_g B_g + kappaP_g dB_g/dT
-                                   - dkappaE_g E_g) / cv
-    d rate_g / d E_g   = -chat rho kappaE_g
+    d exch_g / d E_gas = rho (dkappaP_g B_g + kappaP_g dB_g/dT
+                              - dkappaE_g E_g) / cv
+    d exch_g / d E_g   = -rho kappaE_g
 
-and the gas rows follow from `dE_gas/dt = -(c/chat) sum_g rate_g`.
+The radiation rows are these times that group's `chat`, and the gas rows are
+`-c` times their sum, exactly as in [`coupling_rhs`](@ref).
 
 The `dkappa/dT` terms are what make this *exact* rather than merely
 linear-in-`E`; they come from the opacity law through
@@ -290,13 +315,12 @@ is fixed and no dual number can flow through [`coupling_rhs`](@ref).
 
     # dT/dE_gas = 1/cv, the chain rule's only step: everything below is a
     # derivative with respect to T.
-    drate_dgas = (s.chat * s.rho / s.cv) *
+    dexch_dgas = (s.rho / s.cv) *
                  (mul(dkappaP, fourPiBoverC) + mul(kappaP, dB_dT) - mul(dkappaE, Erad))
-    drate_drad = -(s.chat * s.rho) * kappaE
+    dexch_drad = -s.rho * kappaE
 
-    cscale = s.c / s.chat
-    return CouplingJacobian{NG,T}(-cscale * sumvec(drate_dgas), -cscale * drate_drad,
-                                  drate_dgas, drate_drad)
+    return CouplingJacobian{NG,T}(-s.c * sumvec(dexch_dgas), -s.c * dexch_drad,
+                                  mul(s.chat, dexch_dgas), mul(s.chat, dexch_drad))
 end
 
 """
@@ -307,16 +331,16 @@ gas and the radiation rather than creating it, so the total is unchanged.
 """
 @inline function apply_energy_floors(s::CouplingState{NG,M,T}, Egas,
                                      Erad::SVec{NG,T}) where {NG,M,T}
-    cscale = s.c / s.chat
     Emin = s.cv * s.Tfloor
     ef = s.Efloor
 
     # Lift every group to the floor, and charge the total lifted to the gas, so
-    # the repair moves energy rather than creating it. Both `ntuple` closures
-    # below capture only values they do not assign; a running total updated
-    # inside one would be boxed and would allocate on every cell.
+    # the repair moves energy rather than creating it. Every group is converted
+    # to gas energy at its *own* `c/chat`. Both `ntuple` closures below capture
+    # only values they do not assign; a running total updated inside one would
+    # be boxed and would allocate on every cell.
     lifted = SVec{NG,T}(ntuple(g -> max(Erad[g], ef), Val(NG))...)
-    paid = cscale * (sumvec(lifted) - sumvec(Erad))
+    paid = s.c * sumvec(divide(lifted - Erad, s.chat))
     eg = Egas - paid
 
     eg >= Emin && return (eg, lifted)
@@ -325,10 +349,10 @@ gas and the radiation rather than creating it, so the total is unchanged.
     # every group in proportion to what it holds above its own floor, so the
     # spectrum keeps its shape instead of one group being singled out. Drawing
     # proportionally also avoids an argmax, whose runtime index into the group
-    # tuple was worth 16 bytes a cell.
-    headroom = sumvec(lifted) - NG * ef
-    need = (Emin - eg) / cscale
-    frac = headroom > 0 ? min(need / headroom, one(T)) : zero(T)
+    # tuple was worth 16 bytes a cell. `headroom` is measured on the gas side,
+    # which is the side the shortfall is on.
+    headroom = s.c * sumvec(divide(lifted - ef, s.chat))
+    frac = headroom > 0 ? min((Emin - eg) / headroom, one(T)) : zero(T)
     back = SVec{NG,T}(ntuple(g -> lifted[g] - frac * (lifted[g] - ef), Val(NG))...)
-    return (max(eg + cscale * frac * headroom, Emin), back)
+    return (max(eg + frac * headroom, Emin), back)
 end

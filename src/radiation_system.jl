@@ -18,7 +18,16 @@ Parameters of the two-moment (M1) radiation module, grey or multigroup.
     CFL condition and leaves the *static* diffusion and free-streaming limits
     intact; it does change dynamic-diffusion problems, so only reduce it when
     the radiation transport is much faster than every other signal in the
-    problem.
+    problem. With a `chat_limiter` other than the default this is the *nominal*
+    reduction `phi0 c`: a floor on the local `chat` and the speed the time step
+    is still set from, not the speed every cell runs at.
+  - `chat_limiter` : an [`AbstractChatLimiter`](@ref) making the reduced speed of
+    light local. The default, [`ConstantChat`](@ref), is the standard RSLA and a
+    bit-for-bit no-op; [`StabilityBound`](@ref) is the improved RSLA, which
+    raises `chat` towards `c` in cells optically thick on the grid scale, where
+    the RSLA equilibrates matter and radiation at the wrong temperature and
+    where the implicit coupling supplies the damping that makes the full speed
+    of light stable anyway.
   - `a_rad`   : radiation constant `4σ/c`, so that the equilibrium radiation
     energy density is `a_rad T⁴`.
   - `opacity` : an [`AbstractOpacity`](@ref).
@@ -49,7 +58,7 @@ Parameters of the two-moment (M1) radiation module, grey or multigroup.
     implicit coupling solve (see [`radiation_source_step!`](@ref)).
 """
 struct RadiationPhysics{NG,M,T<:AbstractFloat,O<:AbstractOpacity,C<:AbstractClosure,
-                        S<:AbstractCoupling}
+                        S<:AbstractCoupling,L<:AbstractChatLimiter}
     c::T
     chat::T
     a_rad::T
@@ -58,6 +67,7 @@ struct RadiationPhysics{NG,M,T<:AbstractFloat,O<:AbstractOpacity,C<:AbstractClos
     opacity::O
     closure::C
     coupling::S
+    chat_limiter::L
     beta_order::Int
     tolerance::T
     max_iterations::Int
@@ -69,6 +79,7 @@ function RadiationPhysics(; c, chat=c, a_rad, opacity,
                           k_B=1.0,
                           closure::AbstractClosure=LevermoreClosure(),
                           coupling::AbstractCoupling=QuokkaCoupling(),
+                          chat_limiter::AbstractChatLimiter=ConstantChat(),
                           beta_order::Integer=1,
                           tolerance=1e-9,
                           max_iterations::Integer=100,
@@ -79,9 +90,17 @@ function RadiationPhysics(; c, chat=c, a_rad, opacity,
     cc, cch, ar, kb, tol =
         promote(float(c), float(chat), float(a_rad), float(k_B), float(tolerance))
     gr = _convert_groups(groups, typeof(cc))
-    RadiationPhysics(cc, cch, ar, kb, gr, opacity, closure, coupling, Int(beta_order), tol,
+    RadiationPhysics(cc, cch, ar, kb, gr, opacity, closure, coupling,
+                     _convert_limiter(chat_limiter, typeof(cc)), Int(beta_order), tol,
                      Int(max_iterations), Int(max_outer_iterations))
 end
+
+# A limiter's parameters must be the simulation's float type, for the same
+# reason `GREY`'s edges are: `chat_factor` is called with `T` arguments in the
+# inner loop and a `Float64` `beta` in a `Float32` run would promote every one.
+_convert_limiter(l::ConstantChat, ::Type{T}) where {T} = l
+_convert_limiter(l::StabilityBound, ::Type{T}) where {T} = StabilityBound(T(l.beta))
+_convert_limiter(l::OpticalDepthFit, ::Type{T}) where {T} = OpticalDepthFit(T(l.s), T(l.p))
 
 # `GREY` is a Float64 constant; a Float32 simulation needs its own copy.
 _convert_groups(g::RadiationGroups{NG,M,T}, ::Type{T}) where {NG,M,T} = g
@@ -252,20 +271,27 @@ function rad_cons2prim!(rprim::A, R::A, phys::RadiationPhysics{NG,M,T},
 end
 
 """
-    rad_fluxes!(flux, qL, qR, R, phys, Val(D), grid)
+    rad_fluxes!(flux, qL, qR, R, chat, phys, Val(D), grid)
 
 Solve the HLL Riemann problem of the M1 system at every interface normal to
 direction `D`.
+
+`chat` is the per-cell, per-group reduced speed of light (see
+[`update_chat!`](@ref)); the interface uses the **minimum** of the two adjacent
+cells. That is the stable choice wherever it varies: an optically thick cell may
+locally run at the full speed of light, but letting it set the signal speed of a
+flux into a transparent neighbour would impose a CFL-violating speed there,
+where no source damping is available to control the resulting amplification.
 
 As in the hydro sweep, an inadmissible reconstructed state (non-positive energy
 density, or a reduced flux at or beyond the causal limit) falls back to the
 piecewise-constant state of the adjoining cells.
 """
-function rad_fluxes!(flux::A, qL::A, qR::A, R::A, phys::RadiationPhysics{NG,MM,T},
+function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::A,
+                     phys::RadiationPhysics{NG,MM,T},
                      ::Val{D}, g::CartesianGrid{T}) where {NG,MM,T,A<:AbstractArray{T,4},D}
     e1, e2, e3 = _shift(Val(D))
     c = phys.c
-    chat = phys.chat
     cl = phys.closure
     ir, jr, kr = face_ranges(g, Val(D))
     threaded_jk(jr, kr) do j, k
@@ -308,7 +334,9 @@ function rad_fluxes!(flux::A, qL::A, qR::A, R::A, phys::RadiationPhysics{NG,MM,T
                 FzR = R[b+IFRZ, i, j, k]
             end
 
-            F = hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chat, Val(D), cl)
+            chatf = min(chat[gr, im, jm, km], chat[gr, i, j, k])
+
+            F = hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chatf, Val(D), cl)
 
             flux[b+IERAD, i, j, k] = F[1]
             flux[b+IFRX, i, j, k] = F[2]
@@ -333,4 +361,150 @@ function radiation_timestep(phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
         g.active[d] && (s += one(T) / g.dx[d])
     end
     return T(cfl) / (phys.chat * s)
+end
+
+# --- the variable reduced speed of light -------------------------------------
+#
+# The rule itself is in `rsla.jl`; these are the two array-level drivers that
+# apply it. They live here because they sweep the radiation state exactly as
+# `rad_fluxes!` and `radiation_timestep` above do.
+
+"""
+    update_chat!(chat, U, R, eos, phys, grid, floors, dt)
+
+Fill the per-cell, per-group reduced speed of light `chat[g, i, j, k]` from the
+current state, over the *whole* array including ghost cells.
+
+Ghost cells are included because the transport step needs the limiter on both
+sides of every interface, including the ones bounding the domain; the limiter is
+purely local, so filling them costs one extra loop and no communication. `U` and
+`R` must already have had their own ghost cells filled.
+
+A [`ConstantChat`](@ref) limiter -- the default -- dispatches to a no-op: the
+array was filled with `phys.chat` when the simulation was built and cannot
+change.
+"""
+@inline update_chat!(chat, U, R, eos, phys, g, floors, dt) =
+    _fill_chat!(chat, phys.chat_limiter, U, R, eos, phys, g, floors, dt)
+
+@inline _fill_chat!(chat::AbstractArray{T,4}, ::ConstantChat, U::AbstractArray{T,4},
+                    R::AbstractArray{T,4}, eos::AbstractEOS,
+                    phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
+                    floors::Floors{T}, dt::T) where {NG,M,T} = chat
+
+function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
+                     U::AbstractArray{T,4}, R::AbstractArray{T,4}, eos::AbstractEOS,
+                     phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
+                     floors::Floors{T}, dt::T) where {NG,M,T}
+    n1, n2, n3 = g.dims
+    c = phys.c
+    phi0 = phys.chat / c
+    op = phys.opacity
+    groups = phys.groups
+    arad = phys.a_rad
+
+    # `dx_min` over the active directions only: a degenerate direction has no
+    # structure to be transparent to. `invdx` is the same sum `radiation_timestep`
+    # forms, so `nu0` is the CFL number this step actually runs at -- which is
+    # what the stability bound is derived for, and never larger than the nominal
+    # `C_r` the paper uses.
+    dxmin = T(Inf)
+    invdx = zero(T)
+    for d in 1:3
+        if g.active[d]
+            dxmin = min(dxmin, g.dx[d])
+            invdx += one(T) / g.dx[d]
+        end
+    end
+    nu0 = phi0 * c * dt * invdx
+
+    rhomin = floors.rho
+    pmin = floors.pressure
+
+    threaded_jk(1:n2, 1:n3) do j, k
+        @inbounds for i in 1:n1
+            rho = U[IRHO, i, j, k]
+            rho < rhomin && (rho = rhomin)
+            mx = U[IMX, i, j, k]
+            my = U[IMY, i, j, k]
+            mz = U[IMZ, i, j, k]
+            Eint = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
+            emin = internal_energy(eos, rho, pmin)
+            Eint < emin && (Eint = emin)
+            Tgas = temperature(eos, rho, Eint)
+
+            # P_rad/P_gas, with `max(a T^4, E_rad)` so that a cell whose gas is
+            # hot but whose radiation has not caught up is still recognised as
+            # radiation-pressure dominated, and vice versa. Summed over groups:
+            # the force on the gas does not care which group carried it.
+            Erad = zero(T)
+            for gr in 1:NG
+                Erad += R[gbase(gr)+IERAD, i, j, k]
+            end
+            prat = max(arad * Tgas^4, Erad) / pressure(eos, rho, Eint)
+
+            kappa = group_opacities(op, groups, rho, Tgas)
+            for gr in 1:NG
+                tau_cell = rho * kappa[gr] * dxmin
+                chat[gr, i, j, k] = c * chat_factor(lim, phi0, nu0, tau_cell, prat)
+            end
+        end
+    end
+    return chat
+end
+
+"""
+    radiation_pressure_dt(U, R, eos, phys, grid, cfl, floors) -> dt
+
+The time-step constraint that radiation pressure imposes on the transport step,
+`dt = cfl / (c max(phi0, 2 P) sum_d 1/dx_d)` minimised over interior cells, with
+`P = max(a_rad T^4, E_rad)/P_gas`.
+
+This is the same feedback loop that [`StabilityBound`](@ref)'s `phi_P` channel
+caps, in the regime where capping `phi` cannot help: at `2 P > phi0` even
+`phi = phi0` -- the standard RSLA itself -- is unstable, and `phi` is already at
+its floor, so only the step can give. Returns the ordinary RSLA step wherever
+radiation pressure is not dynamically significant, which is almost everywhere.
+
+Evaluated only when a limiter other than [`ConstantChat`](@ref) is in use. Not
+because the RSLA is exempt from the instability -- it is not -- but because
+adding a step restriction to the default path would silently change every
+existing result.
+"""
+function radiation_pressure_dt(U::AbstractArray{T,4}, R::AbstractArray{T,4},
+                               eos::AbstractEOS, phys::RadiationPhysics{NG,M,T},
+                               g::CartesianGrid{T}, cfl::Real,
+                               floors::Floors{T}) where {NG,M,T}
+    c = phys.c
+    phi0 = phys.chat / c
+    arad = phys.a_rad
+    invdx = zero(T)
+    for d in 1:3
+        g.active[d] && (invdx += one(T) / g.dx[d])
+    end
+    rhomin = floors.rho
+    pmin = floors.pressure
+
+    # The largest `max(phi0, 2 P)` over interior cells sets the smallest step.
+    speed = reduce_max_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3], T) do j, k
+        local m = phi0
+        @inbounds for i in g.lo[1]:g.hi[1]
+            rho = U[IRHO, i, j, k]
+            rho < rhomin && (rho = rhomin)
+            mx = U[IMX, i, j, k]
+            my = U[IMY, i, j, k]
+            mz = U[IMZ, i, j, k]
+            Eint = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
+            emin = internal_energy(eos, rho, pmin)
+            Eint < emin && (Eint = emin)
+            Tgas = temperature(eos, rho, Eint)
+            Erad = zero(T)
+            for gr in 1:NG
+                Erad += R[gbase(gr)+IERAD, i, j, k]
+            end
+            m = max(m, 2 * max(arad * Tgas^4, Erad) / pressure(eos, rho, Eint))
+        end
+        return m
+    end
+    return T(cfl) / (c * speed * invdx)
 end

@@ -117,6 +117,13 @@ end
     RadiationWorkspace{T}
 
 Scratch arrays for the radiation sweeps and the IMEX stages.
+
+`chat` is the odd one out: it is `(ngroups, i, j, k)` rather than
+`(nradvars, i, j, k)`, and it holds the local reduced speed of light rather than
+a state (see [`update_chat!`](@ref)). It is filled with the constant
+`phys.chat` when the simulation is built, so a run with the default
+[`ConstantChat`](@ref) limiter reads exactly the number it always did and never
+writes to it again.
 """
 struct RadiationWorkspace{T<:AbstractFloat}
     prim::Array{T,4}
@@ -126,12 +133,14 @@ struct RadiationWorkspace{T<:AbstractFloat}
     dR::Array{T,4}
     Rtmp::Array{T,4}
     Utmp::Array{T,4}
+    chat::Array{T,4}
 end
 
-function RadiationWorkspace(g::CartesianGrid{T}, nrad::Integer=NRAD) where {T}
+function RadiationWorkspace(g::CartesianGrid{T}, nrad::Integer=NRAD,
+                            ng::Integer=nrad ÷ NRAD) where {T}
     RadiationWorkspace(allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
                        allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
-                       allocate(g, NHYDRO))
+                       allocate(g, NHYDRO), allocate(g, ng))
 end
 
 """
@@ -237,7 +246,11 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     U = allocate(grid, NHYDRO)
     nrad = radiation === nothing ? 0 : nradvars(radiation)
     Rarr = radiation === nothing ? Array{T,4}(undef, 0, 0, 0, 0) : allocate(grid, nrad)
-    rw = radiation === nothing ? nothing : RadiationWorkspace(grid, nrad)
+    rw = radiation === nothing ? nothing :
+         RadiationWorkspace(grid, nrad, ngroups(radiation))
+    # The limiter only ever raises `chat` above this floor, and `ConstantChat`
+    # leaves it here for the whole run.
+    rw === nothing || fill!(rw.chat, T(radiation.chat))
     fl = Floors(T(floors.rho), T(floors.pressure), T(floors.erad))
     Simulation(grid, eos, radiation, reconstruction, radiation_reconstruction,
                riemann, integrator, boundaries,
@@ -407,7 +420,7 @@ function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}) where {D}
     g = sim.grid
     nrad = nradvars(sim.radiation)
     reconstruct!(rw.qL, rw.qR, rw.prim, sim.radiation_reconstruction, Val(D), g, nrad)
-    rad_fluxes!(rw.flux, rw.qL, rw.qR, R, sim.radiation, Val(D), g)
+    rad_fluxes!(rw.flux, rw.qL, rw.qR, R, rw.chat, sim.radiation, Val(D), g)
     flux_divergence!(dR, rw.flux, Val(D), g, nrad)
     return nothing
 end
@@ -449,6 +462,28 @@ function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
     return sim
 end
 
+# Recompute the local reduced speed of light for one IMEX stage from the state
+# that stage is about to transport. A no-op under `ConstantChat`, down to the
+# ghost fills -- which is what makes the default path bit-for-bit unchanged.
+@inline _stage_chat!(sim::Simulation, U, R, dt, t) =
+    _stage_chat!(sim, sim.radiation.chat_limiter, U, R, dt, t)
+
+@inline _stage_chat!(::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Array{T,4},
+                     dt::T, t::T) where {T} = nothing
+
+function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
+                      R::Array{T,4}, dt::T, t::T) where {T}
+    g = sim.grid
+    # The limiter is evaluated in ghost cells as well, so that the transport
+    # step has a value on both sides of every interface bounding the domain.
+    # `rad_rhs!` fills `R`'s ghosts again a moment later, which costs one
+    # boundary sweep and keeps the ordering here independent of what it does.
+    fill_ghosts!(U, sim.boundaries, g, t)
+    fill_ghosts!(R, sim.radiation_boundaries, g, t)
+    update_chat!(sim.rw.chat, U, R, sim.eos, sim.radiation, g, sim.floors, dt)
+    return nothing
+end
+
 """
     imex_substep!(sim, dt, t)
 
@@ -458,6 +493,13 @@ Stage 1 is the identity and is skipped. Stage 2 takes a forward-Euler transport
 step into scratch storage and applies the implicit coupling there; stage 3
 forms the Shu-Osher combination of the two stages, adds the transport of the
 stage-2 state, and applies the implicit coupling again.
+
+Each stage begins by recomputing the local reduced speed of light from the state
+that stage transports, so the transport and the coupling that follows it see the
+same `chat` -- the order the improved RSLA is derived for, in which every
+explicit stage is immediately followed by the implicit solve that damps what it
+amplified. With the default [`ConstantChat`](@ref) limiter the two
+[`update_chat!`](@ref) calls are no-ops.
 """
 function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     g = sim.grid
@@ -467,21 +509,25 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     upd = sim.hydro_enabled
 
     # --- stage 2: U(2) = U^n + dt Aex21 s(U^n), then implicit coupling -------
+    _stage_chat!(sim, sim.U, sim.R, dt, t)
     rad_rhs!(rw.dR, sim.R, sim, t)
     combine!(rw.Rtmp, one(T), sim.R, zero(T), sim.R, T(IMEX_AEX_21) * dt, rw.dR, g,
              nradvars(sim.radiation))
     copyto!(rw.Utmp, sim.U)
     amend_rad_state!(rw.Rtmp, phys, g, fl)
-    s1 = radiation_source_step!(rw.Utmp, rw.Rtmp, sim.eos, phys, g, T(IMEX_AIM_22) * dt,
+    s1 = radiation_source_step!(rw.Utmp, rw.Rtmp, rw.chat, sim.eos, phys, g,
+                                T(IMEX_AIM_22) * dt,
                                 sim.source, t + dt, fl; update_momentum=upd)
 
     # --- stage 3: Shu-Osher combination + implicit coupling ------------------
+    _stage_chat!(sim, rw.Utmp, rw.Rtmp, dt, t + dt)
     rad_rhs!(rw.dR, rw.Rtmp, sim, t + dt)
     combine!(sim.R, T(1 - IMEX_ALPHA), sim.R, T(IMEX_ALPHA), rw.Rtmp,
              T(IMEX_AEX_32) * dt, rw.dR, g, nradvars(sim.radiation))
     combine_gas!(sim.U, T(IMEX_ALPHA), rw.Utmp, g)
     amend_rad_state!(sim.R, phys, g, fl)
-    s2 = radiation_source_step!(sim.U, sim.R, sim.eos, phys, g, T(IMEX_AIM_33) * dt,
+    s2 = radiation_source_step!(sim.U, sim.R, rw.chat, sim.eos, phys, g,
+                                T(IMEX_AIM_33) * dt,
                                 sim.source, t + dt, fl; update_momentum=upd)
     return s1 + s2
 end
@@ -493,7 +539,7 @@ Subcycle the radiation subsystem over one hydro step, using as many IMEX
 substeps as the radiation CFL condition requires.
 """
 function advance_radiation!(sim::Simulation{T}, dt::T) where {T}
-    dtr = radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
+    dtr = _rad_dt(sim)
     nsub = max(1, ceil(Int, dt / dtr))
     dts = dt / nsub
     stats = SourceStats()
@@ -508,6 +554,21 @@ function advance_radiation!(sim::Simulation{T}, dt::T) where {T}
 end
 
 # --- driver ------------------------------------------------------------------
+
+# The radiation transport step: the RSLA CFL condition, plus -- only when a
+# `chat` limiter is active -- the radiation-force feedback bound. That bound
+# constrains the standard RSLA too, but adding a step restriction to the default
+# path would silently change every existing result, so it rides with the
+# limiter that also implements the other half of the same constraint.
+@inline _rad_dt(sim::Simulation) = _rad_dt(sim, sim.radiation.chat_limiter)
+
+@inline _rad_dt(sim::Simulation, ::ConstantChat) =
+    radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
+
+_rad_dt(sim::Simulation, ::AbstractChatLimiter) =
+    min(radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation),
+        radiation_pressure_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid,
+                              sim.cfl_radiation, sim.floors))
 
 """
     timestep(sim)
@@ -526,7 +587,7 @@ function timestep(sim::Simulation{T}) where {T}
         dt = hydro_timestep(sim.hw.prim, sim.eos, sim.grid, sim.cfl)
     end
     if has_radiation(sim)
-        dtr = radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
+        dtr = _rad_dt(sim)
         if !sim.hydro_enabled
             dt = dtr
         elseif dt > sim.max_radiation_substeps * dtr
