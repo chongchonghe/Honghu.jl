@@ -62,9 +62,11 @@ evaluated per cell through the same `eddington_factor` the Riemann solver uses. 
 
 Two side effects of the correction are worth naming. The cell optical depth beyond which no reduction is needed becomes $\tau_\mathrm{cell} \geq 2\sigma$ rather than $2/\sqrt{3} \approx 1.15$, so it is $2$ in a free-streaming cell and $1.15$ in an isotropic one. And the transparent-cell limit becomes $\phi \leq \phi_0/(\sigma\, C_r)$, which is the ordinary Courant condition at the true signal speed rather than at the P1 one.
 
-## 3. Accuracy is not monotonic in $\phi$
+## 3. Accuracy is not monotonic in $\phi$ — here, but not in Quokka
 
-The paper's argument for taking the largest stable $\phi$ rests on accuracy increasing monotonically with $\phi$. On the shock it does not. Scanning the safety factor $\beta$, which scales both stability channels:
+**Cross-check, 2026-08-19: this section does not reproduce in Quokka and should not be carried into the paper.** The same scan run on Quokka's Mach 5 supercritical shock is cleanly monotone — $L_1$ errors of 1.29%, 0.50%, 0.23%, 0.12% and 0.068% at $\beta = 0.3, 0.5, 0.7, 0.9, 1.0$, then 172% at $\beta = 1.2$ — so the premise holds there and the stability cliff sits exactly at $\beta = 1$ where the derivation puts it. What follows is a property of this code, or of the Mach 3 problem, and the mechanism proposed below is a conjecture that the Quokka result argues against. It is kept because the difference between the two codes is itself worth understanding.
+
+The paper's argument for taking the largest stable $\phi$ rests on accuracy increasing monotonically with $\phi$. On the shock, in Hydro3D, it does not. Scanning the safety factor $\beta$, which scales both stability channels:
 
 | $\beta$ | shock $L_1$ | Vaytet $L_1$ | Vaytet max $T$ |
 |---:|---:|---:|---:|
@@ -118,7 +120,26 @@ The open question in the project's handoff notes is what happens as the grid is 
 
 The IRSLA error falls by a factor of 3.5 from $n = 64$ to $n = 512$ while the RSLA error is flat, or slightly rising. That is the more important statement: **the IRSLA converges under refinement and the RSLA does not.** The RSLA's error is a modelling error, not a discretisation error, so refining the grid cannot remove it; the IRSLA reduces it to something that refines away. The gain factor grows because the denominator shrinks, not because the numerator grows.
 
-## 6. Smaller points
+## 6. What happened when these were checked against Quokka
+
+All of section 2 and section 4 were confirmed by reading Quokka's `ComputeReducedSpeedOfLightFactor` and its multigroup source term, and the section 2 correction was implemented and measured there. Quokka is now at `0bf3741b` on `chong/iRSLA-framework-202607-improved`, with `radiation.variable_chat_legacy` restoring the published behaviour bit by bit.
+
+Confirmed and fixed in Quokka:
+
+| | effect on Quokka's own tests |
+|:---|:---|
+| the $P_1$ signal speed in the bound (§2) | supercritical shock 0.159% $\to$ 0.116%; Vaytet at $\phi_0 = 0.01$, 8.30% $\to$ 3.65% |
+| the bound evaluated at the nominal rather than the actual CFL number (§6, third point) | Vaytet 3.65% $\to$ 1.97% with $\sigma$ also corrected; **57%** with $\sigma$ left alone |
+| $\beta$ multiplying an absent bound, capping $\phi$ at 0.9 in thick cells | no measurable effect; makes the paper's conservation claim true |
+| the interface reading a cell the face does not touch (new, found in Quokka) | $\leq 0.2\%$ on the Vaytet wave, zero on the shock |
+
+The third row is the important one. Quokka's Vaytet runs stepped at $C_r = 0.4$ while evaluating the bound at $0.3$, so every $\phi$ exceeded the derivation by a third. Correcting that alone — unambiguously the right thing to do in isolation — takes the error from 8.3% to 57% and drives the slab to 1118 K under a 1000 K wall. The two errors were partly cancelling, which is why the published campaign looked healthy, and why they have to be fixed together.
+
+Found and confirmed, but **not** acted on in Quokka: the per-group $\phi$ of section 4. The identity fails there exactly as it does here — Quokka's multigroup source term carries `cscale[g] = 1/phi_g` — but per-group is *slightly more accurate* on the Vaytet wave, so it stays a decision rather than a bug.
+
+Not reproduced: the non-monotonicity of section 3, as noted above.
+
+## 7. Smaller points
 
 **The paper contradicts itself on the interface value.** Section 5's transport paragraph defines $\phi_{i+1/2} = \min(\phi_i, \phi_{i+1})$ and argues for it at length — an optically thick cell must not impose a CFL-violating signal speed on a transparent neighbour that has no source damping to control the amplification. The algorithm summary at the end of the same section says $\hat{c}_{i+1/2} = \max(\phi_i, \phi_{i+1})c$. The argument is right and the summary is a typo. Hydro3D implements the minimum, and `test/test_rsla.jl` asserts it.
 
@@ -126,7 +147,7 @@ The IRSLA error falls by a factor of 3.5 from $n = 64$ to $n = 512$ while the RS
 
 **Evaluate the bound at the step actually being taken.** The paper writes the bound in terms of the code's nominal radiation CFL number $C_r$, on the assumption that $\Delta t = C_r \Delta x/(\phi_0 c)$. When the step is shorter than that — because hydrodynamics limited it, or because subcycling divided it unevenly — the nominal form understates how much $\phi$ is available. Hydro3D forms $\nu_0 = \phi_0 c \Delta t \sum_d 1/\Delta x_d$ from the actual step, which reduces to $C_r$ whenever the radiation CFL is what binds and is never less conservative than the nominal form.
 
-## 7. What would be worth doing next
+## 8. What would be worth doing next
 
 The non-monotonicity in section 3 is the loose end that matters. If the mechanism really is the HLL numerical diffusion, then the accuracy argument that justifies "take the largest stable $\phi$" needs a second term, and the right local $\phi$ is where the two errors balance. That balance is computable: the RSLA error scales as $(1-\phi)$ times something the coupling already knows, and the HLL diffusion scales as $\phi\, c\, \Delta x$ times a gradient the transport step already forms. A limiter built on the balance rather than on the bound alone would be a genuinely different rule, and section 3's table says there is roughly a factor of two in it on the shock.
 
