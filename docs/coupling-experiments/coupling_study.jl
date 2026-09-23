@@ -688,6 +688,37 @@ function section_derivation()
                 r.iterations, r.converged)
     end
     println("  the root of this cell is 1.210310446")
+
+    # findings section 5.4: the bracket. G is <= 0 at the temperature floor and
+    # >= 0 at the cell's total energy, and at that upper probe it reduces exactly
+    # to sum_g (c/chat_g) E_g -- the first and last terms of G cancel outright.
+    println("\n== the bracket, over every cell of the robustness sweep ==")
+    worst_lo = -Inf
+    worst_hi = Inf
+    identity_dev = 0.0
+    bad = 0
+    cases = 0
+    for (_, mk) in LAWS, (Tg, Tr) in STATES, tau in TAUS
+        s = cell_state(; NG=4, opacity=mk(tau / DT), Tgas=Tg, Trad=Tr, dt=DT)
+        cs = gas_scale(s)
+        gas0 = s.Egas - dot(cs, s.work)
+        rad0 = s.Erad + s.src + s.work
+        Etot = s.Egas + dot(cs, s.Erad + s.src)
+        _, Glo, _ = _reduced(s, s.cv * s.Tfloor, gas0, rad0)
+        Ehi, Ghi, _ = _reduced(s, Etot, gas0, rad0)
+        sum_hi = dot(cs, Ehi)
+        identity_dev = max(identity_dev,
+                           abs(Ghi - sum_hi) / max(abs(Ghi), abs(sum_hi), Etot))
+        worst_lo = max(worst_lo, Glo / Etot)
+        worst_hi = min(worst_hi, Ghi / Etot)
+        (Glo > 0 || Ghi < 0) && (bad += 1)
+        cases += 1
+    end
+    @printf("  cases                                            %6d\n", cases)
+    @printf("  worst G(cv*Tfloor) / E_tot        (want <= 0)  %10.3e\n", worst_lo)
+    @printf("  worst G(E_tot)     / E_tot        (want >= 0)  %10.3e\n", worst_hi)
+    @printf("  max |G(E_tot) - sum_g (c/chat) E_g|, relative  %10.3e\n", identity_dev)
+    @printf("  cells where [cv*Tfloor, E_tot] fails to bracket  %6d\n", bad)
 end
 
 # --- driver -------------------------------------------------------------------

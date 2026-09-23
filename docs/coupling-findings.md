@@ -200,15 +200,27 @@ $G$ is (new total energy) minus (old total energy). That is worth saying plainly
 
 ### 5.4 Step 3: the bracket, and why it always exists
 
-**Lower end.** Take $E_\mathrm{gas} = c_V T_\mathrm{floor}$. Every $B_g(T) \to 0$ there, and $E_g$ is a convex combination of $\mathrm{rad0}_g$ and $B_g$, so $E_g \le \mathrm{rad0}_g$. Hence
+One thing to fix before the algebra, because it is the easiest step to misread. $G$ is a *function of a trial value* of $E_\mathrm{gas}$, not a statement about the cell. We are free to evaluate it anywhere, including at gas energies the cell could never actually have, and that is exactly what bracketing means: probe below the answer and above it, and check that the sign differs. The probe points below are deliberately too cold and the probe points above are deliberately impossible.
 
-$$G(c_V T_\mathrm{floor}) \;\le\; c_V T_\mathrm{floor} + \sum_g \frac{c}{\hat c_g}\,W_g - E_\mathrm{gas}^0 ,$$
+**Lower end: probe $E_\mathrm{gas} = c_V T_\mathrm{floor}$, too cold to be the answer.** Every $B_g(T) \to 0$ there, and $E_g$ is a convex combination of $\mathrm{rad0}_g$ and $B_g$, so $E_g \le \mathrm{rad0}_g$. Hence
 
-which is negative whenever the gas starts above its floor and the work term does not by itself exceed the gas energy. With $W_g = 0$ — every run in this study, and any run with `beta_order = 0` — it is unconditional, because the state is admissible between steps. The step also needs $\kappa_{P,g}B_g \to 0$ as $T \to 0$, which holds for any $\kappa \propto T^n$ with $n > -4$ and for any physical opacity.
+$$G(c_V T_\mathrm{floor}) \;\le\; c_V T_\mathrm{floor} + \sum_g \frac{c}{\hat c_g}\,W_g - E_\mathrm{gas}^0 \;\le\; 0 ,$$
 
-**Upper end.** Every $E_g \ge 0$, so $G(E_\mathrm{gas}) \ge E_\mathrm{gas} - \mathcal{E}$, which is non-negative as soon as $E_\mathrm{gas} \ge \mathcal{E}$ — that is, once the gas alone is asked to hold more than the cell's total energy. The code starts at $\max(4\mathcal{E},\, 4E_\mathrm{gas}^0)$ and widens by factors of four (`coupling_study.jl:220-224`) in case a negative work term has shifted things, then checks both ends and reports `converged = false` rather than guessing if the bracket still is not there (`:225`). That branch never fired in 240 sweep cases or in any test problem.
+the last step holding whenever the gas starts above its own floor and the work term does not by itself exceed the gas energy. With $W_g = 0$ — every run in this study, and any run with `beta_order = 0` — it is unconditional, because the state is admissible between steps. It also needs $\kappa_{P,g}B_g \to 0$ as $T \to 0$, which holds for any $\kappa \propto T^n$ with $n > -4$ and for any physical opacity.
 
-**So $G$ changes sign on $[c_V T_\mathrm{floor},\, \sim\!\mathcal{E}]$ for every cell, always.** Bisection alone would converge; Newton inside the bracket converges fast and cannot leave it.
+**Upper end: probe $E_\mathrm{gas} = \mathcal{E}$, the whole cell's energy in the gas.** That state is impossible — the gas cannot hold every erg in the cell while the radiation still holds some — and its impossibility is the point, because it is what forces the sign. Put $E_\mathrm{gas} = \mathcal{E}$ into
+
+$$G(E_\mathrm{gas}) = E_\mathrm{gas} + \sum_g \frac{c}{\hat c_g} E_g(T) - \mathcal{E}$$
+
+and the first and last terms cancel outright, leaving
+
+$$G(\mathcal{E}) \;=\; \sum_g \frac{c}{\hat c_g}\,E_g\!\left(T = \mathcal{E}/c_V\right) \;\ge\; 0 .$$
+
+No inequality was needed and no property of the opacity entered. The probe point was chosen so that the only thing left is a sum of group energies, and those are non-negative whenever $\mathrm{rad0}_g \ge 0$, since $E_g = (\mathrm{rad0}_g + \tau_g B_g)/(1+a_g)$ with $\tau_g, a_g, B_g \ge 0$. Read physically: *ask the gas to hold the whole cell's energy and the radiation still has energy left over, so the books over-balance* — $G > 0$. Checked over the 240 sweep cases, that identity holds to one ulp and $[c_V T_\mathrm{floor},\, \mathcal{E}]$ brackets the root in every one.
+
+The one way $\mathrm{rad0}_g = E_g^0 + S_g + W_g$ can go negative is a lagged work term more negative than the group's own energy, which is the same failure mode that used to drain cells in `QuokkaCoupling` (see the end of `test/test_radiation_multigroup.jl`). So the code does not rely on the bound being tight: it starts the upper probe at $\max(4\mathcal{E},\, 4E_\mathrm{gas}^0)$, widens it by factors of four while $G$ is still negative (`coupling_study.jl:220-224`), and then checks both ends and returns `converged = false` rather than guessing if the sign change is still not there (`:225`). That branch never fired.
+
+**So $G$ is non-positive at $c_V T_\mathrm{floor}$, non-negative at $\mathcal{E}$, and continuous in between, and therefore has a root there.** That also settles the physical question the upper probe skirted: because the root lies below $\mathcal{E}$, the solved gas energy never exceeds the cell's total — as it must not. Bisection alone would converge on this bracket; Newton inside it converges fast and cannot leave.
 
 ### 5.5 Step 4: the elimination fixes the Newton *direction*, not just the step length
 
