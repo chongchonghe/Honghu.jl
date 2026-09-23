@@ -3,7 +3,7 @@
 #   julia --project=. -t 4 docs/coupling-experiments/coupling_study.jl            # all of it
 #   julia --project=. -t 4 docs/coupling-experiments/coupling_study.jl cost runs  # named sections
 #
-# Sections: conditioning, test, robust, ode, cost, runs.
+# Sections: conditioning, test, robust, derivation, ode, cost, runs.
 #
 # Nothing here is part of the package. Two `AbstractCoupling` subtypes are
 # defined below that are deliberately *not* in `src/` -- they are the candidate
@@ -627,11 +627,74 @@ function section_runs()
              m -> mg_marshak(m; expo=2.0, kappa0=3e5), 0.02)
 end
 
+# --- section: derivation ------------------------------------------------------
+
+"""
+The claim of findings section 5.5, checked against the code: eliminating the
+group block does not merely shorten the Newton step, it fixes its *direction*.
+
+Run on the cell section 4 traces -- gas at 0.5, radiation at 1.3, `kappa ~ T^2`,
+`tau(T_gas) = 2.5e8` -- this prints the eliminated `dG/dE_gas` and the Schur
+complement of the unreduced `(1+NG)` system at the same opening iterate, next to
+the closed forms the document derives for each.
+"""
+function section_derivation()
+    op = PowerLawOpacity(kappa0=1e9 / DT, n=2.0)
+    s = cell_state(; NG=4, opacity=op, Tgas=0.5, Trad=1.3, dt=DT)
+    cs = gas_scale(s)
+    gas0 = s.Egas - dot(cs, s.work)
+    rad0 = s.Erad + s.src + s.work
+    T0 = s.Egas / s.cv
+    B = Hydro3D.thermal_emission(s, T0)
+    kP, _ = Hydro3D.coupling_opacity(s, T0)
+    n_expo = 2.0
+
+    println("\n== the elimination fixes the Newton direction, not just the step length ==")
+    @printf("  cell: T_gas = %.3g, T_rad = %.3g, kappa ~ T^%.1f, tau(T_gas) = %.3g, NG = 4\n",
+            T0, 1.3, n_expo, DT * s.chat[1] * s.rho * kP[1])
+    @printf("  total energy of the cell           %14.8g\n",
+            s.Egas + dot(cs, s.Erad + s.src))
+
+    # the eliminated scalar
+    E, G, dG = _reduced(s, s.Egas, gas0, rad0)
+    # the unreduced (1+NG) system, at the same opening iterate
+    F0, Fg, J00, J0g, Jg0, Jgg = _blocks(s, s.Egas, s.Erad + s.src)
+    schur = J00 - sum(J0g[g] * Jg0[g] / Jgg[g] for g in 1:4)
+    dx0, _ = solve_jacobian(ArrowheadSolve(), J00, J0g, Jg0, Jgg, -F0, -Fg)
+
+    # the two closed forms. Both carry the emission term 4 a T^3 / cv; they differ
+    # in whether the opacity term survives at large tau, and in which group
+    # energies it is evaluated at.
+    emission = (s.c / s.chat[1]) * 4 * s.a_rad * T0^3 / s.cv
+    opacity_unreduced = (n_expo / T0) * (sumvec(B) - sumvec(s.Erad))
+
+    @printf("\n  %-34s %16s %16s\n", "", "eliminated G", "unreduced Schur")
+    @printf("  %-34s %16.8g %16.8g\n", "group energies it linearises at",
+            sumvec(E), sumvec(s.Erad))
+    @printf("  %-34s %16.8g %16.8g\n", "emission term 4 a T^3 / cv", emission, emission)
+    @printf("  %-34s %16.8g %16.8g\n", "opacity term (n/T) sum (B - .)", 0.0,
+            opacity_unreduced)
+    @printf("  %-34s %16.8g %16.8g\n", "predicted derivative", 1 + emission,
+            1 + emission + opacity_unreduced)
+    @printf("  %-34s %16.8g %16.8g\n", "measured derivative", dG, schur)
+    @printf("  %-34s %16.8g %16.8g\n", "first Newton step", -G / dG, dx0)
+
+    println()
+    for (nm, m) in ("bracketed scalar" => BracketedDirect(),
+                    "natural, residual" => PlainDirect(test=:residual),
+                    "Quokka (R base)" => QuokkaCoupling())
+        r = solve_coupling(m, s)
+        @printf("  %-20s E_gas = %.10g   %3d it   converged = %d\n", nm, r.Egas,
+                r.iterations, r.converged)
+    end
+    println("  the root of this cell is 1.210310446")
+end
+
 # --- driver -------------------------------------------------------------------
 
 const SECTIONS = ["conditioning" => section_conditioning, "test" => section_test,
-                  "robust" => section_robust, "ode" => section_ode,
-                  "cost" => section_cost, "runs" => section_runs]
+                  "robust" => section_robust, "derivation" => section_derivation,
+                  "ode" => section_ode, "cost" => section_cost, "runs" => section_runs]
 
 let want = isempty(ARGS) ? first.(SECTIONS) : ARGS
     for (nm, f) in SECTIONS

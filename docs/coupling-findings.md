@@ -8,7 +8,7 @@ The headline, stated up front so the rest can be read as evidence for it:
 2. The round-off amplification that motivates Quokka's replaced variables is **real and exactly as large as claimed** — at Quokka's own default tolerance of $10^{-11}$ the natural-variable residual test starts failing at $\tau_\mathrm{cell} \approx 10^5$ and fails everywhere by $3\times10^5$.
 3. But what the amplification breaks is the **convergence test, not the answer**. The iteration that "fails" is sitting on the right root, to $10^{-16}$ of the cell's energy. Dividing the group residual by its own Jacobian diagonal — one line — removes the amplification completely, without changing the base variables, and delivers a *more* accurate answer than the replaced variables do.
 4. Where a one-step backward Euler genuinely fails is **not round-off but the nonlinearity of a temperature-dependent opacity** — and there the replaced variables are markedly *worse*: 36 failures out of 66 cases on a $\kappa \propto T^{-3.5}$ sweep, against 0 for a damped natural-variable Newton.
-5. Reducing the natural-variable system to **one scalar equation with a guaranteed bracket** gives a solver that converged in all 240 sweep cases and in every test problem, at zero allocation and $O(N_G)$ per iteration. It is the only one-step solver that gets the hardest test problem here right.
+5. Reducing the natural-variable system to **one scalar equation with a guaranteed bracket** gives a solver that converged in all 240 sweep cases and in every test problem, at zero allocation and $O(N_G)$ per iteration. It is the only one-step solver that gets the hardest test problem here right. It is not in `src/`; §5 derives it in full and says what shipping it would take.
 6. The error-controlled ODE solve never fails and is 2 to 6 orders of magnitude more accurate in the intermediate regime, at 12 times the cost of a hand-written Newton step on its loosest setting and several hundred times on a tight one, plus 8 to 21 kB of allocation per cell. It is a reference solver, and should stay one.
 
 ## 1. The three methods, and why two of them are one method
@@ -154,17 +154,113 @@ Three things to take from these two tables, and the first is the one that change
 
 ## 5. A natural-variable backward Euler that does not fail
 
-The fix for a wrong Newton direction is a bracket, and this system has one for free. At a fixed gas temperature the group block is **linear** in $E_g$, so it can be eliminated exactly:
+This section derives the method in full, because the idea is simple but the reason it works is not the obvious one. It is **not implemented in `src/`**: it lives as `BracketedDirect` in `docs/coupling-experiments/coupling_study.jl`, as an ordinary `AbstractCoupling` subtype with its own `solve_coupling` method, so it can be passed as `RadiationPhysics(coupling = BracketedDirect())` and was run that way for every number below. §5.7 says what moving it into the tree would take.
 
-$$E_g(T) = \frac{E_g^0 + S_g + W_g + \tau_g(T)\,B_g(T)}{1 + a_g(T)} .$$
+### 5.1 The system, written out
 
-What remains is one scalar equation, the cell's energy balance,
+Write the two step-constant increments the driver supplies — the external radiation source $S_g$ and the lagged $\boldsymbol{v}\cdot\boldsymbol{F}$ work term $W_g$ — into the old state, exactly as `backward_euler` does at `src/coupling_solvers.jl:361-363`:
 
-$$G(E_\mathrm{gas}) = E_\mathrm{gas} - E_\mathrm{gas}^0 + \frac{c}{\hat c}\sum_g \left(E_g(T) - E_g^0 - S_g - W_g\right) = 0 ,$$
+$$\mathrm{gas0} = E_\mathrm{gas}^0 - \sum_g \frac{c}{\hat c_g} W_g , \qquad \mathrm{rad0}_g = E_g^0 + S_g + W_g .$$
 
-with $T = E_\mathrm{gas}/c_V$. $G$ is negative at the temperature floor, because every $E_g \to 0$ there, and positive once $E_\mathrm{gas}$ exceeds the cell's total energy, because the sum is non-negative. **A bracket therefore exists for every cell, always.** Newton inside that bracket, replaced by a bisection step whenever it would leave it, cannot walk away from the root.
+Define the two optical depths of the step, one for emission and one for absorption,
 
-Measured on all 240 sweep cases, including the 39 where the unsafeguarded 256-bit Newton could not produce a verifiable reference:
+$$\tau_g(T) = \Delta t\,\hat c_g\,\rho\,\kappa_{P,g}(T) , \qquad a_g(T) = \Delta t\,\hat c_g\,\rho\,\kappa_{E,g}(T) .$$
+
+The backward-Euler system $u - u^0 - \Delta t\,f(u) = 0$ is then, with $T = E_\mathrm{gas}/c_V$,
+
+$$F_g = \left(1 + a_g\right) E_g - \mathrm{rad0}_g - \tau_g B_g(T) = 0 , \qquad g = 1 \ldots N_G,$$
+
+$$F_0 = \left(E_\mathrm{gas} - \mathrm{gas0}\right) + \sum_g \frac{c}{\hat c_g}\left(\tau_g B_g(T) - a_g E_g\right) = 0 .$$
+
+The gas equation picks up $c/\hat c_g$ per group because the exchange rate is formed once and then scaled by $\hat c_g$ on the radiation side and by $c$ on the gas side — that asymmetry is the reduced speed of light approximation itself.
+
+### 5.2 Step 1: the group block is linear, so eliminate it
+
+Nothing in $F_g$ couples group $g$ to group $h$: the groups meet only through $T$. So **at a fixed $E_\mathrm{gas}$ the group block is $N_G$ independent linear equations**, and they can be solved outright rather than iterated on,
+
+$$\boxed{\;E_g(T) = \frac{\mathrm{rad0}_g + \tau_g(T)\,B_g(T)}{1 + a_g(T)}\;}$$
+
+which is `coupling_study.jl:196`. In this code $\kappa_{P,g} = \kappa_{E,g}$, because the multigroup opacity is piecewise constant across a group and averaging a constant against any weight returns it (`coupling_opacity`, `src/coupling.jl`), so $\tau_g = a_g$ and the formula reads
+
+$$E_g(T) = \frac{1}{1+\tau_g}\,\mathrm{rad0}_g \;+\; \frac{\tau_g}{1+\tau_g}\,B_g(T) ,$$
+
+a **convex combination of where the group started and the Planck value at the gas temperature**, with the weight set by the optical depth of the step. At $\tau_g \to 0$ the group keeps its energy; at $\tau_g \to \infty$ it is in equilibrium with the gas. That single line contains the whole of the stiffness, and it is exact.
+
+### 5.3 Step 2: what remains is energy conservation
+
+Rearranging $F_g = 0$ gives $\tau_g B_g - a_g E_g = E_g - \mathrm{rad0}_g$: the net energy the gas hands to group $g$ over the step is just the change in that group's energy. Substituting that into $F_0$ collapses the emission and absorption terms and leaves one scalar equation in one unknown,
+
+$$G(E_\mathrm{gas}) \;\equiv\; \left. F_0 \right|_{E_g = E_g(T)} \;=\; \left(E_\mathrm{gas} - \mathrm{gas0}\right) + \sum_g \frac{c}{\hat c_g}\left(E_g(T) - \mathrm{rad0}_g\right) = 0 ,$$
+
+which is `coupling_study.jl:198`. Expanding `gas0` and `rad0` shows that the work term cancels out of $G$ entirely — it survives only inside $E_g(T)$, through $\mathrm{rad0}_g$ — and that what is left is the statement that the cell's total energy does not change:
+
+$$G(E_\mathrm{gas}) = E_\mathrm{gas} + \sum_g \frac{c}{\hat c_g} E_g(T) \;-\; \mathcal{E} , \qquad \mathcal{E} \equiv E_\mathrm{gas}^0 + \sum_g \frac{c}{\hat c_g}\left(E_g^0 + S_g\right) .$$
+
+$G$ is (new total energy) minus (old total energy). That is worth saying plainly, because it is what makes the next step easy: we are not looking for the root of an abstract residual, we are looking for the gas energy at which the books balance.
+
+### 5.4 Step 3: the bracket, and why it always exists
+
+**Lower end.** Take $E_\mathrm{gas} = c_V T_\mathrm{floor}$. Every $B_g(T) \to 0$ there, and $E_g$ is a convex combination of $\mathrm{rad0}_g$ and $B_g$, so $E_g \le \mathrm{rad0}_g$. Hence
+
+$$G(c_V T_\mathrm{floor}) \;\le\; c_V T_\mathrm{floor} + \sum_g \frac{c}{\hat c_g}\,W_g - E_\mathrm{gas}^0 ,$$
+
+which is negative whenever the gas starts above its floor and the work term does not by itself exceed the gas energy. With $W_g = 0$ — every run in this study, and any run with `beta_order = 0` — it is unconditional, because the state is admissible between steps. The step also needs $\kappa_{P,g}B_g \to 0$ as $T \to 0$, which holds for any $\kappa \propto T^n$ with $n > -4$ and for any physical opacity.
+
+**Upper end.** Every $E_g \ge 0$, so $G(E_\mathrm{gas}) \ge E_\mathrm{gas} - \mathcal{E}$, which is non-negative as soon as $E_\mathrm{gas} \ge \mathcal{E}$ — that is, once the gas alone is asked to hold more than the cell's total energy. The code starts at $\max(4\mathcal{E},\, 4E_\mathrm{gas}^0)$ and widens by factors of four (`coupling_study.jl:220-224`) in case a negative work term has shifted things, then checks both ends and reports `converged = false` rather than guessing if the bracket still is not there (`:225`). That branch never fired in 240 sweep cases or in any test problem.
+
+**So $G$ changes sign on $[c_V T_\mathrm{floor},\, \sim\!\mathcal{E}]$ for every cell, always.** Bisection alone would converge; Newton inside the bracket converges fast and cannot leave it.
+
+### 5.5 Step 4: the elimination fixes the Newton *direction*, not just the step length
+
+This is the part that matters, and it is not what "add a bracket" suggests. Differentiating $E_g(T)$ and using $E_g(1+a_g) = \mathrm{rad0}_g + \tau_g B_g$,
+
+$$\frac{dG}{dE_\mathrm{gas}} = 1 + \sum_g \frac{c}{\hat c_g}\frac{1}{c_V}\frac{dE_g}{dT} , \qquad \frac{dE_g}{dT} = \frac{\tau_g' B_g + \tau_g B_g' - a_g' E_g}{1 + a_g} ,$$
+
+with $' = d/dT$ — `coupling_study.jl:199-204`. For $\kappa \propto T^n$ and $\kappa_P = \kappa_E$, substituting the eliminated $E_g$ back in gives
+
+$$\frac{dE_g}{dT} = \underbrace{\frac{\tau_g B_g'}{1+\tau_g}}_{\text{emission, always} > 0} \;+\; \underbrace{\frac{n\,\tau_g}{T\,(1+\tau_g)^2}\left(B_g - \mathrm{rad0}_g\right)}_{\text{opacity moving with } T} .$$
+
+Compare that with the same quantity in the **unreduced** $(1+N_G)$-dimensional Newton, where $E_g$ is a free iterate rather than the eliminated value. There the corresponding object is the Schur complement of the arrowhead system, and the second term reads
+
+$$\frac{n\,\tau_g}{T\,(1+\tau_g)}\left(B_g - E_g\right) ,$$
+
+with **one** power of $(1+\tau_g)$ instead of two, and the *current iterate* $E_g$ instead of the initial $\mathrm{rad0}_g$. Both differences matter, and together they are the whole failure of §4:
+
+- In the eliminated form the term decays like $1/\tau_g$ and vanishes deep in the optically thick regime, so $dG/dE_\mathrm{gas} \to 1 + (c/\hat c)\,4 a_\mathrm{rad} T^3/c_V > 0$. **$G$ is guaranteed monotone at large $\tau$**, whatever the opacity exponent.
+- In the unreduced form it survives at large $\tau_g$, and $B_g - E_g$ is the full departure from equilibrium rather than a small residual — so it can dominate and flip the sign.
+
+Worked on the exact cell §4 traces ($T_\mathrm{gas} = 0.5$, $T_\mathrm{rad} = 1.3$, $\kappa \propto T^{+2}$, $\tau(T^0_\mathrm{gas}) = 2.5\times10^{8}$, four groups, $c = \hat c = c_V = a_\mathrm{rad} = 1$), at the opening iterate $E_\mathrm{gas} = E_\mathrm{gas}^0 = 0.5$:
+
+| | eliminated $G$ | unreduced Schur complement |
+|:---|---:|---:|
+| value of $E_g$ used | $\sum_g E_g(T^0) = 0.0625$ | $\sum_g E_g^0 = 2.8561$ |
+| emission term $4a_\mathrm{rad}T^3/c_V$ | $+0.500$ | $+0.500$ |
+| opacity term $(n/T)\sum_g(B_g - \cdot)$ | $\to 0$ (extra $1/\tau$) | $-11.174$ |
+| derivative | $+1.5000$ | $-9.6744$ |
+| first Newton step | $+1.862$ | $-0.2888$ |
+| root | $1.2103$ | $1.2103$ |
+
+Measured: $dG/dE_\mathrm{gas} = 1.4999999$ against the predicted $1.5$, and the unreduced Schur complement $-9.674400$ against the predicted $-9.674400$. The unreduced iteration's first step points **away** from the root, and §4's trace shows it then halving the gas energy for twenty iterations down to $10^{-6}$. The eliminated one overshoots to $2.36$, in the right direction, and the bracket catches the overshoot.
+
+So the elimination is not bookkeeping. It linearises about a state where the group block is *already satisfied*, and that is what keeps the sign of the derivative right. The bracket is the belt to that pair of braces: it handles whatever is left at moderate $\tau$, where neither limit's monotonicity argument applies and $G$ can genuinely be non-monotone.
+
+### 5.6 The algorithm
+
+Given the bracket $[E_\mathrm{lo}, E_\mathrm{hi}]$ from §5.4 and an opening iterate $x = E_\mathrm{gas}^0$, repeat:
+
+1. evaluate $E_g(T)$, $G(x)$ and $G'(x)$ from §5.2 and §5.5 — one pass over the groups, no matrix;
+2. tighten the bracket on the sign of $G$: $G(x) < 0 \Rightarrow E_\mathrm{lo} \leftarrow x$, else $E_\mathrm{hi} \leftarrow x$;
+3. stop if $|G(x)| \le \mathrm{tol}\cdot\mathcal{E}$;
+4. take $x_\mathrm{new} = x - G/G'$, and replace it by the bisection $ (E_\mathrm{lo}+E_\mathrm{hi})/2$ if it falls outside the bracket;
+5. stop if the bracket has closed to round-off.
+
+Finally recover $E_g$ at the accepted $x$ and apply `apply_energy_floors`. In the code these are `coupling_study.jl:230`, `:231`, `:232`, `:236-237`, `:238` and `:245-246`.
+
+Note what the convergence test is. $G$ is an energy difference, not a stiff residual: it contains no $\tau_g(B_g - E_g)$ to cancel, because that cancellation was performed analytically in §5.3. **The whole of §2 and §3 is therefore moot for this solver** — there is nothing left for $\tau$ to amplify, and the residual test is safe at any optical depth and any tolerance.
+
+### 5.7 What it measures, and what it would take to ship
+
+All 240 sweep cases of §4, including the 39 where the unsafeguarded 256-bit Newton could not produce a verifiable reference:
 
 | opacity | failures | worst error | mean iterations |
 |:---|---:|---:|---:|
@@ -172,9 +268,15 @@ Measured on all 240 sweep cases, including the 39 where the unsafeguarded 256-bi
 | $\kappa \propto T^{-3.5}$ | 0/80 | $7.9\times10^{-10}$ | 7.7 |
 | $\kappa \propto T^{+2}$ | 0/80 | $6.9\times10^{-10}$ | 10.4 |
 
-Zero failures, and every answer inside the $10^{-9}$ it was asked for. It costs $O(N_G)$ per iteration, allocates nothing, and needs no arrowhead elimination — the group block is inverted analytically rather than factorised. Against `QuokkaCoupling` it is 9% slower at one group and 40% slower from four groups to sixteen (§7), which is what the bracket's extra evaluations of $G$ cost; on the test problems the gap runs from nothing to 60%.
+Zero failures, and every answer inside the $10^{-9}$ it was asked for. It costs $O(N_G)$ per iteration, allocates nothing, and needs no linear solve at all — not even the arrowhead elimination, since the group block is inverted in closed form. Against `QuokkaCoupling` it is 9% slower at one group and 40% slower from four groups to sixteen (§7), which is the cost of the extra $G$ evaluations the bracket asks for; across the test problems the gap runs from nothing to 60%.
 
-Two honest caveats. Where $G$ is non-monotone the backward-Euler system genuinely has more than one root, and a bracketed method returns one of them without saying which; only following the trajectory settles that, which is what §6 is about. And the reduction assumes the group block is diagonal — the same assumption `ArrowheadSolve` makes, and it would fail for the same reason if a term ever coupled groups directly.
+Four things stand between this and `src/`. Its residual and derivative are written out in `_reduced` rather than assembled from `coupling_rhs` and `coupling_jacobian`, which breaks the single-source-of-truth rule stated at the head of `src/coupling.jl` and is the first thing to fix. It has no optically-thin shortcut, and the sweep did not stress transparent cells hard enough to say it does not need one. It is not in the three-way agreement testset of `test/test_coupling_adaptive.jl`. And its zero-byte allocation is measured but not pinned by an assertion in `test/test_radiation_multigroup.jl` alongside the existing ones.
+
+### 5.8 Two caveats
+
+Where $G$ is non-monotone the backward-Euler system genuinely has more than one root, and a bracketed method returns one of them without saying which. Only following the trajectory settles which root the physics meant, which is what §6 is about; the bracket guarantees convergence to *a* solution of the step, not uniqueness of it.
+
+The elimination assumes the group block is diagonal — that groups exchange energy with the gas and never directly with each other. That is the same assumption `ArrowheadSolve` makes and the same one documented in `AbstractJacobianSolve`, and it would fail the same way: a Compton redistribution or line-overlap term would make the group block a matrix, the closed form of §5.2 would no longer be a per-group scalar division, and the reduction to one unknown would be gone with it.
 
 ## 6. What the error-controlled ODE solve buys, and what it costs
 
@@ -298,4 +400,4 @@ julia --project=. -t 4 docs/coupling-experiments/coupling_study.jl              
 julia --project=. -t 4 docs/coupling-experiments/coupling_study.jl cost runs    # named sections
 ```
 
-Sections are `conditioning`, `test`, `robust`, `ode`, `cost`, `runs`, and they produce the tables of §2, §3, §4–5, §6, §7 and §8 respectively. The script defines `PlainDirect` and `BracketedDirect` — the candidate steppers this document argues about — as `AbstractCoupling` subtypes outside `src/`, so the measurements can be redone without adding an unused solver to the package. Timings are from an Apple-silicon laptop and are meaningful only as ratios.
+Sections are `conditioning`, `test`, `robust`, `derivation`, `ode`, `cost` and `runs`, producing the tables of §2, §3, §4 and §5.7, §5.5, §6, §7 and §8 respectively. The script defines `PlainDirect` and `BracketedDirect` — the candidate steppers this document argues about — as `AbstractCoupling` subtypes outside `src/`, so the measurements can be redone without adding an unused solver to the package. `BracketedDirect`'s own derivation is at `coupling_study.jl:159-248`, and §5 quotes its line numbers as it goes. Timings are from an Apple-silicon laptop and are meaningful only as ratios.
