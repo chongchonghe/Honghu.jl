@@ -719,6 +719,77 @@ function section_derivation()
     @printf("  worst G(E_tot)     / E_tot        (want >= 0)  %10.3e\n", worst_hi)
     @printf("  max |G(E_tot) - sum_g (c/chat) E_g|, relative  %10.3e\n", identity_dev)
     @printf("  cells where [cv*Tfloor, E_tot] fails to bracket  %6d\n", bad)
+
+    # findings section 5.7: the elimination does not need its own copy of the
+    # physics. Everything it uses can be read off the two shared functions,
+    # because F_g is linear in E_g. Two passes, not one: `rad_gas` carries a
+    # -(dkappaE/dT) E_g term, so it has to be evaluated at the eliminated E_g.
+    #
+    # ... and section 5.5: the Schur complement of the full arrowhead system is
+    # algebraically the same number as dG/dE_gas, but forming it subtracts two
+    # terms of order tau to get one of order 1, so it costs a relative eps*tau.
+    println("\n== the elimination rebuilt from coupling_rhs / coupling_jacobian alone ==")
+    @printf("%10s | %11s %11s %11s | %11s %11s\n", "tau", "dE_g/E_tot", "dG/|G|",
+            "d(dG)/|dG|", "Schur vs dG", "eps*tau")
+    for tau in TAUS
+        wE = 0.0
+        wG = 0.0
+        wd = 0.0
+        ws = 0.0
+        for (_, mk) in LAWS, (Tg, Tr) in STATES
+            s = cell_state(; NG=4, opacity=mk(tau / DT), Tgas=Tg, Trad=Tr, dt=DT)
+            cs = gas_scale(s)
+            gas0 = s.Egas - dot(cs, s.work)
+            rad0 = s.Erad + s.src + s.work
+            Etot = abs(s.Egas + dot(cs, s.Erad + s.src))
+            for x in (s.Egas, 0.5 * s.Egas, 2.0 * s.Egas)
+                Ea, Ga, dGa = _reduced(s, x, gas0, rad0)
+                Eb, Gb, dGb = _reduced_from_shared(s, x, gas0, rad0)
+                wE = max(wE, maximum(abs(Ea[g] - Eb[g]) for g in 1:4) / Etot)
+                wG = max(wG, abs(Ga - Gb) / max(abs(Ga), Etot))
+                wd = max(wd, abs(dGa - dGb) / max(abs(dGa), 1.0))
+            end
+            Eel, _, dG = _reduced(s, s.Egas, gas0, rad0)
+            _, _, J00, J0g, Jg0, Jgg = _blocks(s, s.Egas, Eel)
+            schur = J00 - sum(J0g[g] * Jg0[g] / Jgg[g] for g in 1:4)
+            ws = max(ws, abs(schur - dG) / max(abs(dG), 1.0))
+        end
+        @printf("%10.0e | %11.2e %11.2e %11.2e | %11.2e %11.2e\n", tau, wE, wG, wd, ws,
+                eps() * tau)
+    end
+end
+
+"""
+`_reduced`, but with every coupling quantity read off [`coupling_rhs`](@ref) and
+[`coupling_jacobian`](@ref) instead of re-derived from the opacity and the Planck
+function. This is what `BracketedDirect` would have to look like to live in
+`src/` without keeping a second copy of the physics (findings section 5.7).
+
+`F_g` is linear in `E_g`, so evaluating the shared pair at *any* group energies
+`probe` gives the coefficients exactly:
+
+    a_g       = -dt * J.rad_rad[g]
+    tau_g B_g =  dt * rhs_rad[g] + a_g * probe[g]
+
+The Jacobian is then formed a second time at the eliminated `E_g`, because
+`rad_gas` contains `-(dkappaE/dT) E_g` and so does depend on where it is
+evaluated whenever the energy-mean opacity moves with temperature.
+"""
+function _reduced_from_shared(s::CouplingState{NG,M,T}, Egas, gas0, rad0) where {NG,M,T}
+    probe = rad0
+    _, frad = coupling_rhs(s, Egas, probe)
+    J1 = coupling_jacobian(s, Egas, probe)
+    E = SVec{NG,T}(ntuple(Val(NG)) do g
+        a_g = -s.dt * J1.rad_rad[g]
+        (rad0[g] + (s.dt * frad[g] + a_g * probe[g])) / (one(T) + a_g)
+    end...)
+    cs = gas_scale(s)
+    G = Egas - gas0 + dot(cs, E - rad0)
+    J = coupling_jacobian(s, Egas, E)
+    dG = one(T) + dot(cs, SVec{NG,T}(ntuple(Val(NG)) do g
+        (s.dt * J.rad_gas[g]) / (one(T) - s.dt * J.rad_rad[g])
+    end...))
+    (E, G, dG)
 end
 
 # --- driver -------------------------------------------------------------------

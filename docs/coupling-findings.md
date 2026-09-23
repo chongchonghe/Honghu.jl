@@ -256,6 +256,8 @@ Measured: $dG/dE_\mathrm{gas} = 1.4999999$ against the predicted $1.5$, and the 
 
 So the elimination is not bookkeeping. It linearises about a state where the group block is *already satisfied*, and that is what keeps the sign of the derivative right. The bracket is the belt to that pair of braces: it handles whatever is left at moderate $\tau$, where neither limit's monotonicity argument applies and $G$ can genuinely be non-monotone.
 
+One more thing separates the two columns, beyond the point they are evaluated at. Algebraically the Schur complement $J_{00} - \sum_g J_{0g}J_{g0}/J_{gg}$ *is* $dG/dE_\mathrm{gas}$ — the identity is exact — but the two terms being subtracted are each of order $\tau$ while their difference is of order one, so forming it that way costs a relative $\varepsilon\tau$. This is §2's cancellation again, now in the Jacobian rather than in the residual. Measured at the same eliminated point, the two expressions agree to $3\times10^{-16}$ at $\tau = 10^{-4}$ and to only $8\times10^{-3}$ at $\tau = 10^{12}$, tracking $\varepsilon\tau$ across ten orders of magnitude. It costs the arrowhead solvers nothing in the end — an inexact Newton *direction* only ever costs an iteration, since the residual is recomputed from scratch each time, which is the §3 argument over again — but the eliminated form gets the same number with nothing cancelled, for free.
+
 ### 5.6 The algorithm
 
 Given the bracket $[E_\mathrm{lo}, E_\mathrm{hi}]$ from §5.4 and an opening iterate $x = E_\mathrm{gas}^0$, repeat:
@@ -282,7 +284,17 @@ All 240 sweep cases of §4, including the 39 where the unsafeguarded 256-bit New
 
 Zero failures, and every answer inside the $10^{-9}$ it was asked for. It costs $O(N_G)$ per iteration, allocates nothing, and needs no linear solve at all — not even the arrowhead elimination, since the group block is inverted in closed form. Against `QuokkaCoupling` it is 9% slower at one group and 40% slower from four groups to sixteen (§7), which is the cost of the extra $G$ evaluations the bracket asks for; across the test problems the gap runs from nothing to 60%.
 
-Four things stand between this and `src/`. Its residual and derivative are written out in `_reduced` rather than assembled from `coupling_rhs` and `coupling_jacobian`, which breaks the single-source-of-truth rule stated at the head of `src/coupling.jl` and is the first thing to fix. It has no optically-thin shortcut, and the sweep did not stress transparent cells hard enough to say it does not need one. It is not in the three-way agreement testset of `test/test_coupling_adaptive.jl`. And its zero-byte allocation is measured but not pinned by an assertion in `test/test_radiation_multigroup.jl` alongside the existing ones.
+Four things stand between this and `src/`, and the first is the one that matters.
+
+**It contains its own copy of the physics.** `_reduced` calls `thermal_emission`, `coupling_opacity` and their temperature derivatives directly and then assembles $\tau_g$, $a_g$, $E_g(T)$ and $G$ from them by hand. Every other solver in the tree instead goes through `coupling_rhs` and `coupling_jacobian`, which the header of `src/coupling.jl` designates as the only place the coupling equations are written down. The practical consequence is concrete: add a term to `coupling_rhs` — Compton exchange, a cosmic-ray heating rate, a change in how $\hat c$ scales — and `DirectCoupling` picks it up for free, while `BracketedDirect` would go on silently solving the old equations.
+
+That is fixable, and the fix is short, because everything the elimination needs can be **read off** the two shared functions instead of re-derived. $F_g$ is linear in $E_g$, so evaluating the shared pair at any convenient group energies $\tilde E_g$ gives, exactly,
+
+$$a_g = -\Delta t\,J_{\mathrm{rad,rad},g} , \qquad \tau_g B_g = \Delta t\,\dot E_g(\tilde E) + a_g \tilde E_g , \qquad \frac{dE_g}{dE_\mathrm{gas}} = \frac{\Delta t\,J_{\mathrm{rad,gas},g}}{1 - \Delta t\,J_{\mathrm{rad,rad},g}} ,$$
+
+from which §5.2's $E_g(T)$, §5.3's $G$ and §5.5's $dG/dE_\mathrm{gas}$ follow with no physics restated. It takes two passes rather than one, because $J_{\mathrm{rad,gas}}$ carries a $-(d\kappa_E/dT)\,E_g$ term and so has to be evaluated at the *eliminated* $E_g$, not at the probe $\tilde E_g$. Built that way and compared against the hand-written `_reduced` over the whole sweep, at three gas energies per cell: $E_g$ agrees to $2.6\times10^{-12}$ of the cell energy, $G$ to $3.7\times10^{-16}$, and $dG/dE_\mathrm{gas}$ to $1.1\times10^{-11}$, with no growth in $\tau$.
+
+The other three are smaller. It has no optically-thin shortcut, and the sweep did not stress transparent cells hard enough to say it does not need one. It is not in the three-way agreement testset of `test/test_coupling_adaptive.jl`. And its zero-byte allocation is measured but not pinned by an assertion in `test/test_radiation_multigroup.jl` alongside the existing ones.
 
 ### 5.8 Two caveats
 
