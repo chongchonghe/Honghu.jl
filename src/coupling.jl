@@ -309,6 +309,95 @@ derivative of this function when `kappa` depends on temperature.
 end
 
 """
+    group_energies(state, Egas) -> (Erad, dErad_dEgas)
+
+**Part 1 of the reduction.** The group radiation energies that solve the
+backward-Euler group block exactly at this gas energy, and their derivative with
+respect to it.
+
+The group block is
+
+    (E_g - E_g^0 - S_g - W_g) = dt chat_g (emission_g(T) - absorption_g(T) E_g) ,
+
+which is *linear* in `E_g` at fixed `T`, and in which no group appears in
+another group's equation -- they meet only through the gas temperature. So it is
+not solved by iteration at all:
+
+    E_g(T) = (rad0_g + dt chat_g emission_g) / (1 + dt chat_g absorption_g),
+    rad0_g = E_g^0 + S_g + W_g .
+
+With `kappa_P = kappa_E` that is a convex combination of where the group started
+and the Planck value at the gas temperature, weighted by the optical depth of
+the step: `dt chat rho kappa -> 0` leaves the group alone, `-> infinity` puts it
+in equilibrium with the gas. All of the stiffness is in that one weight, and it
+is handled in closed form rather than by a Newton iteration, which is why
+[`BracketedCoupling`](@ref) has no linear algebra in it.
+
+The derivative follows by differentiating the same expression,
+
+    dE_g/dT = dt chat_g (d emission_g/dT - d absorption_g/dT E_g)
+              / (1 + dt chat_g absorption_g) ,
+
+and `dE_g/dE_gas` is that over `cv`. It is returned alongside rather than as a
+separate function because every caller that wants one wants both, and the two
+share the coefficient evaluation.
+
+This is a property of the *backward-Euler step*, not of the coupling ODE: the
+group equations are linear in `E_g` with time-dependent coefficients, so along a
+trajectory they integrate to a convolution over the gas history and not to any
+algebraic `E_g(T)`. [`AdaptiveCoupling`](@ref) therefore cannot use this and
+integrates the full `1 + NG` system.
+"""
+@inline function group_energies(s::CouplingState{NG,M,T}, Egas) where {NG,M,T}
+    Tgas = gas_temperature_of(s, Egas)
+    emis, absorp = coupling_coefficients(s, Tgas)
+    demis, dabsorp = coupling_coefficients_dT(s, Tgas)
+    cdt = s.dt * s.chat
+    rad0 = s.Erad + s.src + s.work
+    den = SVec{NG,T}(ntuple(g -> one(T) + cdt[g] * absorp[g], Val(NG))...)
+    Erad = SVec{NG,T}(ntuple(g -> (rad0[g] + cdt[g] * emis[g]) / den[g], Val(NG))...)
+    dErad = SVec{NG,T}(ntuple(g -> cdt[g] * (demis[g] - dabsorp[g] * Erad[g]) /
+                                  (s.cv * den[g]), Val(NG))...)
+    return (Erad, dErad)
+end
+
+"""
+    energy_balance(state, Egas, Erad) -> G
+
+**Part 2 of the reduction.** The cell's total-energy residual,
+
+    G = (E_gas - gas0) + sum_g (c/chat_g) (E_g - rad0_g) ,
+    gas0 = E_gas^0 - sum_g (c/chat_g) W_g ,   rad0_g = E_g^0 + S_g + W_g ,
+
+which expands to `E_gas + sum_g (c/chat_g) E_g` minus the same combination at
+the start of the step -- new total energy minus old. The lagged work term
+cancels out of it completely and survives only inside `rad0_g`.
+
+It contains **no physics**: no opacity, no Planck function, nothing but the
+`c/chat_g` weighting that the reduced speed of light imposes on what one unit of
+group energy costs the gas. It is linear in its arguments. That is what makes it
+shareable, and it is shared exactly -- [`QuokkaCoupling`](@ref)'s gas residual
+`(E_gas - E_gas^0) + (c/chat) sum_g R_g` reduces to this identically once its
+group residual vanishes, work term included.
+
+**It is the residual of the system only where the group block is solved.**
+Writing `F_0` for the gas residual and `F_g` for the group ones,
+
+    F_0 = G - sum_g (c/chat_g) F_g ,
+
+so `G` and `F_0` agree exactly when every `F_g = 0` and not otherwise. Hand this
+an arbitrary `Erad` and it returns a number that vanishes in the wrong place;
+hand it [`group_energies`](@ref)'s output and it is the scalar equation the
+whole backward-Euler step reduces to. That pairing is the contract between the
+two parts, and [`BracketedCoupling`](@ref) is the only thing that relies on it.
+"""
+@inline function energy_balance(s::CouplingState{NG,M,T}, Egas,
+                                Erad::SVec{NG,T}) where {NG,M,T}
+    cs = gas_scale(s)
+    return (Egas - (s.Egas - dot(cs, s.work))) + dot(cs, Erad - (s.Erad + s.src + s.work))
+end
+
+"""
     CouplingJacobian{NG,T}
 
 The exact Jacobian of [`coupling_rhs`](@ref), in four blocks:

@@ -425,3 +425,120 @@ function backward_euler(::NewtonStepper, m::DirectCoupling, s::CouplingState{NG,
                                    m.linsolve, atol, m.max_iterations)
     return (u[1], u[2], n, converged)
 end
+
+# --- the natural variables, reduced to one scalar unknown ---------------------
+
+"""
+    BracketedCoupling(; tolerance = 1e-9, max_iterations = 100)
+
+Backward Euler in the natural variables `(E_gas, E_g)`, reduced to **one scalar
+unknown** and solved inside a bracket the physics guarantees. The default.
+
+The group block is linear in `E_g` at fixed gas temperature, so
+[`group_energies`](@ref) solves it in closed form and what is left is the single
+equation [`energy_balance`](@ref): find the gas energy at which the cell's books
+balance. There is no `1 + NG` system, no Jacobian to assemble, no linear solve
+and no arrowhead elimination -- `O(NG)` per iteration and zero bytes per cell.
+
+**Why it is the default: it cannot walk away from the root.** `G` is non-positive
+at the temperature floor and non-negative once the gas is handed the whole
+cell's energy, so a sign change always exists on `[cv Tfloor, E_tot]`; a Newton
+step that would leave the bracket is replaced by a bisection step. The
+unsafeguarded `1 + NG` iteration has no such guard and does not merely overshoot
+-- with a steeply temperature-dependent opacity its Newton *direction* can be
+wrong, because it linearises about a state where the group block is not
+satisfied and `E_g` is far from equilibrium with `T`. Measured over 240 cells
+spanning three opacity laws and `tau_cell` from 1e-4 to 1e12, this solver failed
+none and [`QuokkaCoupling`](@ref) failed 75; on a multigroup Marshak wave with
+`kappa ~ T^2` every other one-step solver leaves the temperature field 7 per
+cent wrong and this one 0.25 per cent. `docs/coupling-findings.md` derives all
+of it and `docs/coupling-experiments/coupling_study.jl` reproduces the numbers.
+
+Two further consequences of the reduction, both free:
+
+  - **Its convergence test is unconditional.** `G` is a difference of energies
+    with no `tau (B - E)` left in it to cancel -- that cancellation was done
+    algebraically -- so nothing amplifies round-off by `tau_cell` and the
+    tolerance means what it says at any optical depth. That is the failure the
+    replaced base variables of [`QuokkaCoupling`](@ref) exist to avoid, avoided
+    a different way.
+  - **`dG/dE_gas` is computed without cancellation.** It equals the Schur
+    complement of the full Newton matrix exactly, but the Schur complement is
+    formed by subtracting two terms of order `tau` to get one of order 1.
+
+It costs 9 per cent more than [`QuokkaCoupling`](@ref) at one group and 40 per
+cent at four to sixteen, for the bracket's extra evaluations of `G`.
+
+The reduction inherits one assumption from [`group_energies`](@ref): groups
+exchange energy with the gas and never directly with each other. That is the same
+assumption [`ArrowheadSolve`](@ref) makes; a term coupling groups directly would
+make the group block a matrix and there would be no closed form to eliminate.
+"""
+struct BracketedCoupling{T<:AbstractFloat} <: AbstractCoupling
+    tolerance::T
+    max_iterations::Int
+end
+
+BracketedCoupling(; tolerance=1e-9, max_iterations::Integer=100) =
+    BracketedCoupling(float(tolerance), Int(max_iterations))
+
+function solve_coupling(m::BracketedCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}
+    Etot = abs(s.Egas + dot(gas_scale(s), s.Erad + s.src))
+    atol = m.tolerance * Etot
+
+    # The bracket. `G` is non-positive at the floor because every group's
+    # emission vanishes there, and non-negative at `Etot` because putting the
+    # whole cell's energy in the gas leaves the first and last terms of `G`
+    # cancelling and only the group energies behind. Both bounds assume
+    # `rad0_g >= 0`, which a lagged work term more negative than a group's own
+    # energy can break, so the upper end is opened generously and then widened
+    # rather than trusted -- and if there is still no sign change the cell is
+    # reported unconverged instead of guessed at.
+    lo = s.cv * s.Tfloor
+    hi = max(4 * Etot, 4 * s.Egas)
+    Erad, _ = group_energies(s, lo)
+    Glo = energy_balance(s, lo, Erad)
+    Erad, _ = group_energies(s, hi)
+    Ghi = energy_balance(s, hi, Erad)
+    k = 0
+    while Ghi < 0 && k < 60
+        hi *= 4
+        Erad, _ = group_energies(s, hi)
+        Ghi = energy_balance(s, hi, Erad)
+        k += 1
+    end
+    if Glo > 0 || Ghi < 0
+        Egas, Erad = apply_energy_floors(s, s.Egas, s.Erad + s.src)
+        return CouplingResult{NG,T}(Egas, Erad, 0, false)
+    end
+
+    x = clamp(s.Egas, lo, hi)
+    n = 0
+    converged = false
+    while n < m.max_iterations
+        n += 1
+        Erad, dErad = group_energies(s, x)
+        G = energy_balance(s, x, Erad)
+        # Every evaluation tightens the bracket, whether or not its step is used.
+        G < 0 ? (lo = x) : (hi = x)
+        if abs(G) <= atol
+            converged = true
+            break
+        end
+        dG = one(T) + dot(gas_scale(s), dErad)
+        xn = iszero(dG) ? T(Inf) : x - G / dG
+        # ... and a Newton step that would leave the bracket is replaced by the
+        # bisection of it, which is the whole of the globalisation.
+        (xn <= lo || xn >= hi) && (xn = (lo + hi) / 2)
+        if abs(xn - x) <= eps(T) * abs(x)
+            x = xn
+            converged = true
+            break
+        end
+        x = xn
+    end
+
+    Erad, _ = group_energies(s, x)
+    Egas, Erad = apply_energy_floors(s, x, Erad)
+    return CouplingResult{NG,T}(Egas, Erad, n, converged)
+end

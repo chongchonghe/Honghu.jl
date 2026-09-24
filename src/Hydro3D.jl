@@ -108,7 +108,7 @@ export LevermoreClosure, EddingtonClosure
 
 # multigroup radiation
 export RadiationGroups, ngroups, planck_integral, planck_fractions
-export AbstractCoupling, QuokkaCoupling, DirectCoupling, AdaptiveCoupling
+export AbstractCoupling, BracketedCoupling, QuokkaCoupling, DirectCoupling, AdaptiveCoupling
 export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit, per_group
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 export AbstractBackwardEuler, NewtonStepper, ImplicitEulerStepper

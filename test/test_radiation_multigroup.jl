@@ -82,6 +82,14 @@ function mg_energy(sim)
 end
 
 @testset "one group reproduces the grey driver" begin
+    # `coupling = QuokkaCoupling()` is passed explicitly throughout, and has to
+    # be: this testset compares the two *drivers*, so the formulation must be
+    # held fixed or it compares formulations instead. The grey driver's inline
+    # 2x2 is Quokka's replaced base variables, so that is the one that can be
+    # held to round-off. The default `BracketedCoupling` solves the same
+    # equations by a different route and agrees only to its own tolerance --
+    # measured, 4e-11 over this state -- which is asserted separately below.
+    #
     # The two drivers solve the same equations by different routes: the grey one
     # with the 2x2 Newton written out inline, the multigroup one through
     # `solve_coupling`. They are not bit-for-bit identical, and cannot be: they
@@ -97,7 +105,8 @@ end
     U0, R0 = copy(sim.U), copy(sim.R)
     for kappa in (0.0, 1e-3, 1.0, 3e2, 1e6, 1e9)
         rad = RadiationPhysics(c=1.0, chat=1.0, a_rad=1.0, beta_order=0,
-                               opacity=ConstantOpacity(kappa))
+                               opacity=ConstantOpacity(kappa),
+                               coupling=QuokkaCoupling())
         U, R = copy(U0), copy(R0)
         radiation_source_step!(U, R, const_chat(rad, sim.grid), sim.eos, rad, sim.grid,
                                1e-3, nothing, 0.0, sim.floors; update_momentum=false)
@@ -122,7 +131,8 @@ end
     # answer and stop at different points inside the tolerance ball.
     for n in (-3.0, 2.0), kappa0 in (1e-1, 1e3)
         rad = RadiationPhysics(c=1.0, chat=1.0, a_rad=1.0, beta_order=0,
-                               opacity=PowerLawOpacity(; kappa0, rho0=1.0, T0=1.0, n))
+                               opacity=PowerLawOpacity(; kappa0, rho0=1.0, T0=1.0, n),
+                               coupling=QuokkaCoupling())
         U, R = copy(U0), copy(R0)
         radiation_source_step!(U, R, const_chat(rad, sim.grid), sim.eos, rad, sim.grid,
                                1e-3, nothing, 0.0, sim.floors; update_momentum=false)
@@ -147,7 +157,7 @@ end
     c, chat = 100.0, 10.0
     for kappa in (1e-2, 1.0, 1e2, 1e4)
         rad = RadiationPhysics(; c, chat, a_rad=0.2, opacity=ConstantOpacity(kappa),
-                               beta_order=1)
+                               beta_order=1, coupling=QuokkaCoupling())
         sim2 = Simulation(n=(16, 1, 1), radiation=rad, eos=IdealGas(gamma=5 / 3, cv=1.0),
                           boundaries=Boundaries(Periodic()))
         set_initial_conditions!(sim2) do x, y, z
@@ -163,6 +173,25 @@ end
         @test isapprox(Um, sim2.U; rtol=1e-12)
         @test isapprox(Rm, sim2.R; rtol=1e-12)
         @test Um[IMX, 8, 1, 1] != U[IMX, 8, 1, 1]  # the momentum kick really happened
+    end
+
+    # ... and the default formulation against the same grey driver, to the
+    # tolerance it converges to rather than to round-off. This is the weaker
+    # assertion of the two and it is the one that covers what actually runs:
+    # `BracketedCoupling` reduces the step to one scalar unknown, so it shares
+    # no residual, no unknown and no iteration with the grey 2x2 -- only the
+    # equations. Agreement here is therefore a check on the equations.
+    for kappa in (0.0, 1e-3, 1.0, 3e2, 1e6, 1e9)
+        rad = RadiationPhysics(c=1.0, chat=1.0, a_rad=1.0, beta_order=0,
+                               opacity=ConstantOpacity(kappa))
+        U, R = copy(U0), copy(R0)
+        radiation_source_step!(U, R, const_chat(rad, sim.grid), sim.eos, rad, sim.grid,
+                               1e-3, nothing, 0.0, sim.floors; update_momentum=false)
+        Um, Rm = copy(U0), copy(R0)
+        multigroup_source_step!(Um, Rm, const_chat(rad, sim.grid), sim.eos, rad, sim.grid,
+                                1e-3, nothing, 0.0, sim.floors; update_momentum=false)
+        @test isapprox(Um, U; rtol=1e-8)
+        @test isapprox(Rm, R; rtol=1e-8)
     end
 
     # ... and the group machinery itself is inert at one group: any single group,
@@ -481,6 +510,11 @@ end
         # The package default, and the one every production run takes. Zero, and
         # it stays zero: `test_performance.jl` asserts the same thing through the
         # whole source step, and this is the per-cell statement of it.
+        # `BracketedCoupling` reduces the step to one scalar unknown, so it forms
+        # no Newton matrix at all and there is nothing here that could allocate
+        # -- but the claim is in its docstring, so it is asserted rather than
+        # argued.
+        @test coupling_bytes(BracketedCoupling(), s) == 0
         @test coupling_bytes(QuokkaCoupling(), s) == 0
         # `DirectCoupling`'s hand-written stepper, likewise -- which is why it
         # was kept once a library backward Euler existed.
