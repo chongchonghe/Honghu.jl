@@ -13,9 +13,9 @@
 #
 # This file defines the *interface*: a per-cell `CouplingState` carrying
 # everything a solver needs, and `solve_coupling` dispatching on an
-# `AbstractCoupling`. The two hand-written solvers live in `coupling_solvers.jl`,
-# and the two backed by OrdinaryDiffEq -- `DirectCoupling`'s default backward-Euler
-# stepper and the error-controlled reference solver -- live in `coupling_ode.jl`.
+# `AbstractCoupling`. The two one-step solvers live in `coupling_solvers.jl`,
+# and the error-controlled reference solver, the only one backed by
+# OrdinaryDiffEq, lives in `coupling_ode.jl`.
 #
 # Keeping the state explicit costs one small immutable struct per cell and buys
 # the thing this code exists for: a new integrator is a new subtype and a new
@@ -62,14 +62,18 @@ internal energy and group radiation energies.
 
 Three are provided:
 
-  - [`QuokkaCoupling`](@ref)  -- backward Euler in Quokka's replaced base
-    variables `(E_gas, R_g)`, the default;
-  - [`DirectCoupling`](@ref)  -- backward Euler in the natural variables
-    `(E_gas, E_g)`, by either of two [`AbstractBackwardEuler`](@ref) steppers;
-  - [`AdaptiveCoupling`](@ref) -- an error-controlled ODE solve.
+  - [`BracketedCoupling`](@ref) -- backward Euler in the natural variables,
+    reduced to the single unknown `E_gas` and solved inside a bracket. The
+    default;
+  - [`QuokkaCoupling`](@ref)    -- backward Euler in Quokka's replaced base
+    variables `(E_gas, R_g)`;
+  - [`AdaptiveCoupling`](@ref)  -- an error-controlled ODE solve.
 
 They solve the same equations and should agree to their tolerances; that they
-do is a test, and the reason the interface exists at all.
+do is a test, and the reason the interface exists at all. They agree about as
+independently as three solvers can: the first has one unknown, the second has
+`1 + NG`, the third has `1 + NG` and a different discretisation, and no two of
+them share a residual, an iteration or a linear solve.
 """
 abstract type AbstractCoupling end
 
@@ -440,16 +444,18 @@ The radiation rows are these times that group's `chat`, and the gas rows are
 The `dkappa/dT` terms are what make this *exact* rather than merely
 linear-in-`E`; they come from the opacity law through
 [`coupling_opacity_dT`](@ref) and are zero for any law that does not depend on
-temperature. Including them cuts `DirectCoupling`'s and `QuokkaCoupling`'s
-Newton iterations by 25 to 40 per cent wherever the coupling is neither
+temperature. Including them cuts `QuokkaCoupling`'s Newton iterations by 25 to
+40 per cent wherever the coupling is neither
 transparent nor already in equilibrium, and by nothing at all where it is: the
 correction is proportional to `B_g - E_g`.
 
-Shared by every solver: [`NewtonStepper`](@ref)'s Newton matrix is `I - dt * J`
-verbatim, and the two OrdinaryDiffEq-backed solvers hand `J` straight to
-`ODEFunction` rather than paying `1 + NG` extra right-hand side evaluations to
-difference one -- which they could not do anyway, since an `SVec`'s element type
-is fixed and no dual number can flow through [`coupling_rhs`](@ref).
+[`AdaptiveCoupling`](@ref) hands `J` straight to `ODEFunction` rather than
+paying `1 + NG` extra right-hand side evaluations to difference one -- which it
+could not do anyway, since an `SVec`'s element type is fixed and no dual number
+can flow through [`coupling_rhs`](@ref). [`BracketedCoupling`](@ref) does not
+use this at all: it needs `dE_g/dE_gas` of the *eliminated* group block, which
+[`group_energies`](@ref) forms from the same coefficients without assembling any
+matrix.
 """
 @inline function coupling_jacobian(s::CouplingState{NG,M,T}, Egas,
                                    Erad::SVec{NG,T}) where {NG,M,T}

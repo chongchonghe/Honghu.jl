@@ -5,16 +5,24 @@
 #
 # Sections: conditioning, test, robust, derivation, ode, cost, runs.
 #
-# Nothing here is part of the package. Two `AbstractCoupling` subtypes are
-# defined below that are deliberately *not* in `src/` -- they are the candidate
-# steppers the findings document argues about, and they live here so that the
-# numbers can be reproduced without adding an unused solver to the tree.
+# Nothing here is part of the package. `PlainDirect` below is deliberately *not*
+# in `src/`: it is the unreduced `(1 + NG)` Newton in the natural variables, with
+# its convergence test as a knob, and it exists only so the findings document's
+# argument about that test can be re-run.
+#
+# Two rows of the document's tables can no longer be produced here.
+# `DirectCoupling` and its `ImplicitEulerStepper` were deleted from the package
+# once the bracketed scalar solver replaced them, and `ImplicitEuler` came from
+# a dependency that went with it. `PlainDirect(test = :residual, raise = true)`
+# reproduces what `DirectCoupling(stepper = NewtonStepper())` did, exactly --
+# same residual, same tolerance rule; the `ImplicitEuler` rows are reproducible
+# only at commit 2190e3c or earlier.
 
 using Hydro3D
 using Hydro3D: AbstractCoupling, CouplingState, CouplingResult, SVec, solve_coupling,
                coupling_rhs, coupling_jacobian, gas_scale, gas_temperature_of,
-               solve_jacobian, ArrowheadSolve, apply_energy_floors, newton_solve,
-               backward_euler, NewtonStepper, ImplicitEulerStepper,
+               solve_jacobian, ArrowheadSolve, apply_energy_floors,
+               group_energies, energy_balance, coupling_coefficients,
                maxabs, sumvec, dot, mul, divide, ngroups
 using Hydro3D.Problems
 using LinearAlgebra: cond
@@ -53,8 +61,7 @@ solvers it is used to judge.
 """
 function be_reference(; NG, opacity, kw...)
     sb = cell_state(BigFloat; NG, opacity=big_opacity(opacity), kw...)
-    r = solve_coupling(DirectCoupling(tolerance=BigFloat(1e-45), max_iterations=2000,
-                                      stepper=NewtonStepper()), sb)
+    r = solve_coupling(PlainDirect(tolerance=1e-45, maxit=2000, test=:residual), sb)
     cs = gas_scale(sb)
     scale = abs(sb.Egas + dot(cs, sb.Erad + sb.src))
     F0, Fg = _residual(sb, r.Egas, r.Erad)
@@ -107,18 +114,29 @@ round-off behaviour the findings document is about.
 
 `damp = true` adds the only globalisation a one-step Newton can have cheaply:
 the gas energy is never allowed to leave `[max(E_floor, x/4), 4x]` in a step.
+
+`raise = true` degrades the tolerance to `4 eps tau_max` where the optical depth
+makes the stated one unachievable, which is what the deleted `DirectCoupling`
+did and is the row the document calls "resid+raise".
 """
 struct PlainDirect{S} <: AbstractCoupling
     tolerance::Float64
     maxit::Int
     test::S
     damp::Bool
+    raise::Bool
 end
-PlainDirect(; tolerance=1e-9, maxit=100, test=:residual, damp=false) =
-    PlainDirect(tolerance, maxit, test, damp)
+PlainDirect(; tolerance=1e-9, maxit=100, test=:residual, damp=false, raise=false) =
+    PlainDirect(tolerance, maxit, test, damp, raise)
 
 function Hydro3D.solve_coupling(m::PlainDirect, s::CouplingState{NG,M,T}) where {NG,M,T}
-    atol = m.tolerance * abs(s.Egas + dot(gas_scale(s), s.Erad + s.src))
+    tol = T(m.tolerance)
+    if m.raise
+        kdt = (s.dt * s.chat) * s.rho
+        kP = first(Hydro3D.coupling_opacity(s, Hydro3D.gas_temperature_of(s, s.Egas)))
+        tol = max(tol, 4 * eps(T) * max(maxabs(mul(kdt, kP)), one(T)))
+    end
+    atol = tol * abs(s.Egas + dot(gas_scale(s), s.Erad + s.src))
     Emin = s.cv * s.Tfloor
     x0 = s.Egas
     xg = s.Erad + s.src
@@ -157,94 +175,22 @@ function Hydro3D.solve_coupling(m::PlainDirect, s::CouplingState{NG,M,T}) where 
 end
 
 """
-The natural variables reduced to one scalar unknown, and solved with a bracket.
+    _reduced(state, Egas, gas0, rad0) -> (Erad, G, dG/dEgas)
 
-At a fixed gas temperature the group block of the backward-Euler system is
-*linear* in `E_g`, so it can be eliminated in closed form,
+The scalar reduction, as the package ships it: [`group_energies`](@ref) solves
+the backward-Euler group block in closed form and [`energy_balance`](@ref) is
+the one equation left. Kept as a three-value helper because the derivation
+section wants `G` and its derivative side by side with the unreduced Schur
+complement, and because it is what `_reduced_from_shared` below is checked
+against.
 
-    E_g(T) = (rad0_g + tau_g B_g(T)) / (1 + a_g),
-    tau_g  = dt chat rho kappa_P,g(T),   a_g = dt chat rho kappa_E,g(T)
-
-and what is left is one scalar equation -- the cell's energy balance,
-
-    G(E_gas) = E_gas - gas0 + sum_g (c/chat_g) (E_g(T) - rad0_g) = 0 .
-
-`G` is negative at the temperature floor and positive once `E_gas` exceeds the
-cell's total energy, so a bracket exists for every cell, always. Newton inside
-that bracket, replaced by a bisection step whenever it would leave it, therefore
-cannot walk away from the root -- which is exactly what the unsafeguarded
-`(1 + NG)`-dimensional iteration does when the opacity depends steeply on
-temperature.
+`gas0` and `rad0` are accepted and ignored: `energy_balance` recovers them from
+the state. They stay in the signature so the two functions the derivation
+section compares have the same one.
 """
-struct BracketedDirect <: AbstractCoupling
-    tolerance::Float64
-    maxit::Int
-end
-BracketedDirect(; tolerance=1e-9, maxit=100) = BracketedDirect(tolerance, maxit)
-
-"Group energies that solve the group block exactly at this gas energy, the
-scalar residual `G`, and `dG/dE_gas`."
 @inline function _reduced(s::CouplingState{NG,M,T}, Egas, gas0, rad0) where {NG,M,T}
-    Tg = gas_temperature_of(s, Egas)
-    B = Hydro3D.thermal_emission(s, Tg)
-    dB = Hydro3D.thermal_emission_dT(s, Tg)
-    kP, kE = Hydro3D.coupling_opacity(s, Tg)
-    dkP, dkE = Hydro3D.coupling_opacity_dT(s, Tg)
-    kdt = (s.dt * s.chat) * s.rho
-    tau = mul(kdt, kP)
-    aa = mul(kdt, kE)
-    E = SVec{NG,T}(ntuple(g -> (rad0[g] + tau[g] * B[g]) / (one(T) + aa[g]), Val(NG))...)
-    cs = gas_scale(s)
-    G = Egas - gas0 + dot(cs, E - rad0)
-    dtau = mul(kdt, dkP) / s.cv
-    daa = mul(kdt, dkE) / s.cv
-    dE = SVec{NG,T}(ntuple(Val(NG)) do g
-        (dtau[g] * B[g] + tau[g] * dB[g] / s.cv - E[g] * daa[g]) / (one(T) + aa[g])
-    end...)
-    (E, G, one(T) + dot(cs, dE))
-end
-
-function Hydro3D.solve_coupling(m::BracketedDirect, s::CouplingState{NG,M,T}) where {NG,M,T}
-    cs = gas_scale(s)
-    gas0 = s.Egas - dot(cs, s.work)
-    rad0 = s.Erad + s.src + s.work
-    Etot = abs(s.Egas + dot(cs, s.Erad + s.src))
-    atol = m.tolerance * Etot
-    lo = s.cv * s.Tfloor
-    hi = max(4 * Etot, 4 * s.Egas)
-    x = clamp(s.Egas, lo, hi)
-    E, G, dG = _reduced(s, x, gas0, rad0)
-    _, Glo, _ = _reduced(s, lo, gas0, rad0)
-    _, Ghi, _ = _reduced(s, hi, gas0, rad0)
-    k = 0
-    while Ghi < 0 && k < 60
-        hi *= 4
-        _, Ghi, _ = _reduced(s, hi, gas0, rad0)
-        k += 1
-    end
-    (Glo > 0 || Ghi < 0) && return CouplingResult{NG,T}(x, E, 0, false)
-    n = 0
-    conv = false
-    while n < m.maxit
-        n += 1
-        E, G, dG = _reduced(s, x, gas0, rad0)
-        G < 0 ? (lo = x) : (hi = x)
-        if abs(G) <= atol
-            conv = true
-            break
-        end
-        xn = dG == 0 ? T(Inf) : x - G / dG
-        (xn <= lo || xn >= hi) && (xn = (lo + hi) / 2)
-        if abs(xn - x) <= eps(T) * abs(x)
-            x = xn
-            conv = true
-            break
-        end
-        x = xn
-    end
-    E, _, _ = _reduced(s, x, gas0, rad0)
-    Egas, Erad = apply_energy_floors(s, x, E)
-    CouplingResult{NG,T}(Egas, Erad, n, conv)
+    E, dE = group_energies(s, Egas)
+    return (E, energy_balance(s, Egas, E), one(T) + dot(gas_scale(s), dE))
 end
 
 # --- the sweep the robustness sections use ------------------------------------
@@ -259,11 +205,10 @@ const DT = 1e-3
 
 const METHODS = ["Quokka (R base)" => QuokkaCoupling(),
                  "natural, residual" => PlainDirect(test=:residual),
-                 "natural, resid+raise" => DirectCoupling(stepper=NewtonStepper()),
+                 "natural, resid+raise" => PlainDirect(test=:residual, raise=true),
                  "natural, increment" => PlainDirect(test=:increment),
                  "natural, incr+damp" => PlainDirect(test=:increment, damp=true),
-                 "natural, bracketed" => BracketedDirect(),
-                 "natural, ImplicitEuler" => DirectCoupling(),
+                 "natural, bracketed" => BracketedCoupling(),
                  "adaptive 1e-2" => AdaptiveCoupling(),
                  "adaptive 1e-8" => AdaptiveCoupling(reltol=1e-8, abstol=1e-14)]
 
@@ -320,7 +265,7 @@ function section_test()
     for (nm, _) in tests
         @printf(" %12s %3s %s |", nm, "it", "c")
     end
-    @printf(" %12s %3s %s\n", "ImplicitEuler", "it", "c")
+    println()
     for tau in [1e0, 1e2, 1e4, 1e6, 1e7, 1e8, 1e9, 1e10, 1e12]
         op = ConstantOpacity(tau / DT)
         ref = be_reference(; NG, opacity=op, dt=DT)
@@ -332,9 +277,7 @@ function section_test()
             @printf(" %12.2e %3d %s |", graderr(r, ref, NG), r.iterations,
                     r.converged ? " " : "!")
         end
-        eg, er, n, ok = backward_euler(ImplicitEulerStepper(), DirectCoupling(), s,
-                                       1e-9, 1e-9 * scale)
-        @printf(" %12.2e %3d %s\n", graderr((Egas=eg, Erad=er), ref, NG), n, ok ? " " : "!")
+        println()
     end
 
     println("\n== where the residual test gives up, against the tolerance it was asked for ==")
@@ -437,8 +380,8 @@ function section_robust()
             tot += 1
             s = cell_state(; NG=4, opacity=op, Tgas=Tg, Trad=Tr, dt=DT)
             sb = cell_state(BigFloat; NG=4, opacity=big_opacity(op), Tgas=Tg, Trad=Tr, dt=DT)
-            rb = solve_coupling(BracketedDirect(tolerance=1e-45, maxit=4000), sb)
-            r = solve_coupling(BracketedDirect(), s)
+            rb = solve_coupling(BracketedCoupling(tolerance=1e-45, max_iterations=4000), sb)
+            r = solve_coupling(BracketedCoupling(), s)
             r.converged || (fails += 1)
             rb.converged || (bigfail += 1)
             its += r.iterations
@@ -475,7 +418,7 @@ function section_ode()
         s = cell_state(; NG, opacity=ConstantOpacity(tau / DT), dt=DT)
         ref, chk = ode_ref(s)
         q = solve_coupling(QuokkaCoupling(), s)
-        d = solve_coupling(DirectCoupling(stepper=NewtonStepper()), s)
+        d = solve_coupling(PlainDirect(test=:residual, raise=true), s)
         a2 = solve_coupling(AdaptiveCoupling(), s)
         a8 = solve_coupling(AdaptiveCoupling(reltol=1e-8, abstol=1e-14), s)
         @printf("%8.0e | %10.2e %10.2e | %10.2e %6d | %10.2e %6d | %10.2e\n", tau,
@@ -680,7 +623,7 @@ function section_derivation()
     @printf("  %-34s %16.8g %16.8g\n", "first Newton step", -G / dG, dx0)
 
     println()
-    for (nm, m) in ("bracketed scalar" => BracketedDirect(),
+    for (nm, m) in ("bracketed scalar" => BracketedCoupling(),
                     "natural, residual" => PlainDirect(test=:residual),
                     "Quokka (R base)" => QuokkaCoupling())
         r = solve_coupling(m, s)
@@ -762,8 +705,9 @@ end
 """
 `_reduced`, but with every coupling quantity read off [`coupling_rhs`](@ref) and
 [`coupling_jacobian`](@ref) instead of re-derived from the opacity and the Planck
-function. This is what `BracketedDirect` would have to look like to live in
-`src/` without keeping a second copy of the physics (findings section 5.7).
+function. This is what the shipped `BracketedCoupling` would look like if the
+elimination were read off the rate instead of sharing `coupling_coefficients`
+with it (findings section 5.7).
 
 `F_g` is linear in `E_g`, so evaluating the shared pair at *any* group energies
 `probe` gives the coefficients exactly:

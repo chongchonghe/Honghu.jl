@@ -1,18 +1,20 @@
-# Newton's method for a bordered ("arrowhead") nonlinear system, and the two
-# linear solves it can use.
+# The linear solve of one Newton step, for a bordered ("arrowhead") system.
 #
-# Nothing here integrates anything or knows what the unknowns mean. The caller
-# hands over a residual, its Jacobian, an opening iterate, a linear solve, a
-# tolerance and an iteration cap, and gets back a root. That the residual happens
-# to be `u - u0 - dt f(u)` -- one backward-Euler step -- is the caller's business
-# and is written down in `coupling_solvers.jl`, which is why this stepper can be
-# tuned, damped or replaced without touching a line of coupling physics.
+# Nothing here knows what the unknowns mean. The caller hands over the four
+# blocks of a Jacobian that is dense in its first row and column and diagonal in
+# the rest, plus a right-hand side, and gets back the update. That the system
+# happens to be one Newton step of `QuokkaCoupling`'s replaced base variables is
+# the caller's business and is written down in `coupling_solvers.jl`.
+#
+# `QuokkaCoupling` is now the only caller. `BracketedCoupling` reduces its step
+# to one scalar unknown and so has no linear system at all, and the Newton
+# iteration that used to live at the bottom of this file went with
+# `DirectCoupling`, which was its only user.
 #
 # The one thing this file does assume is the *shape* of the system: `1 + NG`
-# unknowns split as one scalar and one `SVec{NG}`, with a Jacobian that is dense
-# in the first row and column and diagonal in the rest. That is a shape, not a
-# physics -- it is what `solve_arrowhead` inverts in `O(NG)` -- and
-# `AbstractJacobianSolve` below says which caller relies on it and what checks it.
+# unknowns split as one scalar and one `SVec{NG}`. That is a shape, not a physics
+# -- it is what `solve_arrowhead` inverts in `O(NG)` -- and
+# `AbstractJacobianSolve` below says who relies on it and what checks it.
 
 """
     solve_arrowhead(J00, J0g, Jg0, Jgg, F0, Fg) -> (dx0, dxg)
@@ -43,8 +45,8 @@ end
 """
     AbstractJacobianSolve
 
-How [`QuokkaCoupling`](@ref) and [`DirectCoupling`](@ref) solve the linear system
-of one Newton step. Two are provided:
+How [`QuokkaCoupling`](@ref) solves the linear system of one Newton step. Two
+are provided:
 
   - [`ArrowheadSolve`](@ref) -- eliminate the group block into the gas row.
     `O(NG)`, forms no matrix, allocates nothing. The default for both.
@@ -86,9 +88,9 @@ a term is added that couples groups directly. That day is not free there either
 would have to write a block -- but that is one line of assembly against an
 elimination that has no place for the entries at all.
 
-This choice belongs to [`newton_solve`](@ref), the hand-written stepper. The
-other backward-Euler stepper, [`ImplicitEulerStepper`](@ref), brings its own
-linear solve and ignores it; see [`AbstractBackwardEuler`](@ref).
+[`QuokkaCoupling`](@ref) is the only caller. [`BracketedCoupling`](@ref) has one
+unknown and so no linear system, and [`AdaptiveCoupling`](@ref) hands its matrix
+to OrdinaryDiffEq, which factorises it itself.
 """
 abstract type AbstractJacobianSolve end
 
@@ -125,8 +127,8 @@ struct DenseSolve <: AbstractJacobianSolve end
 
 Solve the Newton step with [`solve_arrowhead`](@ref): eliminate the diagonal
 group block into the gas row, `O(NG)`, no matrix formed, nothing allocated. The
-default for [`QuokkaCoupling`](@ref) and for [`DirectCoupling`](@ref)'s
-hand-written stepper.
+default for [`QuokkaCoupling`](@ref), which is the only solver that forms a
+Newton system at all.
 
 Exact while the coupling is the one in [`coupling_rhs`](@ref), where groups meet
 only through the gas. [`AbstractJacobianSolve`](@ref) says what that assumption
@@ -143,10 +145,9 @@ draws. Dispatches on an [`AbstractJacobianSolve`](@ref).
 
 The two paths differ once the matrix is singular: the arrowhead treats a zero
 group entry as a decoupled group and returns a zero update for it, while an LU
-factorisation of the same matrix throws. Neither solver produces one.
-[`DirectCoupling`](@ref)'s group entries are `1 + dt chat rho kappa_E >= 1`, and
-[`QuokkaCoupling`](@ref) writes a large finite sentinel rather than `-Inf` for a
-group of zero optical depth, so its matrix factorises too.
+factorisation of the same matrix throws. [`QuokkaCoupling`](@ref) never produces
+one -- it writes a large finite sentinel rather than `-Inf` for a group of zero
+optical depth, so its matrix factorises too.
 """
 @inline solve_jacobian(::ArrowheadSolve, J00::T, J0g::SVec{NG,T}, Jg0::SVec{NG,T},
                        Jgg::SVec{NG,T}, F0::T, Fg::SVec{NG,T}) where {NG,T} =
@@ -170,62 +171,4 @@ function solve_jacobian(::DenseSolve, J00::T, J0g::SVec{NG,T}, Jg0::SVec{NG,T},
     # below captures a value rather than a box.
     ldiv!(lu!(A), b)
     return (@inbounds(b[1]), SVec{NG,T}(ntuple(g -> @inbounds(b[1+g]), Val(NG))...))
-end
-
-# --- the iteration ------------------------------------------------------------
-
-"""
-    newton_solve(residual, jacobian, u0, linsolve, tolerance, max_iterations)
-        -> (u, iterations, converged)
-
-Newton's method on a bordered system of `1 + NG` unknowns, carried as a pair
-`u = (x0, xg)` of one scalar and one [`SVec`](@ref) of `NG`.
-
-  - `residual(u) -> (F0, Fg)` : the equations to zero, in the same layout.
-  - `jacobian(u) -> (J00, J0g, Jg0, Jgg)` : `dF/du` in the four blocks
-    [`solve_arrowhead`](@ref) draws -- scalar, row, column, diagonal.
-  - `u0` : the opening iterate.
-  - `linsolve` : an [`AbstractJacobianSolve`](@ref), how each step's system is
-    inverted.
-  - `tolerance` : *absolute*, tested against `max(|F0|, maxabs(Fg))`. Absolute
-    rather than relative because scaling a residual is a statement about what the
-    unknowns mean, and this function does not know; the caller multiplies by
-    whatever its own scale is before handing the number over.
-  - `max_iterations` : the cap. Reaching it returns the last iterate with
-    `converged = false` rather than throwing, so one stubborn cell in a large
-    grid shows up in a run's diagnostics instead of killing the run.
-
-The residual is tested *before* the first step, so a state that already solves
-its equations costs one evaluation and no linear solve. That is the common case
-in an optically thin cell.
-
-Allocation-free with `ArrowheadSolve` for any residual and Jacobian that are
-themselves allocation-free: `u` is a tuple of `isbits` values, and both callables
-are specialised on rather than boxed.
-
-This is the whole of the hand-written backward-Euler stepper
-([`NewtonStepper`](@ref)): what makes it *backward Euler* is that
-[`DirectCoupling`](@ref) hands it `u - u0 - dt f(u)` and `I - dt J`. Nothing
-here knows that, which is the point -- damping, a line search or a different
-convergence test can be tried here without touching the coupling.
-"""
-function newton_solve(residual::F, jacobian::J, u0::Tuple{T,SVec{NG,T}},
-                      linsolve::AbstractJacobianSolve, tolerance::T,
-                      max_iterations::Int) where {F,J,NG,T}
-    x0, xg = u0
-    n = 0
-    converged = false
-    while n < max_iterations
-        n += 1
-        F0, Fg = residual((x0, xg))
-        if max(abs(F0), maxabs(Fg)) <= tolerance
-            converged = true
-            break
-        end
-        J00, J0g, Jg0, Jgg = jacobian((x0, xg))
-        dx0, dxg = solve_jacobian(linsolve, J00, J0g, Jg0, Jgg, -F0, -Fg)
-        x0 += dx0
-        xg += dxg
-    end
-    return ((x0, xg), n, converged)
 end

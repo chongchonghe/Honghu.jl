@@ -43,8 +43,8 @@ Parameters of the two-moment (M1) radiation module, grey or multigroup.
     `k_B T` want the default `1`; wrong in either of those cases it costs
     nothing, wrong in the physical-units case it moves energy between groups.
   - `coupling` : the implicit matter-radiation solver used when `ngroups > 1`, an
-    `AbstractCoupling` -- [`QuokkaCoupling`](@ref) (the default,
-    allocation-free), [`DirectCoupling`](@ref) or [`AdaptiveCoupling`](@ref). A
+    `AbstractCoupling` -- [`BracketedCoupling`](@ref) (the default,
+    allocation-free), [`QuokkaCoupling`](@ref) or [`AdaptiveCoupling`](@ref). A
     grey run ignores it and uses [`radiation_source_step!`](@ref)'s own 2×2
     Newton driver.
   - `closure`  : [`LevermoreClosure`](@ref) (the M1 default) or

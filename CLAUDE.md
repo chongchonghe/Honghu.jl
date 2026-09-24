@@ -53,30 +53,32 @@ plotting stack.
 dependency, and the reasoning is worth keeping because it is what the tiers
 actually mean:
 
-- Two solvers need it — `AdaptiveCoupling`, the error-controlled reference, and
-  `ImplicitEulerStepper`, which `DirectCoupling` now defaults to. A solver behind
-  an extension boundary is one that most checkouts never run: OrdinaryDiffEq was
-  simply not installed here, `test_coupling_adaptive.jl` skipped itself, and the
-  suite reported a clean 1027 passes with a third of the coupling code
-  unexercised. A dependency that is *required for a code path* does not belong in
-  `[weakdeps]`, whatever it costs.
+- One solver needs it — `AdaptiveCoupling`, the error-controlled reference, and
+  it is the only coupling path that *can* need it: the other two eliminate the
+  group block algebraically, which is possible after an implicit step is taken
+  and not along an ODE trajectory. A solver behind an extension boundary is one
+  that most checkouts never run: OrdinaryDiffEq was simply not installed here,
+  `test_coupling_adaptive.jl` skipped itself, and the suite reported a clean 1027
+  passes with a third of the coupling code unexercised. A dependency that is
+  *required for a code path* does not belong in `[weakdeps]`, whatever it costs.
 - What it costs, measured: `using Hydro3D` goes from 0.035 s to 1.53 s, and a
   fresh install precompiles ~190 packages instead of none. Wall time of a run is
   unaffected. That is real and it is the price of the decision.
-- Three `[deps]` entries, not one. OrdinaryDiffEq 7 is a slim meta-package that
-  exports only Tsit5, the Verner methods, `Rosenbrock23`, `Rodas5P` and `FBDF`;
-  `ImplicitEuler` comes from `OrdinaryDiffEqSDIRK` and `NLNewton` from
-  `OrdinaryDiffEqNonlinearSolve`. Both are already inside OrdinaryDiffEq's own
-  closure, so naming them adds a line to Project.toml and nothing to the manifest
-  or the load time.
+- One `[deps]` entry, not three. It used to be three: OrdinaryDiffEq 7 is a slim
+  meta-package that exports only Tsit5, the Verner methods, `Rosenbrock23`,
+  `Rodas5P` and `FBDF`, so `ImplicitEuler` had to come from `OrdinaryDiffEqSDIRK`
+  and `NLNewton` from `OrdinaryDiffEqNonlinearSolve`. Both went with
+  `ImplicitEulerStepper`. Removing them changed the manifest not at all, since
+  they were already inside OrdinaryDiffEq's closure — but naming a package in
+  `[deps]` says this code calls it, and it no longer does.
 - **Import selectively.** `using OrdinaryDiffEq: ODEProblem, ODEFunction, …` and
   not `using OrdinaryDiffEq`, because it exports `step!` and so does this
   package; a blanket import would make `step!(sim)` ambiguous for every user with
   both in scope. `using LinearAlgebra: lu!, ldiv!` is there for the same reason
   (`dot` and `norm`), and the two comments in `src/Hydro3D.jl` say so.
 
-The `[deps]` list is `Printf`, `Dates`, `LinearAlgebra` (all stdlibs) and the
-three OrdinaryDiffEq packages. The bar for `[deps]` is still real — this code is
+The `[deps]` list is `Printf`, `Dates`, `LinearAlgebra` (all stdlibs) and
+`OrdinaryDiffEq`. The bar for `[deps]` is still real — this code is
 meant to run on compute nodes where a large tree is a liability — but it is a
 bar, not a wall, and "the package calls it" clears it.
 
@@ -92,14 +94,16 @@ than principle, and each is worth revisiting if the calculus changes:
   `src/output.jl`.
 - a generic nonlinear solver — the arrowhead elimination in `src/newton.jl` is
   `O(NG)` and forms no matrix, and `QuokkaCoupling` around it is 0 bytes and
-  ~1 μs a cell. `ImplicitEuler` is now in the tree as the measurement of that
-  claim rather than an assertion of it: at four groups it is 10 kB and 8× the
-  wall time for the same answer to the same tolerance.
+  ~1 μs a cell. `ImplicitEuler` was in the tree for a while as the measurement of
+  that claim rather than an assertion of it — at four groups it was 10 kB and 8×
+  the wall time for the same answer to the same tolerance — and it is now gone
+  with `DirectCoupling`; the numbers are in `docs/coupling-findings.md` §7.
 
 What has not changed: keep hot kernels allocation-free, and don't let a
 dependency into an inner loop without measuring what it costs there. The package
-default, `QuokkaCoupling`, still allocates nothing per cell and touches none of
-the above.
+default, `BracketedCoupling`, allocates nothing per cell and touches none of the
+above -- it reduces the step to one scalar unknown, so it does not even reach
+`src/newton.jl`.
 
 ## Source layout
 
@@ -108,15 +112,15 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | File | Contents |
 |:---|:---|
 | `staticvec.jl` | `SVec{N,T}`, a stack-allocated fixed-size vector. Deliberately *not* an `AbstractArray`, so a stray broadcast cannot allocate. |
-| `newton.jl` | `newton_solve` on a bordered (arrowhead) system, and the two linear solves it can use — `ArrowheadSolve`, `DenseSolve`. No physics: the caller supplies a residual and its Jacobian, which is what lets the coupling's backward-Euler stepper be tuned without touching the coupling. |
+| `newton.jl` | The linear solve of one Newton step on a bordered (arrowhead) system — `ArrowheadSolve`, `DenseSolve`. No physics: the caller supplies the four Jacobian blocks. `QuokkaCoupling` is the only caller left. |
 | `constants.jl` | `CGS` submodule. The code itself is unit-agnostic. |
 | `planck.jl` | The normalised incomplete Planck integral (two series, no table), `RadiationGroups`, the group centres and the Planck fractions. Included before `opacity.jl`, which needs the group type. |
 | `eos.jl` | `AbstractEOS`, `IdealGas`. Energies are volumetric; `cv` is specific. |
 | `opacity.jl` | `AbstractOpacity` and four concrete laws. Planck / energy / flux means are distinguished; `dkappa_dT` is the optional temperature derivative the coupling's exact Jacobian needs. |
 | `rsla.jl` | `AbstractChatLimiter` and the pointwise `chat_factor`: the rule that makes the reduced speed of light local. The array drivers that apply it are in `radiation_system.jl`, as `source_terms.jl` holds the loop over cells for `coupling.jl`'s physics. |
-| `coupling.jl` | `AbstractCoupling`, `CouplingState`, `coupling_rhs` / `coupling_jacobian` — the single source of truth for the coupling physics. |
-| `coupling_solvers.jl` | `QuokkaCoupling`, `DirectCoupling`, and the `AbstractBackwardEuler` stepper choice. |
-| `coupling_ode.jl` | The two OrdinaryDiffEq-backed solvers — `ImplicitEulerStepper` and `AdaptiveCoupling` — and the `ODEFunction` they share. |
+| `coupling.jl` | `AbstractCoupling`, `CouplingState`, and the coupling physics in three layers: `coupling_coefficients` (the per-group emission rate and absorption coefficient — the single source of truth), `coupling_rhs` / `coupling_jacobian` built from it for the ODE, and `group_energies` / `energy_balance` built from it for the scalar reduction. |
+| `coupling_solvers.jl` | The two one-step solvers: `BracketedCoupling` (the default) and `QuokkaCoupling`. |
+| `coupling_ode.jl` | `AdaptiveCoupling`, the error-controlled reference solve, and the `ODEFunction` it is written against. |
 | `grid.jl` | `CartesianGrid`, sweep index ranges, and the threading helpers `threaded_jk` / `reduce_max_jk`. |
 | `variables.jl` | State-vector layout and pointwise conversions. |
 | `boundary.jl` | `BoundaryCondition` subtypes and ghost filling. |
@@ -192,18 +196,17 @@ Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`,
 
 `NG >= 2` does not use the driver above. It packs each cell into a `CouplingState` and hands it to an `AbstractCoupling` (`src/coupling.jl`, `src/coupling_solvers.jl`, `src/coupling_ode.jl`). Those solvers **do** carry the `dkappa/dT` term, so their Jacobians are exact:
 
-- `coupling_rhs` and `coupling_jacobian` are the single source of truth. `DirectCoupling`'s residual is `u - u0 - dt f(u)` and its Jacobian `I - dt J`, generated, not hand-derived; `AdaptiveCoupling` hands `J` to `ODEFunction`.
-- `DirectCoupling` does not *solve* them either. It builds the residual and the Jacobian as two closures and hands them to an `AbstractBackwardEuler` stepper, so the iteration can be tuned or replaced without touching any coupling physics. Two steppers exist and must agree:
-  - `ImplicitEulerStepper()` — OrdinaryDiffEq's `ImplicitEuler`, `adaptive = false`, one step of length `dt`. **The default.** Its `NLNewton` is tuned (`max_iter`, `always_new = true`, `check_div = false`, `κ = 1e-4`) so it solves the same problem rather than a looser one; the reasons are in its docstring. It allocates ~10 kB a cell and cannot not.
-  - `NewtonStepper()` — `newton_solve` from `src/newton.jl`. Zero bytes, 2.4–120× faster.
-  - The pair is a genuinely independent cross-check: they share `coupling_rhs` and `coupling_jacobian` and nothing else — not the residual form, the opening iterate, the convergence test or the linear algebra — so `test/test_radiation_multigroup.jl` asserting that they agree to 0.005 of the requested tolerance, and take the same number of Newton steps to within one, tests more than two in-tree loops agreeing ever could.
-- `linsolve` belongs to `NewtonStepper` alone. `ImplicitEuler` factorises the full matrix itself (equivalent to `DenseSolve`) and ignores the keyword — which is asserted, not just documented, and which means the *default* `DirectCoupling()` makes no arrowhead assumption at all. A `linsolve` comparison must therefore ask for `stepper = NewtonStepper()` explicitly or it compares two identical calls.
+- **`coupling_coefficients` is the single source of truth**, not `coupling_rhs`. It returns the per-group emission rate `rho kappa_P B` and absorption coefficient `rho kappa_E`, with `coupling_coefficients_dT` for their temperature derivatives, and everything else is built from it: `coupling_rhs` / `coupling_jacobian` for `AdaptiveCoupling`, and `group_energies` / `energy_balance` for the two one-step solvers. It is stated as that pair rather than as a rate because the group block of a backward-Euler step is linear in `E_g` *precisely when* the exchange has the form `emission - absorption * E_g`, and a solver that eliminates the block needs to see that, not a rate.
+- **`BracketedCoupling` is the default.** It takes `E_gas` as its *only* unknown: `group_energies` solves the group block in closed form, `energy_balance` is the scalar equation left, and Newton on it is safeguarded by a bracket that always exists (`G <= 0` at the temperature floor, `G >= 0` once the gas holds the cell's whole energy). No `1 + NG` system, no Jacobian assembly, no linear solve, zero bytes.
+- **Why it is the default, and this is the thing to know before changing it.** The unreduced `(1 + NG)` Newton does not merely overshoot with a steeply temperature-dependent opacity — its Newton *direction* goes wrong, because it linearises about a state where the group block is unsatisfied and `E_g` is far from equilibrium with `T`. Over 240 cells spanning three opacity laws and `tau_cell` from 1e-4 to 1e12, `BracketedCoupling` fails none and `QuokkaCoupling` fails 75. `docs/coupling-findings.md` derives it in §5 and `docs/coupling-experiments/coupling_study.jl` reproduces every number.
+- The reduction also makes the convergence test unconditional: `G` is a difference of energies with no `tau (B - E)` left in it to cancel, so nothing amplifies round-off by `tau_cell`. That is the failure Quokka's replaced base variables exist to avoid, avoided a different way — see §2 and §3 of the findings.
+- `linsolve` belongs to `QuokkaCoupling` alone now; it is the only solver that forms a Newton system at all.
 - Every distinct `CouplingState{NG,M,T,O}` makes OrdinaryDiffEq specialise its whole integrator stack again, ~2–3 s of compilation each. It is why the test suite defines its opacity helpers once at file scope, and why a run pays this once rather than per cell.
-- `QuokkaCoupling` is a separate formulation and stays hand-derived. `R_g` is the integrated transfer, not a state variable, so there is no `dR_g/dt` to differentiate — it is a different discretisation, not a change of variables. It shares `coupling_rhs` (its opening guess is one explicit step of it) and nothing else.
+- `QuokkaCoupling` is a separate formulation and stays hand-derived. `R_g` is the integrated transfer, not a state variable, so there is no `dR_g/dt` to differentiate — it is a different discretisation, not a change of variables. It shares `coupling_rhs` (its opening guess is one explicit step of it) and nothing else. It is kept because Quokka runs it and structural fidelity to Quokka is a design goal here, and because it and `BracketedCoupling` agreeing is worth more than either alone: one unknown against `1 + NG`, sharing no residual, no iteration and no linear solve.
 - The **opacity law travels on the state**, not a frozen pair of numbers, so `coupling_rhs` evaluates `kappa(T)` at whatever temperature it is called with. Without that the `dkappa/dT` term in the Jacobian would be the derivative of something the residual cannot see, and a Rosenbrock method would be worse off with it than without.
 - An opacity supplies its derivative through `dkappa_dT` / `group_opacity_dT`, defaulting to zero. Zero costs iterations, not correctness. Measured on a `PowerLawOpacity`: the exact term cuts mean Newton iterations by 25–40% in the intermediate regime, and by nothing at all deep in equilibrium, where the correction is proportional to `B_g - E_g`.
 - The optically-thin shortcut, the equilibrium-overshoot guard and `apply_energy_floors` are **not** ODE terms and are deliberately outside `coupling_rhs`. The header of `src/coupling.jl` says where each lives.
-- The arrowhead elimination is an **assumption, not a truth**: it is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today, not of radiation. `QuokkaCoupling` and `DirectCoupling`'s `NewtonStepper` take a `linsolve` (`AbstractJacobianSolve`) and **default to `ArrowheadSolve()`** — `O(NG)`, no matrix formed, zero bytes per cell. Defaulting to an assumption is acceptable only because this one is *checked*: `DenseSolve` solves the same system without it, and `test/test_radiation_multigroup.jl` asserts the two agree block by block and end to end. That cross-check is what licenses the default, and it exists because the failure would be quiet — Newton stops on the residual of the true equations, so a damaged matrix cannot converge to a wrong answer, only fail to converge and bump `newton_failures`. Add a term that couples groups directly (Compton redistribution, line overlap) and switch to `DenseSolve`, which needs only to write a block where it writes a diagonal; the arrowhead has nowhere to put the entries at all.
+- The arrowhead elimination is an **assumption, not a truth**: it is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today, not of radiation. `QuokkaCoupling` takes a `linsolve` (`AbstractJacobianSolve`) and **defaults to `ArrowheadSolve()`** — `O(NG)`, no matrix formed, zero bytes per cell. Defaulting to an assumption is acceptable only because this one is *checked*: `DenseSolve` solves the same system without it, and `test/test_radiation_multigroup.jl` asserts the two agree block by block and end to end. That cross-check is what licenses the default, and it exists because the failure would be quiet — Newton stops on the residual of the true equations, so a damaged matrix cannot converge to a wrong answer, only fail to converge and bump `newton_failures`. Add a term that couples groups directly (Compton redistribution, line overlap) and switch to `DenseSolve`, which needs only to write a block where it writes a diagonal; the arrowhead has nowhere to put the entries at all. **`group_energies` makes the same assumption and is worse off**: its closed form is a per-group scalar division, and a non-diagonal group block would leave no closed form at all, so `BracketedCoupling` would have to go rather than be adjusted.
 
 ## The variable reduced speed of light
 

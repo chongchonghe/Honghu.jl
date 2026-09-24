@@ -1,18 +1,22 @@
-# The two coupling solvers that are backed by OrdinaryDiffEq, and the ODE
-# description they share.
+# The error-controlled coupling solver, and the ODE description it is written
+# against.
 #
-#   `ImplicitEulerStepper` -- one non-adaptive step of `ImplicitEuler`, which is
-#                             backward Euler and nothing else. `DirectCoupling`'s
-#                             default stepper.
-#   `AdaptiveCoupling`     -- an error-controlled stiff integrator over the same
-#                             step. A reference solver: it says what the coupling
-#                             ODE's answer *is*, so that the one-step solvers can
-#                             be checked against a controlled error rather than an
-#                             assumed one.
+#   `AdaptiveCoupling` -- an adaptive stiff integrator over the step. A reference
+#                         solver: it says what the coupling ODE's answer *is*, so
+#                         that the one-step solvers can be checked against a
+#                         controlled error rather than an assumed one.
 #
-# Both are written against the same `_coupling_ode!` / `_coupling_jac!` /
-# `_coupling_tgrad!` triple below, and that triple is written against
-# `coupling_rhs` and `coupling_jacobian`, so nothing here restates any physics.
+# It is written against the `_coupling_ode!` / `_coupling_jac!` / `_coupling_tgrad!`
+# triple below, and that triple is written against `coupling_rhs` and
+# `coupling_jacobian`, so nothing here restates any physics.
+#
+# This is the one solver that cannot use the scalar reduction the two one-step
+# solvers are built on. `group_energies` solves the *backward-Euler group block*,
+# which is algebraic and linear in `E_g`; the group equations of the ODE are
+# linear in `E_g` with time-dependent coefficients, so along a trajectory they
+# integrate to a convolution over the gas history and to no algebraic `E_g(T)`.
+# An integrator therefore has to carry all `1 + NG` unknowns, which is also why
+# this is the only coupling path that allocates.
 #
 # This used to be a package extension, loaded only if the user happened to have
 # an ODE stack installed. OrdinaryDiffEq is now a hard dependency, so the split
@@ -21,7 +25,7 @@
 # costing, since the extension's tests skipped themselves on any checkout that
 # did not have the package, and went unexercised without complaining.
 
-# --- the ODE, once, for both solvers ------------------------------------------
+# --- the ODE ------------------------------------------------------------------
 
 # The coupling ODE, written in place so that the right-hand side allocates
 # nothing however many times an integrator calls it.
@@ -48,8 +52,8 @@ function _coupling_ode!(du, u, s::CouplingState{NG,M,T}, _) where {NG,M,T}
     return nothing
 end
 
-# The exact Jacobian, the same one `DirectCoupling` builds its Newton matrix
-# from. Dense `(1+NG)^2`, because that is what an integrator factorises and NG
+# The exact Jacobian, built from the same `coupling_coefficients` as everything
+# else. Dense `(1+NG)^2`, because that is what an integrator factorises and NG
 # is small; the arrowhead structure is still there (every off-diagonal entry of
 # the group block is zero) but exploiting it would mean a sparse prototype and a
 # specialised factorisation, which for `1 + NG <= 10` costs more than it saves.
@@ -98,78 +102,6 @@ end
 @inline _ode_erad(uf, ::CouplingState{NG,M,T}) where {NG,M,T} =
     SVec{NG,T}(ntuple(g -> @inbounds(uf[1+g]), Val(NG))...)
 
-# --- backward Euler, from the library -----------------------------------------
-
-"""
-    ImplicitEulerStepper()
-
-Take [`DirectCoupling`](@ref)'s implicit step with OrdinaryDiffEq's
-`ImplicitEuler`, run with `adaptive = false` over a single step of length `dt`.
-That is backward Euler exactly -- one implicit stage, no error control, no
-substepping -- so it is the same discretisation [`NewtonStepper`](@ref) applies
-by hand, arrived at by a completely separate route. The default.
-
-Being separate is what it is *for*. The two steppers share
-[`coupling_rhs`](@ref) and [`coupling_jacobian`](@ref) and nothing else: not the
-residual, not the opening iterate, not the convergence test, not the linear
-algebra. An error in either iteration therefore shows up as a disagreement
-between them, which a second copy of the same loop could never do.
-
-Its nonlinear solve is tuned rather than left at its defaults, and each change is
-there to make it solve the *same* problem the hand-written stepper solves:
-
-  - `max_iter = max_iterations` -- the default 10 is not enough for a stiff cell.
-    At `tau = 1e6` this iteration needs seven, and the default gives up at ten
-    with the cell barely moved.
-  - `always_new = true` -- re-form the Jacobian every iteration. The default
-    reuses it while convergence looks fast enough, which is the right economy
-    when a Jacobian is expensive; here it is a closed-form expression in `1 + NG`
-    unknowns, and `newton_solve` re-forms it too.
-  - `check_div = false` -- do not abandon the iteration on a step that grows.
-    The first Newton step out of an optically thick cell is large by construction
-    and trips the divergence test; with it off, a genuinely diverging cell reaches
-    `max_iter` and is reported unconverged, which is exactly what the hand-written
-    stepper does with the same cell.
-  - `κ = 1e-4` -- the increment test, tightened from `1e-2` so that the answer is
-    the root and not merely near it.
-
-**It allocates**, unavoidably: `solve` builds an integrator, a nonlinear solver,
-their caches and a solution object, per cell, for a problem in `1 + NG`
-unknowns. Measured, 8.9 kB at one group, 10.1 at four, 12.6 at eight, and 2.4 to
-120 times the wall time of [`NewtonStepper`](@ref), which allocates nothing. That
-is the trade the default makes -- a library implementation of the step, in
-exchange for the cost of getting to it -- and the other stepper is one keyword
-away. Both figures are asserted in `test_radiation_multigroup.jl` as well as
-quoted here, so neither can drift silently.
-
-`linsolve` is not consulted on this path; `ImplicitEuler` factorises the full
-matrix itself. See [`AbstractBackwardEuler`](@ref).
-"""
-struct ImplicitEulerStepper <: AbstractBackwardEuler end
-
-# `NLNewton` and `ImplicitEuler` come from OrdinaryDiffEq's sub-packages rather
-# than from the meta-package; see the note in `Hydro3D.jl` and in Project.toml.
-_implicit_euler(max_iterations::Int) =
-    ImplicitEuler(; nlsolve=NLNewton(; κ=1e-4, max_iter=max_iterations,
-                                     always_new=true, check_div=false))
-
-function backward_euler(::ImplicitEulerStepper, m::DirectCoupling,
-                        s::CouplingState{NG,M,T}, rtol::T, atol::T) where {NG,M,T}
-    prob = ODEProblem{true}(_ode_function(), _ode_initial(s), (zero(T), s.dt), s)
-    # One step of length `dt` across a span of length `dt`, non-adaptively: the
-    # integrator has exactly one decision left to make and it is the implicit
-    # one. `reltol` and `abstol` are both handed over because the increment test
-    # weighs by `abstol + reltol * |u|`; passing only the absolute number would
-    # make the test mean different things in CGS and in code units.
-    sol = solve(prob, _implicit_euler(m.max_iterations); dt=s.dt, adaptive=false,
-                reltol=rtol, abstol=atol, save_everystep=false, dense=false)
-    uf = sol.u[end]
-    # Newton iterations, where `newton_solve` reports Newton iterations: both
-    # answer "how much work did this cell cost".
-    return (@inbounds(uf[1]), _ode_erad(uf, s), sol.stats.nnonliniter,
-            successful_retcode(sol))
-end
-
 # --- the error-controlled reference solver ------------------------------------
 
 """
@@ -180,13 +112,14 @@ integrator rather than one implicit step.
 
 This is a **reference solver**, not a production one. Its job is to say what the
 coupling ODE's answer actually is, so that [`QuokkaCoupling`](@ref) and
-[`DirectCoupling`](@ref) -- which take a single backward-Euler step and are first
-order in `dt` -- can be checked against something whose error is controlled
+[`BracketedCoupling`](@ref) -- which take a single backward-Euler step and are
+first order in `dt` -- can be checked against something whose error is controlled
 rather than assumed. An adaptive integrator takes tens of internal steps per cell
-per timestep and allocates its own caches: measured against
-[`NewtonStepper`](@ref) it is 2 to 70 times slower, the ratio growing with the
-stiffness because that is what it is refusing to take in one step, and it costs 8
-to 13 kB a cell where `NewtonStepper` costs nothing. Use it to verify, not to run.
+per timestep and allocates its own caches: measured against the one-step solvers
+it is 12 times slower at its loosest setting and several hundred at a tight one,
+the ratio growing with the stiffness because that is what it is refusing to take
+in one step, and it costs 8 to 21 kB a cell where they cost nothing. Use it to
+verify, not to run.
 
   - `reltol` : relative tolerance of the integrator. The default `1e-2` is
     deliberately loose: the point of the comparison is whether the one-step

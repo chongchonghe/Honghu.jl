@@ -28,7 +28,7 @@ ref_cell(; kw...) = cell_state(; Tgas=1.0, Trad=0.3, kw...)
                                   PowerLawOpacity(kappa0=1e9, n=-3.0))
             s = ref_cell(; NG, opacity=law)
             E0 = s.Egas + sumvec(s.Erad)
-            rs = [solve_coupling(m, s) for m in (QuokkaCoupling(), DirectCoupling(), ref)]
+            rs = [solve_coupling(m, s) for m in (QuokkaCoupling(), BracketedCoupling(), ref)]
             @test all(r.converged for r in rs)
             Ts = [r.Egas / s.cv for r in rs]
             @test maximum(Ts) - minimum(Ts) < 1e-6 * maximum(Ts)
@@ -45,7 +45,7 @@ ref_cell(; kw...) = cell_state(; Tgas=1.0, Trad=0.3, kw...)
         for NG in (1, 4), law in (ConstantOpacity(1e-3),
                                   PowerLawOpacity(kappa0=1e-3, n=2.0))
             s = ref_cell(; NG, opacity=law)
-            rs = [solve_coupling(m, s) for m in (QuokkaCoupling(), DirectCoupling(), ref)]
+            rs = [solve_coupling(m, s) for m in (QuokkaCoupling(), BracketedCoupling(), ref)]
             @test all(r.converged for r in rs)
             Ts = [r.Egas / s.cv for r in rs]
             @test maximum(Ts) - minimum(Ts) < 1e-9 * maximum(Ts)
@@ -59,12 +59,12 @@ ref_cell(; kw...) = cell_state(; Tgas=1.0, Trad=0.3, kw...)
         # step shrinks. That is what makes `AdaptiveCoupling` a reference rather
         # than a fourth opinion.
         #
-        # The rate is two, not one. `QuokkaCoupling` and `DirectCoupling` are first
+        # The rate is two, not one. `QuokkaCoupling` and `BracketedCoupling` are first
         # order as *integrators*, but here they take a single step across the whole
         # interval, and one backward-Euler step has a local error of `O(dt^2)`.
         # There is no accumulation over many steps to turn that into `O(dt)`.
         for NG in (1, 4), law in (ConstantOpacity(1e2), PowerLawOpacity(kappa0=1e2, n=-3.0))
-            for method in (QuokkaCoupling(), DirectCoupling())
+            for method in (QuokkaCoupling(), BracketedCoupling())
                 errs = Float64[]
                 for dt in (1e-3, 5e-4, 2.5e-4, 1.25e-4, 6.25e-5)
                     s = ref_cell(; NG, opacity=law, dt)

@@ -5,16 +5,20 @@ version = "0.1.0"
 
 # Three stdlibs and one package tree.
 #
-# OrdinaryDiffEq supplies two of the three matter-radiation coupling solvers:
-# `AdaptiveCoupling`, the error-controlled reference, and `ImplicitEulerStepper`,
-# the backward-Euler stepper `DirectCoupling` defaults to. Version 7 of it is a
-# deliberately slim meta-package -- it exports Tsit5, the Verner methods,
-# Rosenbrock23, Rodas5P and FBDF, and nothing else -- so the two pieces this code
-# names explicitly come from the sub-packages that define them:
-# `ImplicitEuler` from OrdinaryDiffEqSDIRK and `NLNewton` from
-# OrdinaryDiffEqNonlinearSolve. Both are already in the dependency closure of
-# OrdinaryDiffEq itself, so they cost nothing beyond the line in this file:
-# adding them left the manifest unchanged and the load time unmoved.
+# OrdinaryDiffEq supplies one of the three matter-radiation coupling solvers:
+# `AdaptiveCoupling`, the error-controlled reference. It is the only coupling
+# path that cannot use the scalar reduction the other two are built on -- the
+# group block is algebraically eliminable only after an implicit step has been
+# taken, not along an ODE trajectory -- so it is the only one that needs an
+# integrator, and the only one that allocates.
+#
+# It used to supply two. `ImplicitEulerStepper` is gone with `DirectCoupling`,
+# and with it the two sub-package dependencies that existed only to name
+# `ImplicitEuler` (OrdinaryDiffEqSDIRK) and `NLNewton`
+# (OrdinaryDiffEqNonlinearSolve). Both are still inside OrdinaryDiffEq's own
+# closure, so removing them changes the manifest not at all -- but naming a
+# package in `[deps]` is a statement that this code calls it, and it no longer
+# does.
 #
 # What the tree does cost, measured on this machine: `using Hydro3D` goes from
 # 0.035 s to 1.53 s, and a fresh install has ~190 packages to precompile instead
@@ -23,8 +27,6 @@ version = "0.1.0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
-OrdinaryDiffEqNonlinearSolve = "127b3ac7-2247-4354-8eb6-78cf4e7c58e8"
-OrdinaryDiffEqSDIRK = "2d112036-d095-4a1e-ab9a-08536f3ecdbf"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
 # Plotting is not solving: `plotstate`, `plotpanels`, `animate_run` and
@@ -41,8 +43,6 @@ Hydro3DPlotsExt = "Plots"
 # `tgrad` through `ODEFunction`, so it never asks an integrator to differentiate
 # anything and never touches the `autodiff` specifier that changed shape in 7.
 OrdinaryDiffEq = "7"
-OrdinaryDiffEqNonlinearSolve = "2"
-OrdinaryDiffEqSDIRK = "2"
 Plots = "1"
 julia = "1.9"
 

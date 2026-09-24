@@ -48,19 +48,16 @@ using Dates          # provenance timestamps only; a stdlib, not a package
 # a blanket `using` would make those definitions an error.
 using LinearAlgebra: lu!, ldiv!
 
-# Six names, not the package, and for the same reason: OrdinaryDiffEq exports
+# Five names, not the package, and for the same reason: OrdinaryDiffEq exports
 # `step!`, which this package also exports, so a blanket `using` would leave that
 # one name ambiguous for anyone with both in scope -- `step!(sim)` would have to
 # be spelled `Hydro3D.step!`. Naming what is used keeps `step!` this package's.
 #
-# The two coupling solvers in `coupling_ode.jl` need all six: `ImplicitEuler` for
-# `DirectCoupling`'s default stepper, `Rosenbrock23` for `AdaptiveCoupling`'s
-# default algorithm, and the rest to state the problem and read the answer.
-# `ImplicitEuler` and `NLNewton` come from sub-packages because OrdinaryDiffEq 7
-# is a slim meta-package that exports neither; see Project.toml.
+# `AdaptiveCoupling` in `coupling_ode.jl` is the only thing that needs them:
+# `Rosenbrock23` is its default algorithm and the rest state the problem and read
+# the answer. All five come from the meta-package; the two sub-package
+# dependencies this file used to name went with `ImplicitEulerStepper`.
 using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23
-using OrdinaryDiffEqSDIRK: ImplicitEuler
-using OrdinaryDiffEqNonlinearSolve: NLNewton
 
 # --- core types and kernels --------------------------------------------------
 include("staticvec.jl")
@@ -72,7 +69,7 @@ include("opacity.jl")
 include("rsla.jl")             # the variable reduced speed of light, pointwise
 include("coupling.jl")            # per-cell matter-radiation coupling interface
 include("coupling_solvers.jl")    # ... and the two in-tree solvers
-include("coupling_ode.jl")        # ... and the two backed by OrdinaryDiffEq
+include("coupling_ode.jl")        # ... and the error-controlled reference solve
 include("grid.jl")
 include("variables.jl")
 include("boundary.jl")
@@ -108,10 +105,9 @@ export LevermoreClosure, EddingtonClosure
 
 # multigroup radiation
 export RadiationGroups, ngroups, planck_integral, planck_fractions
-export AbstractCoupling, BracketedCoupling, QuokkaCoupling, DirectCoupling, AdaptiveCoupling
+export AbstractCoupling, BracketedCoupling, QuokkaCoupling, AdaptiveCoupling
 export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit, per_group
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
-export AbstractBackwardEuler, NewtonStepper, ImplicitEulerStepper
 
 # numerics
 export PCM, PLM, PPM
