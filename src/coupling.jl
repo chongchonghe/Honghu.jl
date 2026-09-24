@@ -225,6 +225,64 @@ problem has `f = 1` and `f' = 0` and this reduces to `4 a T^3`.
 end
 
 """
+    coupling_coefficients(state, T) -> (emission, absorption)
+
+The two numbers per group that every formulation of the coupling is built from:
+
+  - `emission_g   = rho kappa_P,g(T) 4 pi B_g(T) / c`, the rate at which the gas
+    puts energy into group `g`;
+  - `absorption_g = rho kappa_E,g(T)`, the coefficient multiplying `E_g` in the
+    rate at which the group gives it back.
+
+so that the unscaled exchange rate of group `g` is `emission_g - absorption_g E_g`,
+linear in `E_g` and with every temperature dependence in the two coefficients.
+
+**This is the single source of truth for the coupling physics**, and it is stated
+as this pair rather than as a right-hand side because the three solvers need two
+*different* things from it and must not each assemble their own:
+
+  - [`AdaptiveCoupling`](@ref) integrates the rate, `dE_g/dt = chat_g (emission_g
+    - absorption_g E_g)`, which is [`coupling_rhs`](@ref) below.
+  - [`BracketedCoupling`](@ref) never forms a rate at all. It uses the *same* two
+    coefficients to solve the backward-Euler group block in closed form -- see
+    [`group_energies`](@ref) -- because that block is linear in `E_g`, which is
+    exactly the property this pair makes visible.
+
+Writing them as a product rather than as `(kappa_P, B)` separately is also the
+more general statement: an opacity model that defines `kappa_P` by an integral
+against `B` (Quokka's `PPL_opacity_full_spectrum`) has an emission rate but no
+meaningful `kappa_P` on its own. [`thermal_emission`](@ref) stays available for
+[`QuokkaCoupling`](@ref), whose Jacobian needs `kappa_P/kappa_E` and so cannot
+work with the product.
+"""
+@inline function coupling_coefficients(s::CouplingState{NG,M,T}, Tgas) where {NG,M,T}
+    fourPiBoverC = thermal_emission(s, Tgas)
+    kappaP, kappaE = coupling_opacity(s, Tgas)
+    return (s.rho * mul(kappaP, fourPiBoverC), s.rho * kappaE)
+end
+
+"""
+    coupling_coefficients_dT(state, T) -> (d emission/dT, d absorption/dT)
+
+The temperature derivatives of [`coupling_coefficients`](@ref), and the reason
+[`coupling_jacobian`](@ref) is exact rather than merely linear in `E`:
+
+    d emission_g   / dT = rho (dkappa_P,g/dT B_g + kappa_P,g dB_g/dT)
+    d absorption_g / dT = rho dkappa_E,g/dT
+
+Both `dkappa/dT` terms are zero for an opacity that does not supply one (see
+[`dkappa_dT`](@ref)), and the emission derivative then reduces to the familiar
+`rho kappa_P 4 a T^3` plus the Planck fractions' own drift between groups.
+"""
+@inline function coupling_coefficients_dT(s::CouplingState{NG,M,T}, Tgas) where {NG,M,T}
+    fourPiBoverC = thermal_emission(s, Tgas)
+    dB_dT = thermal_emission_dT(s, Tgas)
+    kappaP, kappaE = coupling_opacity(s, Tgas)
+    dkappaP, dkappaE = coupling_opacity_dT(s, Tgas)
+    return (s.rho * (mul(dkappaP, fourPiBoverC) + mul(kappaP, dB_dT)), s.rho * dkappaE)
+end
+
+"""
     coupling_rhs(state, Egas, Erad) -> (dEgas, dErad)
 
 The right-hand side of the coupling ODE, without the external source: the rate
@@ -245,9 +303,8 @@ derivative of this function when `kappa` depends on temperature.
 """
 @inline function coupling_rhs(s::CouplingState{NG,M,T}, Egas, Erad::SVec{NG,T}) where {NG,M,T}
     Tgas = gas_temperature_of(s, Egas)
-    fourPiBoverC = thermal_emission(s, Tgas)
-    kappaP, kappaE = coupling_opacity(s, Tgas)
-    exch = s.rho * (mul(kappaP, fourPiBoverC) - mul(kappaE, Erad))
+    emis, absorp = coupling_coefficients(s, Tgas)
+    exch = emis - mul(absorp, Erad)
     return (-s.c * sumvec(exch), mul(s.chat, exch))
 end
 
@@ -308,16 +365,13 @@ is fixed and no dual number can flow through [`coupling_rhs`](@ref).
 @inline function coupling_jacobian(s::CouplingState{NG,M,T}, Egas,
                                    Erad::SVec{NG,T}) where {NG,M,T}
     Tgas = gas_temperature_of(s, Egas)
-    fourPiBoverC = thermal_emission(s, Tgas)
-    dB_dT = thermal_emission_dT(s, Tgas)
-    kappaP, kappaE = coupling_opacity(s, Tgas)
-    dkappaP, dkappaE = coupling_opacity_dT(s, Tgas)
+    _, absorp = coupling_coefficients(s, Tgas)
+    demis_dT, dabsorp_dT = coupling_coefficients_dT(s, Tgas)
 
     # dT/dE_gas = 1/cv, the chain rule's only step: everything below is a
     # derivative with respect to T.
-    dexch_dgas = (s.rho / s.cv) *
-                 (mul(dkappaP, fourPiBoverC) + mul(kappaP, dB_dT) - mul(dkappaE, Erad))
-    dexch_drad = -s.rho * kappaE
+    dexch_dgas = (demis_dT - mul(dabsorp_dT, Erad)) / s.cv
+    dexch_drad = -absorp
 
     return CouplingJacobian{NG,T}(-s.c * sumvec(dexch_dgas), -s.c * dexch_drad,
                                   mul(s.chat, dexch_dgas), mul(s.chat, dexch_drad))
