@@ -64,7 +64,7 @@ using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenb
 # line above imports, and `successful_retcode` likewise, so neither is imported
 # twice. `IntervalNonlinearProblem` is SciMLBase's and is not exported by
 # BracketingNonlinearSolve, so it is named explicitly here.
-using BracketingNonlinearSolve: IntervalNonlinearProblem, ModAB, Bisection
+using BracketingNonlinearSolve: IntervalNonlinearProblem, Brent, Bisection
 
 # --- core types and kernels --------------------------------------------------
 include("staticvec.jl")

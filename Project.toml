@@ -13,14 +13,14 @@ version = "0.1.0"
 # integrator, and the only one that allocates.
 #
 # BracketingNonlinearSolve supplies the root-finder `BracketedCoupling` hands
-# its one scalar equation to (`ModAB` by default, `Bisection` as the reference).
+# its one scalar equation to (`Brent` by default, `Bisection` as the reference).
 # It costs nothing to add: it is already inside OrdinaryDiffEq's closure and is
 # already loaded by `using Hydro3D`, so the manifest and the load time are both
 # unchanged. It is named here because this code now calls it. Measured before
 # adoption: zero bytes per solve at 1 to 16 groups, no failures over the
-# 240-cell sweep, and 0.57 times the wall time of the hand-written Newton it
-# replaced, because a derivative-free method skips the Planck integral's
-# temperature derivative on every evaluation.
+# 240-cell sweep, and 0.88 times the wall time of the hand-written Newton it
+# replaced with Brent (0.57 with ModAB), because a derivative-free method skips
+# the Planck integral's temperature derivative on every evaluation.
 #
 # `ImplicitEulerStepper` is gone with `DirectCoupling`, and with it the two
 # sub-package dependencies that existed only to name `ImplicitEuler`
@@ -49,8 +49,7 @@ Hydro3DPlotsExt = "Plots"
 # 7 is what this is tested against. The coupling supplies its own `jac` and
 # `tgrad` through `ODEFunction`, so it never asks an integrator to differentiate
 # anything and never touches the `autodiff` specifier that changed shape in 7.
-# 1.12 is what this is tested against: its default algorithm is `ModAB`, and
-# every method terminates on bracket width rather than on the residual, which
+# 1.12 is what this is tested against. Every method terminates on bracket width rather than on the residual, which
 # `BracketedCoupling` converts for (see its solve).
 BracketingNonlinearSolve = "1.12"
 OrdinaryDiffEq = "7"

@@ -20,7 +20,7 @@ using Hydro3D: gbase, multigroup_source_step!, group_opacities, group_centers,
                CouplingState, coupling_rhs, coupling_jacobian, solve_coupling, sumvec,
                solve_jacobian, maxabs
 using LinearAlgebra: cond          # only, so Hydro3D's own `dot`/`norm` still win
-using BracketingNonlinearSolve: Bisection, ITP   # alternative root-finders for BracketedCoupling
+using BracketingNonlinearSolve: Bisection, ITP, ModAB   # alternative root-finders for BracketedCoupling
 
 """
 A constant `chat` array of the shape the source drivers want.
@@ -485,7 +485,7 @@ end
         s = cell_state(; NG, opacity=law(k0), Tgas=Tg, Trad=Tr)
         Etot = s.Egas + sumvec(s.Erad)
         results = [solve_coupling(BracketedCoupling(root_finder=rf), s)
-                   for rf in (Hydro3D.ModAB(), ITP(), Bisection())]
+                   for rf in (Hydro3D.Brent(), ModAB(), ITP(), Bisection())]
         @test all(r.converged for r in results)
         for r in results[2:end]
             @test abs(r.Egas - results[1].Egas) <= 2e-9 * Etot
@@ -498,7 +498,7 @@ end
     #    conservation error thousands of times the promised one -- measured
     #    3e-6 of the cell's energy with `Bisection`. This is the assertion the
     #    tolerance conversion exists for.
-    for rf in (Hydro3D.ModAB(), Bisection()), k0 in (1.0, 1e3, 1e9)
+    for rf in (Hydro3D.Brent(), ModAB(), Bisection()), k0 in (1.0, 1e3, 1e9)
         s = cell_state(; NG=4, opacity=ConstantOpacity(k0), Tgas=10.0, Trad=1.0)
         r = solve_coupling(BracketedCoupling(root_finder=rf), s)
         Etot = s.Egas + sumvec(s.Erad)
@@ -515,7 +515,7 @@ end
     #    what makes the answer independent of the method.
     s = cell_state(; NG=4, opacity=PowerLawOpacity(kappa0=10.0, n=2.0), Tgas=0.1, Trad=3.0)
     ode = solve_coupling(AdaptiveCoupling(reltol=1e-8, abstol=1e-14), s).Egas
-    for rf in (Hydro3D.ModAB(), ITP(), Bisection())
+    for rf in (Hydro3D.Brent(), ModAB(), ITP(), Bisection())
         r = solve_coupling(BracketedCoupling(root_finder=rf), s)
         @test r.converged
         @test r.Egas < 0.2

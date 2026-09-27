@@ -249,7 +249,7 @@ end
 # --- the natural variables, reduced to one scalar unknown ---------------------
 
 """
-    BracketedCoupling(; tolerance = 1e-9, max_iterations = 100, root_finder = ModAB())
+    BracketedCoupling(; tolerance = 1e-9, max_iterations = 100, root_finder = Brent())
 
 Backward Euler in the natural variables `(E_gas, E_g)`, reduced to **one scalar
 equation** and handed to a bracketing root-finder. The default.
@@ -261,17 +261,19 @@ The solve is two separate statements, and this is the whole of it:
     what is left is [`energy_balance`](@ref): the gas energy at which the cell's
     books balance. One unknown, no `1 + NG` system, no Jacobian, no linear solve.
   - **The algorithm.** Any bracketing method from BracketingNonlinearSolve, as
-    `root_finder`. `ModAB()` (modified Anderson--Bjorck) is the default because it
-    needed the fewest evaluations over the 240-cell sweep of
-    `docs/coupling-findings.md` -- 12.7 on average, with no failures -- and
-    `Bisection()` is the reference: slow, and impossible to get wrong on a valid
-    bracket, which is what makes it worth checking the default against.
+    `root_finder`. `Brent()` is the default: the standard robust choice --
+    inverse quadratic interpolation and secant steps, falling back to bisection
+    whenever they misbehave -- with no failures over the 240-cell sweep of
+    `docs/coupling-findings.md`. `ModAB()` (modified Anderson--Bjorck) needed
+    fewer evaluations there, 12.7 against 25, and runs in 0.56 of Brent's time;
+    pass it for speed. `Bisection()` is the reference: slow, and impossible to get
+    wrong on a valid bracket, which is what makes it worth checking against.
 
 Derivative-free methods are the right fit here even though the derivative is
 known in closed form: each evaluation of `G` costs a Planck integral, and its
-derivative costs another (`planck_fractions_dT`). Measured, 13 value-only
-evaluations take 0.57 of the time of the 9 value-and-derivative evaluations the
-hand-written Newton this replaced needed.
+derivative costs another (`planck_fractions_dT`). Measured against the 9
+value-and-derivative evaluations of the hand-written Newton this replaced,
+Brent's 25 value-only ones take 0.88 of the time and ModAB's 12.7 take 0.57.
 
 **Why it is the default: it cannot walk away from the root.** A bracket always
 exists (`G <= 0` at the temperature floor, `G >= 0` once the gas holds the whole
@@ -318,7 +320,7 @@ struct BracketedCoupling{T<:AbstractFloat,A} <: AbstractCoupling
     root_finder::A
 end
 
-BracketedCoupling(; tolerance=1e-9, max_iterations::Integer=100, root_finder=ModAB()) =
+BracketedCoupling(; tolerance=1e-9, max_iterations::Integer=100, root_finder=Brent()) =
     BracketedCoupling(float(tolerance), Int(max_iterations), root_finder)
 
 function solve_coupling(m::BracketedCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}
