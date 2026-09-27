@@ -249,7 +249,7 @@ end
 # --- the natural variables, reduced to one scalar unknown ---------------------
 
 """
-    BracketedCoupling(; tolerance = 1e-9, max_iterations = 100, root_finder = Brent())
+    BracketedCoupling(; tolerance = 1e-9, max_iterations = 100, root_finder = ZBrent())
 
 Backward Euler in the natural variables `(E_gas, E_g)`, reduced to **one scalar
 equation** and handed to a bracketing root-finder. The default.
@@ -260,20 +260,23 @@ The solve is two separate statements, and this is the whole of it:
     temperature, so [`group_energy_values`](@ref) solves it in closed form and
     what is left is [`energy_balance`](@ref): the gas energy at which the cell's
     books balance. One unknown, no `1 + NG` system, no Jacobian, no linear solve.
-  - **The algorithm.** Any bracketing method from BracketingNonlinearSolve, as
-    `root_finder`. `Brent()` is the default: the standard robust choice --
-    inverse quadratic interpolation and secant steps, falling back to bisection
-    whenever they misbehave -- with no failures over the 240-cell sweep of
-    `docs/coupling-findings.md`. `ModAB()` (modified Anderson--Bjorck) needed
-    fewer evaluations there, 12.7 against 25, and runs in 0.56 of Brent's time;
-    pass it for speed. `Bisection()` is the reference: slow, and impossible to get
-    wrong on a valid bracket, which is what makes it worth checking against.
+  - **The algorithm.** Any bracketing method written against SciMLBase's
+    `IntervalNonlinearProblem` interface, as `root_finder`. The default is
+    [`ZBrent`](@ref), Brent's method as Brent wrote it, in `src/rootfind.jl`:
+    over the 240-cell sweep of `docs/coupling-new-method.md` it needs 7.7
+    evaluations of the equation on average and 12 at worst, with no failures.
+    The methods of BracketingNonlinearSolve plug in unchanged once that package
+    is loaded -- `ModAB()` is close behind, `Bisection()` is the reference, slow
+    and impossible to get wrong on a valid bracket -- but its `Brent()` lacks the
+    minimum step and evaluates twice per iteration, and took 20.1 on average and
+    70 at worst; `ZBrent`'s docstring says why.
 
 Derivative-free methods are the right fit here even though the derivative is
 known in closed form: each evaluation of `G` costs a Planck integral, and its
-derivative costs another (`planck_fractions_dT`). Measured against the 9
-value-and-derivative evaluations of the hand-written Newton this replaced,
-Brent's 25 value-only ones take 0.88 of the time and ModAB's 12.7 take 0.57.
+derivative costs another (`planck_fractions_dT`). A derivative-free method that
+needs as few evaluations as a Newton iteration therefore wins outright, and
+`ZBrent`'s 7.7 are fewer than the 9 value-and-derivative evaluations of the
+hand-written Newton this replaced.
 
 **Why it is the default: it cannot walk away from the root.** A bracket always
 exists (`G <= 0` at the temperature floor, `G >= 0` once the gas holds the whole
@@ -320,7 +323,7 @@ struct BracketedCoupling{T<:AbstractFloat,A} <: AbstractCoupling
     root_finder::A
 end
 
-BracketedCoupling(; tolerance=1e-9, max_iterations::Integer=100, root_finder=Brent()) =
+BracketedCoupling(; tolerance=1e-9, max_iterations::Integer=100, root_finder=ZBrent()) =
     BracketedCoupling(float(tolerance), Int(max_iterations), root_finder)
 
 function solve_coupling(m::BracketedCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}

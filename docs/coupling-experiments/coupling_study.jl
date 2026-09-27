@@ -31,7 +31,12 @@ using Printf
 # Selectively, as `src/Hydro3D.jl` does: a blanket `using OrdinaryDiffEq` would
 # shadow this package's own `step!`.
 using OrdinaryDiffEq: Rodas5P, FBDF
-using BracketingNonlinearSolve: ModAB, Brent, Bisection
+# Test-only, and not in `[deps]`; loaded by UUID as the test suite does, since it
+# is already in the manifest inside OrdinaryDiffEq's closure.
+const BracketingNonlinearSolve = Base.require(Base.PkgId(
+    Base.UUID("70df07ce-3d50-431d-a3e7-ca6ddb60ac1e"), "BracketingNonlinearSolve"))
+using .BracketingNonlinearSolve: ModAB, Brent, Bisection
+using Hydro3D: ZBrent
 
 const P = Hydro3D.Problems
 

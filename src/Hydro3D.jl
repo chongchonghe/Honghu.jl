@@ -60,15 +60,16 @@ using LinearAlgebra: lu!, ldiv!
 using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23
 
 # Three names for `BracketedCoupling`, which hands its one scalar equation to a
-# bracketing root-finder. `solve` is `CommonSolve.solve`, the same function the
-# line above imports, and `successful_retcode` likewise, so neither is imported
-# twice. `IntervalNonlinearProblem` is SciMLBase's and is not exported by
-# BracketingNonlinearSolve, so it is named explicitly here.
-using BracketingNonlinearSolve: IntervalNonlinearProblem, Brent, Bisection
+# bracketing root-finder through SciMLBase's interface, and for `ZBrent`, the
+# default one, which implements that interface in `rootfind.jl`. `solve` is
+# `CommonSolve.solve`, the same function the line above imports, so it is not
+# imported twice; `ZBrent` adds a method to it.
+using SciMLBase: SciMLBase, IntervalNonlinearProblem, ReturnCode
 
 # --- core types and kernels --------------------------------------------------
 include("staticvec.jl")
 include("newton.jl")     # Newton on a bordered system; knows no physics
+include("rootfind.jl")   # Brent's method for a bracketed scalar root; knows no physics
 include("constants.jl")
 include("planck.jl")     # RadiationGroups, needed by the multigroup opacity below
 include("eos.jl")

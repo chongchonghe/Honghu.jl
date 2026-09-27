@@ -7,6 +7,15 @@ using Hydro3D: SVec, dot, norm, minmod, limit, ppm_edges, eddington_factor,
                variants, rows
 const P = Hydro3D.Problems
 
+# BracketingNonlinearSolve is test-only: its methods plug into the same interface
+# as `ZBrent` and the suite checks the default against them, but the package does
+# not call it, so it sits in `[extras]` rather than `[deps]`. `[extras]` is on the
+# load path only under `Pkg.test`, and this suite is run directly
+# (`julia --project=. test/runtests.jl`), so it is loaded by its UUID instead. That
+# works because it is already in the manifest, inside OrdinaryDiffEq's closure.
+const BracketingNonlinearSolve = Base.require(Base.PkgId(
+    Base.UUID("70df07ce-3d50-431d-a3e7-ca6ddb60ac1e"), "BracketingNonlinearSolve"))
+
 @testset "Hydro3D" begin
     include("test_utils.jl")
     include("test_grid.jl")
@@ -14,6 +23,7 @@ const P = Hydro3D.Problems
     include("test_riemann.jl")
     include("test_hydro.jl")
     include("test_radiation.jl")
+    include("test_rootfind.jl")
     include("test_radiation_multigroup.jl")
     include("test_rsla.jl")
     include("test_coupling_adaptive.jl")
