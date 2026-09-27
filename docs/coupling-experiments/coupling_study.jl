@@ -3,7 +3,7 @@
 #   julia --project=. -t 4 docs/coupling-experiments/coupling_study.jl            # all of it
 #   julia --project=. -t 4 docs/coupling-experiments/coupling_study.jl cost runs  # named sections
 #
-# Sections: conditioning, test, robust, derivation, ode, cost, runs.
+# Sections: conditioning, test, robust, derivation, ode, cost, runs, rootfind.
 #
 # Nothing here is part of the package. `PlainDirect` below is deliberately *not*
 # in `src/`: it is the unreduced `(1 + NG)` Newton in the natural variables, with
@@ -22,7 +22,8 @@ using Hydro3D
 using Hydro3D: AbstractCoupling, CouplingState, CouplingResult, SVec, solve_coupling,
                coupling_rhs, coupling_jacobian, gas_scale, gas_temperature_of,
                solve_jacobian, ArrowheadSolve, apply_energy_floors,
-               group_energies, energy_balance, coupling_coefficients,
+               group_energies, group_energy_values, energy_balance,
+               coupling_coefficients,
                maxabs, sumvec, dot, mul, divide, ngroups
 using Hydro3D.Problems
 using LinearAlgebra: cond
@@ -30,6 +31,7 @@ using Printf
 # Selectively, as `src/Hydro3D.jl` does: a blanket `using OrdinaryDiffEq` would
 # shadow this package's own `step!`.
 using OrdinaryDiffEq: Rodas5P, FBDF
+using BracketingNonlinearSolve: ModAB, Brent, Bisection
 
 const P = Hydro3D.Problems
 
@@ -736,11 +738,116 @@ function _reduced_from_shared(s::CouplingState{NG,M,T}, Egas, gas0, rad0) where 
     (E, G, dG)
 end
 
+# --- section: rootfind --------------------------------------------------------
+
+"""
+`BracketedCoupling`'s solve, re-assembled from the same package functions with
+an evaluation counter in the equation -- the one thing the shipped solver cannot
+report without allocating. `section_rootfind` checks that this returns the
+shipped solver's gas energy to the last bit before trusting its counts.
+"""
+function _counted_solve(rf, s::CouplingState{NG,M,T}; tol=1e-9, maxit=100) where {NG,M,T}
+    n = Ref(0)
+    G = (x, s) -> (n[] += 1; energy_balance(s, x, group_energy_values(s, x)))
+    Etot = abs(s.Egas + dot(gas_scale(s), s.Erad + s.src))
+    atol = tol * Etot
+    lo, hi, _, _ = Hydro3D._energy_bracket(G, s)
+    sol = Hydro3D.solve(Hydro3D.IntervalNonlinearProblem{false}(G, (lo, hi), s), rf;
+                        abstol=atol, maxiters=maxit)
+    x = sol.u
+    E, dE = group_energies(s, x)
+    resolved = false
+    if abs(energy_balance(s, x, E)) > atol
+        dG = max(abs(one(T) + dot(gas_scale(s), dE)), one(T))
+        sol = Hydro3D.solve(Hydro3D.IntervalNonlinearProblem{false}(G, (sol.left, sol.right), s),
+                            rf; abstol=atol / dG, maxiters=maxit)
+        x = sol.u
+        resolved = true
+    end
+    (x, n[], resolved)
+end
+
+"""
+Brent against ModAB as `BracketedCoupling`'s root-finder: robustness and cost
+over the 240-cell sweep, cost per cell against group count, and the four test
+problems. Everything is the shipped solver except the evaluation counts, which
+come from `_counted_solve`.
+"""
+function section_rootfind()
+    finders = ["Brent (default)" => Brent(), "ModAB" => ModAB()]
+    cells = [(cell_state(; NG=4, opacity=mk(tau / DT), Tgas=Tg, Trad=Tr, dt=DT))
+             for (_, mk) in LAWS for (Tg, Tr) in STATES for tau in TAUS]
+    ref = [solve_coupling(BracketedCoupling(root_finder=Bisection(), tolerance=1e-13), s)
+           for s in cells]
+    tmin(f, s) = (f(s); minimum(begin t0 = time_ns(); f(s); time_ns() - t0 end for _ in 1:30))
+
+    println("\n== root-finder over the 240-cell sweep, NG = 4, tolerance 1e-9 ==")
+    @printf("  %-16s %5s %9s %9s %11s %11s %9s %9s\n", "root_finder", "fail", "G evals",
+            "re-solve", "vs ref", "energy err", "sweep us", "ns/cell")
+    for (nm, rf) in finders
+        m = BracketedCoupling(root_finder=rf)
+        rs = [solve_coupling(m, s) for s in cells]
+        counted = [_counted_solve(rf, s) for s in cells]
+        # the counted replica must be the shipped solve, or its counts mean nothing
+        @assert all(counted[i][1] == rs[i].Egas for i in eachindex(cells)) "replica drifted"
+        Etots = [s.Egas + sumvec(s.Erad) for s in cells]
+        dev = maximum(abs(rs[i].Egas - ref[i].Egas) / Etots[i] for i in eachindex(cells))
+        cons = maximum(abs(rs[i].Egas + sumvec(rs[i].Erad) - Etots[i]) / Etots[i]
+                       for i in eachindex(cells))
+        t = sum(tmin(x -> solve_coupling(m, x), s) for s in cells)
+        @printf("  %-16s %2d/%-3d %9.1f %9d %11.1e %11.1e %9.0f %9.0f\n", nm,
+                count(!r.converged for r in rs), length(cells),
+                sum(c[2] for c in counted) / length(cells), count(c[3] for c in counted),
+                dev, cons, t / 1e3, t / length(cells))
+    end
+
+    println("\n== cost of one cell solve; constant opacity, tau = 1e4, out of equilibrium ==")
+    @printf("  %-16s", "root_finder")
+    for NG in (2, 4, 8, 16)
+        @printf("%18s", "NG=$NG")
+    end
+    println()
+    for (nm, rf) in finders
+        m = BracketedCoupling(root_finder=rf)
+        @printf("  %-16s", nm)
+        for NG in (2, 4, 8, 16)
+            t, b = bench(x -> solve_coupling(m, x), cell_state(; NG, opacity=ConstantOpacity(1e7), dt=DT))
+            @printf(" %9.0f ns %3d B", t, b)
+        end
+        println()
+    end
+
+    println("\n== the test problems; error is L1 in gas temperature against AdaptiveCoupling(1e-8) ==")
+    cases = ["marshak_vaytet, 4 groups, n = 64" =>
+                 (m -> first(P.marshak_vaytet(n=64, ngroups=4, coupling=m)),
+                  last(P.marshak_vaytet(n=64, ngroups=4))),
+             "stiff relaxation, kappa = 1e12" => (m -> mg_relax(m; kappa=1e12), 1e-2),
+             "Marshak, kappa = 300 T^-3.5" => (m -> mg_marshak(m), 0.3),
+             "Marshak, kappa = 3e5 T^+2" => (m -> mg_marshak(m; expo=2.0, kappa0=3e5), 0.02)]
+    @printf("  %-34s %-16s %8s %6s %11s\n", "problem", "root_finder", "wall s", "fail", "dT_gas")
+    for (cname, (mk, tmax)) in cases
+        rsim = mk(AdaptiveCoupling(reltol=1e-8, abstol=1e-14))
+        run!(rsim; tmax, verbose=false)
+        for (nm, rf) in finders
+            m = BracketedCoupling(root_finder=rf)
+            mk(m)
+            sim = mk(m)
+            GC.gc()
+            t0 = time()
+            run!(sim; tmax, verbose=false)
+            wall = time() - t0
+            @printf("  %-34s %-16s %8.2f %6d %11.3e\n", cname, nm, wall,
+                    sim.diag.newton_failures, _score(_Tgas(sim), _Tgas(rsim)))
+        end
+    end
+end
+
 # --- driver -------------------------------------------------------------------
 
 const SECTIONS = ["conditioning" => section_conditioning, "test" => section_test,
                   "robust" => section_robust, "derivation" => section_derivation,
-                  "ode" => section_ode, "cost" => section_cost, "runs" => section_runs]
+                  "ode" => section_ode, "cost" => section_cost, "runs" => section_runs,
+                  "rootfind" => section_rootfind]
 
 let want = isempty(ARGS) ? first.(SECTIONS) : ARGS
     for (nm, f) in SECTIONS
