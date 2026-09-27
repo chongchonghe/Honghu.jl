@@ -2,7 +2,7 @@
 
 This document describes the multigroup matter-radiation coupling solver Hydro3D uses in production, `BracketedCoupling`, and is complete on its own: the physics, the derivation, the algorithm, the choice of root-finder, and the measurements. It is the default for every run with $N_G \ge 2$ frequency groups; `RadiationPhysics(coupling = BracketedCoupling())` states it explicitly. The code is `solve_coupling(::BracketedCoupling, …)` in `src/coupling_solvers.jl` and the functions it calls in `src/coupling.jl`. Every number below is reproduced by `docs/coupling-experiments/coupling_study.jl` (§8).
 
-In one paragraph: one backward-Euler step of the coupling is a system of $1 + N_G$ nonlinear equations, but its $N_G$ group equations are linear in the group energies, so they are solved in closed form and the whole step reduces to **one scalar equation in the gas energy** — the statement that the cell's total energy is unchanged. That equation always has a sign change on a known interval, so it is handed as a lambda to a **bracketing root-finder**, Brent's method by default. Nothing in the solve forms a matrix or allocates memory, and over a 240-cell sweep spanning three opacity laws and sixteen decades of optical depth it fails on none.
+In one paragraph: one backward-Euler step of the coupling is a system of $1 + N_G$ nonlinear equations, but its $N_G$ group equations are linear in the group energies, so they are solved in closed form and the whole step reduces to **one scalar equation in the gas energy** — the statement that the cell's total energy is unchanged. That equation always has a sign change on a known interval, so it is handed as a lambda to a **bracketing root-finder** — by default `ZBrent`, Brent's method as Brent wrote it. Nothing in the solve forms a matrix or allocates memory, and over a 240-cell sweep spanning three opacity laws and sixteen decades of optical depth it fails on none.
 
 ## 1. The problem
 
@@ -104,7 +104,7 @@ $$G(\mathcal{E}) = \sum_g \frac{c}{\hat c_g}\,E_g(T = \mathcal{E}/c_V) \ge 0 ,$$
 
 because every group energy is non-negative whenever $\mathrm{rad0}_g \ge 0$. Asking the gas to hold the whole cell's energy leaves the radiation with some over, so the books over-balance.
 
-$G$ is continuous, so a root lies in $[c_V T_\mathrm{floor}, \mathcal{E}]$ — which also shows that the solved gas energy never exceeds the cell's total. Checked over the 240-cell sweep of §5.1: the identity $G(\mathcal{E}) = \sum_g (c/\hat c_g)E_g$ holds to one ulp, and the interval brackets the root in every cell.
+$G$ is continuous, so a root lies in $[c_V T_\mathrm{floor}, \mathcal{E}]$ — which also shows that the solved gas energy never exceeds the cell's total. Checked over the 240-cell sweep of §5.2: the identity $G(\mathcal{E}) = \sum_g (c/\hat c_g)E_g$ holds to one ulp, and the interval brackets the root in every cell.
 
 ### 3.2 How $G$ behaves, and why a bracket is still needed
 
@@ -126,9 +126,9 @@ A worked example of $G$ at a hard cell — gas at $T = 0.5$, radiation at $1.3$,
 
 ### 3.3 Which root: march from the old state
 
-A bracketing method returns *a* root in its bracket and does not say which. On the sweep of §5.1 one cell has three: $\kappa \propto T^2$, gas at $0.1$, radiation at $3$, $\tau = 10^{-2}$, where $G$ changes sign at $E_\mathrm{gas} = 0.110$, $1.17$ and $2.52$. An error-controlled integration of the ODE of §1.1 across the step ends at $0.109$, so $0.110$ is the physical root. Solved on the wide bracket $[c_V T_\mathrm{floor}, 4\mathcal{E}]$, ModAB and Bisection both returned $2.52$ — the gas handed 23 times the energy it physically reaches — while Brent and ITP happened to return $0.110$. Which root came back depended on the method.
+A bracketing method returns *a* root in its bracket and does not say which. On the sweep of §5.2 one cell has three: $\kappa \propto T^2$, gas at $0.1$, radiation at $3$, $\tau = 10^{-2}$, where $G$ changes sign at $E_\mathrm{gas} = 0.110$, $1.17$ and $2.52$. An error-controlled integration of the ODE of §1.1 across the step ends at $0.109$, so $0.110$ is the physical root. Solved on the wide bracket $[c_V T_\mathrm{floor}, 4\mathcal{E}]$, ModAB and Bisection both returned $2.52$ — the gas handed 23 times the energy it physically reaches — while the library's Brent and ITP happened to return $0.110$. Which root came back depended on the method.
 
-So the bracket is not taken as the whole interval of §3.1. It is **built by marching outward from the old gas energy** by factors of two, in the direction the sign of $G$ says the root lies, until the sign changes (`_energy_bracket` in `src/coupling_solvers.jl`). This isolates the root continuously connected to where the cell started — the one a small $\Delta t$ would reach — unless two roots lie within a factor of two of each other. With it, every bracketing method tried (Brent, ModAB, ITP, Bisection) returns $0.110$ on that cell and agrees with the others to $10^{-9}$ on all 240. The march stops at the temperature floor going down and after 200 doublings going up, and if it finds no sign change the cell is reported unconverged rather than guessed at; this never happened on the sweep or the test problems. Typical cost is one or two evaluations of $G$.
+So the bracket is not taken as the whole interval of §3.1. It is **built by marching outward from the old gas energy** by factors of two, in the direction the sign of $G$ says the root lies, until the sign changes (`_energy_bracket` in `src/coupling_solvers.jl`). This isolates the root continuously connected to where the cell started — the one a small $\Delta t$ would reach — unless two roots lie within a factor of two of each other. With it, every bracketing method tried (`ZBrent`, the library's Brent, ModAB, ITP, Bisection) returns $0.110$ on that cell and agrees with the others to $10^{-9}$ on all 240. The march stops at the temperature floor going down and after 200 doublings going up, and if it finds no sign change the cell is reported unconverged rather than guessed at; this never happened on the sweep or the test problems. Typical cost is one or two evaluations of $G$.
 
 ## 4. The algorithm
 
@@ -141,17 +141,17 @@ sol = solve(IntervalNonlinearProblem{false}(G, (lo, hi), s), m.root_finder;
             abstol = atol, maxiters = m.max_iterations)                  # the algorithm
 ```
 
-The root-finder comes from SciML's BracketingNonlinearSolve and is a field of the solver, `BracketedCoupling(root_finder = Brent())` by default. Any bracketing method in that package works; §5 compares the two that matter. The package was already a dependency of OrdinaryDiffEq and already loaded, so using it added nothing to the install or to the load time.
+The root-finder is a field of the solver, `BracketedCoupling(root_finder = ZBrent())` by default. `ZBrent` is written in `src/rootfind.jl` against SciMLBase's `IntervalNonlinearProblem` interface, so any bracketing method written to that interface is interchangeable with it — in particular those of SciML's BracketingNonlinearSolve, once that package is loaded; §5 compares them. SciMLBase was already a dependency of OrdinaryDiffEq and already loaded, so using its interface added nothing to the install or to the load time.
 
 The cell state travels as the problem parameter rather than being captured by the lambda, so the lambda closes over nothing and costs nothing. `_energy_bracket` takes the equation as `G::F … where {F}`, because Julia does not specialise on a function argument it only passes through, and without that the same code allocated 2.8 kB per cell.
 
 ### 4.2 Why derivative-free
 
-$dG/dE_\mathrm{gas}$ is known in closed form (§3.2), so Newton's method is an obvious alternative. It is not the better one, because of what an evaluation costs: $G$ needs one incomplete Planck integral per call, and $dG/dE_\mathrm{gas}$ needs its temperature derivative as well. At $N_G \ge 2$ that integral dominates the cost of the whole solve. A derivative-free method that takes more, cheaper evaluations wins: Brent's 25 value-only evaluations take 0.88 of the time of the 9 value-and-derivative evaluations a Newton-in-bracket needed on the same sweep, and ModAB's 12.7 take 0.57.
+$dG/dE_\mathrm{gas}$ is known in closed form (§3.2), so Newton's method is an obvious alternative. It is not the better one, because of what an evaluation costs: $G$ needs one incomplete Planck integral per call, and $dG/dE_\mathrm{gas}$ needs its temperature derivative as well. At $N_G \ge 2$ that integral dominates the cost of the whole solve. A derivative-free method that takes about as many, cheaper evaluations wins: `ZBrent`'s and `ModAB`'s 12 value-only evaluations per cell take 0.57 of the time of the 9 value-and-derivative evaluations a Newton-in-bracket needed on the same sweep.
 
 ### 4.3 Converting the tolerance
 
-Every method in BracketingNonlinearSolve stops when the bracket is narrower than `abstol` **in $E_\mathrm{gas}$**. The solver promises something else: $|G| \le \mathrm{tol}\cdot\mathcal{E}$, and by §2.2 $G$ is the cell's energy-conservation error. The two differ by $dG/dE_\mathrm{gas}$, which by §3.2 reaches $1 + (c/\hat c)\,4a_\mathrm{rad}T^3/c_V$ — thousands in a radiation-dominated cell, and more under a strongly reduced $\hat c$. Passing $\mathrm{tol}\cdot\mathcal{E}$ as `abstol` alone silently loosens conservation by that factor: measured with Brent over the sweep, 24 of 240 cells then conserve energy only to $3.5\times10^{-6}$ against a promised $10^{-9}$.
+Every bracketing method — `ZBrent` and those of BracketingNonlinearSolve alike — stops when the bracket is narrower than `abstol` **in $E_\mathrm{gas}$**. The solver promises something else: $|G| \le \mathrm{tol}\cdot\mathcal{E}$, and by §2.2 $G$ is the cell's energy-conservation error. The two differ by $dG/dE_\mathrm{gas}$, which by §3.2 reaches $1 + (c/\hat c)\,4a_\mathrm{rad}T^3/c_V$ — thousands in a radiation-dominated cell, and more under a strongly reduced $\hat c$. Passing $\mathrm{tol}\cdot\mathcal{E}$ as `abstol` alone silently loosens conservation by that factor: measured with `ZBrent` over the sweep, 72 of 240 cells then conserve energy only to $1.9\times10^{-6}$ against a promised $10^{-9}$.
 
 So after the first solve the residual is checked. If it is too large, the solve is repeated on the library's own final bracket, `(sol.left, sol.right)`, with `abstol` divided by $dG/dE_\mathrm{gas}$ evaluated at the answer — effectively constant across a bracket that narrow, so one repeat always suffices, and it starts from an interval a few `abstol` wide. This is the one place the derivative is used, through `group_energies`. **Convergence is judged on $|G|$, not on the library's return code.**
 
@@ -161,62 +161,84 @@ In a Newton iteration on the $1 + N_G$ equations of §1.2, the group residual co
 
 ### 4.5 What `iterations` reports
 
-`CouplingResult.iterations`, which feeds the run's `newton_mean` / `newton_max` diagnostics, counts the evaluations of $G$ made by the bracket march plus one per call to the root-finder. The library does not report its own evaluation count, and counting through the lambda allocates 16 bytes per cell. Read a `newton_mean` of about 3 for this solver as "one march step each way plus one solve", not as three Newton iterations.
+`CouplingResult.iterations`, which feeds the run's `newton_mean` / `newton_max` diagnostics, counts the evaluations of $G$ made by the bracket march plus one per call to the root-finder. The root-finder interface returns no evaluation count without allocating (SciMLBase's statistics type is mutable), and counting through the lambda allocates 16 bytes per cell. Read a `newton_mean` of about 3 for this solver as "one march step each way plus one solve", not as three Newton iterations.
 
-## 5. Brent against ModAB
+## 5. The root-finder: `ZBrent`, and how it compares
 
-Both are bracketing methods that combine interpolation steps with a guarantee of never leaving the bracket. **Brent** (inverse quadratic interpolation and secant steps, falling back to bisection whenever they misbehave) is the classical robust choice. **ModAB**, a modified Anderson–Björck method, is a regula-falsi variant with a correction that stops one end of the bracket from sticking. Brent is the default; ModAB is one keyword away.
+Three bracketing methods are compared here. All interpolate where interpolation helps and never leave the bracket.
 
-### 5.1 Robustness and cost over the sweep
+- **`ZBrent`**, the default, in `src/rootfind.jl`: Brent's method as Brent (1973) wrote it and as Numerical Recipes transcribes it in `zbrent` — inverse quadratic interpolation or a secant step when either shrinks the bracket fast enough, bisection otherwise, and a minimum step (§5.1).
+- **`Brent`** from SciML's BracketingNonlinearSolve 1.12, which is a transcription of textbook pseudocode rather than of Brent's algorithm.
+- **`ModAB`** from the same package, a modified Anderson–Björck method: regula falsi with a correction that stops one end of the bracket from sticking.
 
-The sweep is 240 single cells: 8 initial gas and radiation temperature pairs (gas hotter, radiation hotter, and both near equilibrium, over two decades), 10 optical depths $\tau$ from $10^{-4}$ to $10^{12}$, and three opacity laws — constant, $\kappa \propto T^{-3.5}$ and $\kappa \propto T^{2}$ — at four groups and tolerance $10^{-9}$. "vs ref" is the largest difference in $E_\mathrm{gas}$ from a Bisection solve at tolerance $10^{-13}$, and "energy error" the largest $|E_\mathrm{gas} + \sum_g E_g - \mathcal{E}|$; both are in units of the cell's total energy.
+The last two plug into the same interface once BracketingNonlinearSolve is loaded, and the test suite checks `ZBrent` against both.
+
+### 5.1 What the library's `Brent` gets wrong
+
+Two defects, both visible in its source and both measured:
+
+- **No minimum step.** When the interpolated step would move the estimate $b$ by less than $\mathrm{tol}_1 = 2\varepsilon_\mathrm{mach}|b| + \mathtt{abstol}$, Brent's algorithm moves it by $\mathrm{tol}_1$ towards the contrapoint instead. On a smooth convex function the interpolated iterates converge to the root from one side, so without that step the far end of the bracket is never replaced except by bisection — and the method stops only when the *bracket* is narrow, which then takes many halvings. The minimum step deliberately probes just past the root, and the far end collapses in one evaluation.
+- **Two evaluations per iteration.** It recomputes $f(c)$ at the top of every iteration, where $c$ is always an earlier point whose value is already known.
+
+On two analytic functions, counting every evaluation of $f$:
+
+| $f(x)$, bracket, `abstol` | `ZBrent` | library `Brent` | `ModAB` | `ZBrent` without the minimum step |
+|:---|---:|---:|---:|---:|
+| $x^2 - 2$, $[1, 2]$, $10^{-15}$ | 9 | 20 (9 distinct points) | 10 | 9 |
+| $x^4 - 2$, $[0, 4]$, $5\times10^{-11}$ | **12** | 62 (30 distinct points) | 15 | 50 |
+
+$x^2 - 2$ shows the second defect alone: the library's `Brent` visits the same 9 points as `ZBrent` but evaluates most of them twice. $x^4 - 2$ — the same $T^4$ shape as the energy balance $G$ — shows the first: with the minimum step removed, `ZBrent` itself needs 50 evaluations instead of 12. (A report that prompted this comparison found $x^2 - 2$ taking 37 evaluations instead of 8 under FMA contraction in compiled C and CUDA. Julia does not contract $x^2 - 2$, and there the minimum step makes no difference; on $x^4 - 2$ and on $G$ it does.)
+
+On $G$ itself, over the sweep of §5.2 and counting only the root-finder's own evaluations: the library's `Brent` takes 20.1 on average and 70 in the worst cell; `ZBrent` without the minimum step 13.0 and 61; `ZBrent` 7.7 and 12; `ModAB` 9.5 and 12.
+
+### 5.2 Robustness and cost over the sweep
+
+The sweep is 240 single cells: 8 initial gas and radiation temperature pairs (gas hotter, radiation hotter, and both near equilibrium, over two decades), 10 optical depths $\tau$ from $10^{-4}$ to $10^{12}$, and three opacity laws — constant, $\kappa \propto T^{-3.5}$ and $\kappa \propto T^{2}$ — at four groups and tolerance $10^{-9}$. "$G$ evaluations" counts everything the solve does: the bracket march, the root-finder, and the §4.3 repeat. "vs ref" is the largest difference in $E_\mathrm{gas}$ from a Bisection solve at tolerance $10^{-13}$, and "energy error" the largest $|E_\mathrm{gas} + \sum_g E_g - \mathcal{E}|$; both are in units of the cell's total energy.
 
 | `root_finder` | failures | $G$ evaluations | cells re-solved (§4.3) | vs ref | energy error | time per cell |
 |:---|---:|---:|---:|---:|---:|---:|
-| `Brent()` (default) | 0 / 240 | 25.0 | 24 | $9.3\times10^{-10}$ | $9.3\times10^{-10}$ | 3.30 μs |
-| `ModAB()` | 0 / 240 | 12.7 | 0 | $6.8\times10^{-14}$ | $8.8\times10^{-16}$ | 1.87 μs |
+| `ZBrent()` (default) | 0 / 240 | **12.0** | 72 | $3.5\times10^{-10}$ | $4.9\times10^{-10}$ | **1.88 μs** |
+| `Brent()` (library) | 0 / 240 | 25.0 | 24 | $9.3\times10^{-10}$ | $9.3\times10^{-10}$ | 3.33 μs |
+| `ModAB()` | 0 / 240 | 12.7 | 0 | $6.8\times10^{-14}$ | $8.8\times10^{-16}$ | **1.88 μs** |
 
-Both are perfectly robust on the sweep. They differ in how they finish. Brent stops essentially when its bracket reaches the requested width, so its answers sit just inside the tolerance and 24 cells need the §4.3 repeat. ModAB's final steps converge superlinearly past the requested width, so it lands at machine precision, never needs the repeat, and does it in half the evaluations.
+All three are perfectly robust on the sweep, and `ZBrent` and `ModAB` cost the same. They differ in how they finish. Both Brent variants stop essentially when the bracket reaches the requested width, so their answers sit just inside the tolerance and many cells need the §4.3 repeat — 72 for `ZBrent`, whose narrow final brackets put its answers closer to the edge. `ModAB`'s final steps converge superlinearly past the requested width, so it lands at machine precision and never needs the repeat. `ZBrent` makes up the repeats with fewer evaluations to get there.
 
-### 5.2 Cost against group count
+### 5.3 Cost against group count
 
 One cell, constant opacity, $\tau = 10^{4}$, out of equilibrium; minimum over 200 samples.
 
 | `root_finder` | $N_G = 2$ | $N_G = 4$ | $N_G = 8$ | $N_G = 16$ |
 |:---|---:|---:|---:|---:|
-| `Brent()` | 1.27 μs | 2.25 μs | 4.09 μs | 8.14 μs |
-| `ModAB()` | 0.89 μs | 1.56 μs | 2.80 μs | 6.38 μs |
+| `ZBrent()` | **0.88 μs** | **1.50 μs** | **2.69 μs** | **5.51 μs** |
+| `Brent()` (library) | 1.29 μs | 2.26 μs | 4.13 μs | 8.43 μs |
+| `ModAB()` | 0.94 μs | 1.66 μs | 2.84 μs | 6.63 μs |
 
-Both allocate **0 bytes** at every group count. Both scale linearly in $N_G$, because each evaluation of $G$ is one pass over the groups. ModAB is 1.3 to 1.5 times faster here.
+All three allocate **0 bytes** at every group count, and all scale linearly in $N_G$, because each evaluation of $G$ is one pass over the groups. `ZBrent` is 1.5 times faster than the library's `Brent` and 5 to 17 per cent faster than `ModAB`.
 
-### 5.3 The test problems
+### 5.4 The test problems
 
 Each problem run to completion at four groups; error is the relative $L_1$ difference in gas temperature from `AdaptiveCoupling` at relative tolerance $10^{-8}$, which integrates the ODE of §1.1 rather than taking one backward-Euler step.
 
-| problem | `root_finder` | wall time | failures | error in $T_\mathrm{gas}$ |
-|:---|:---|---:|---:|---:|
-| `marshak_vaytet`, $n = 64$ | `Brent()` | 5.18 s | 0 | $7.611\times10^{-4}$ |
-| | `ModAB()` | 2.98 s | 0 | $7.607\times10^{-4}$ |
-| stiff relaxation, $\kappa = 10^{12}$ | `Brent()` | 0.17 s | 0 | $1.9\times10^{-10}$ |
-| | `ModAB()` | 0.16 s | 0 | $1.4\times10^{-15}$ |
-| Marshak wave, $\kappa = 300\,T^{-3.5}$ | `Brent()` | 0.22 s | 0 | $5.859\times10^{-4}$ |
-| | `ModAB()` | 0.18 s | 0 | $5.859\times10^{-4}$ |
-| Marshak wave, $\kappa = 3\times10^{5}\,T^{2}$ | `Brent()` | < 0.01 s | 0 | $2.497\times10^{-3}$ |
-| | `ModAB()` | < 0.01 s | 0 | $2.497\times10^{-3}$ |
+| problem | `ZBrent()` | `Brent()` (library) | `ModAB()` | error in $T_\mathrm{gas}$ |
+|:---|---:|---:|---:|---:|
+| `marshak_vaytet`, $n = 64$ | **2.47 s** | 4.91 s | 2.82 s | $7.61\times10^{-4}$ (all three) |
+| stiff relaxation, $\kappa = 10^{12}$ | 0.15 s | 0.15 s | 0.15 s | $1.2\times10^{-10}$, $1.9\times10^{-10}$, $1.4\times10^{-15}$ |
+| Marshak wave, $\kappa = 300\,T^{-3.5}$ | 0.18 s | 0.21 s | 0.17 s | $5.859\times10^{-4}$ (all three) |
+| Marshak wave, $\kappa = 3\times10^{5}\,T^{2}$ | < 0.01 s | < 0.01 s | < 0.01 s | $2.497\times10^{-3}$ (all three) |
 
-`marshak_vaytet` is the code's built-in multigroup test problem (Vaytet et al., frequency-dependent opacity, 16309 steps). The stiff relaxation is a periodic box with $\tau_\mathrm{cell} \approx 3\times10^{9}$. The last two are Marshak waves with temperature-dependent opacity; the $T^{2}$ one is where solvers that iterate on all $1 + N_G$ unknowns fail on some cells and leave the temperature field 7% wrong.
+No solve failed on any problem. `marshak_vaytet` is the code's built-in multigroup test problem (Vaytet et al., frequency-dependent opacity, 16309 steps). The stiff relaxation is a periodic box with $\tau_\mathrm{cell} \approx 3\times10^{9}$. The last two are Marshak waves with temperature-dependent opacity; the $T^{2}$ one is where solvers that iterate on all $1 + N_G$ unknowns fail on some cells and leave the temperature field 7% wrong.
 
-The two root-finders give the same temperature field on every problem, to the digits shown, except where both are already at the $10^{-10}$ level. The errors in the table are not the root-finders' errors but the discretisation error of taking one backward-Euler step, which both share (§6.2). The difference is cost: on `marshak_vaytet`, where the coupling runs in every cell of 16309 steps, Brent takes 1.7 times as long.
+The three root-finders give the same temperature field on every problem, to the digits shown, except where all are already at the $10^{-10}$ level. The errors in the table are not the root-finders' errors but the discretisation error of taking one backward-Euler step, which all three share (§6.2). The difference is cost: on `marshak_vaytet`, where the coupling runs in every cell of 16309 steps, the library's `Brent` takes twice as long as `ZBrent`.
 
-### 5.4 Which to use
+### 5.5 Which to use
 
-**Brent is the default**: it is the standard robust bracketing method, and it keeps the solver's promise exactly — conservation to the requested tolerance, not beyond. **ModAB is the faster choice**, 1.3 to 1.8 times faster depending on the problem, with the same robustness on everything measured and conservation to machine precision. Pass `BracketedCoupling(root_finder = ModAB())` (with `using BracketingNonlinearSolve: ModAB`) where the coupling dominates the run time. Keep `Bisection()` for checking: it is slow — 37 evaluations on average — and it cannot return a wrong answer from a valid bracket, which is what makes it a reference.
+**`ZBrent` is the default**: Brent's method as Brent wrote it, the fastest of the three per cell and on the one test problem long enough to time, and it keeps the solver's promise exactly — conservation to the requested tolerance. **`ModAB` is equivalent** in robustness and cost on everything measured, and conserves energy to machine precision rather than to the tolerance; pass `BracketedCoupling(root_finder = ModAB())` if that margin is wanted, after loading BracketingNonlinearSolve. **The library's `Brent` is not recommended**: it is as robust but twice as expensive, for the reasons of §5.1. Keep `Bisection()` for checking: it is slow — 37 evaluations on average — and cannot return a wrong answer from a valid bracket, which is what makes it a reference.
 
 ## 6. Accuracy and cost
 
 ### 6.1 The solve is exact to its tolerance
 
-Over the sweep of §5.1 the solver never fails and every answer is within $10^{-9}$ of the cell's energy of a Bisection solve at $10^{-13}$, for either root-finder. It allocates nothing and costs $O(N_G)$ per evaluation, with no matrix formed and no linear system solved.
+Over the sweep of §5.2 the solver never fails and every answer is within $10^{-9}$ of the cell's energy of a Bisection solve at $10^{-13}$, for each of the three root-finders. It allocates nothing and costs $O(N_G)$ per evaluation, with no matrix formed and no linear system solved.
 
 ### 6.2 One backward-Euler step is not exact
 
@@ -241,8 +263,10 @@ The peak, 6% at $\tau \sim 1$, is a property of the time discretisation, not of 
 |:---|:---|
 | `src/coupling.jl` | `coupling_coefficients`, `group_energy_values`, `group_energies`, `energy_balance` (§2.3) |
 | `src/coupling_solvers.jl` | `BracketedCoupling`, its `solve_coupling`, `_energy_bracket` (§3.3, §4) |
-| `src/Hydro3D.jl` | the selective import of `IntervalNonlinearProblem`, `Brent`, `Bisection` |
-| `test/test_radiation_multigroup.jl` | zero-byte allocation for Brent and Bisection; the testset "BracketedCoupling: the root-finder chooses how, not what", which pins §3.3, §4.3 and agreement between root-finders |
+| `src/rootfind.jl` | `ZBrent`, and its method of SciMLBase's `solve` (§5.1) |
+| `src/Hydro3D.jl` | the selective import of `IntervalNonlinearProblem` and `ReturnCode` from SciMLBase |
+| `test/test_rootfind.jl` | `ZBrent` alone: each point evaluated once, the minimum step on $x^4 - 2$ (fails without it: 50 evaluations against a limit of 14), edge cases, zero allocation |
+| `test/test_radiation_multigroup.jl` | zero-byte allocation of the coupling; the testset "BracketedCoupling: the root-finder chooses how, not what", which pins §3.3, §4.3 and agreement between `ZBrent`, the library's Brent, ModAB, ITP and Bisection |
 
 ```bash
 julia --project=. -t 4 docs/coupling-experiments/coupling_study.jl rootfind     # §5, every table

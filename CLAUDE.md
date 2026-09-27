@@ -77,16 +77,24 @@ actually mean:
   both in scope. `using LinearAlgebra: lu!, ldiv!` is there for the same reason
   (`dot` and `norm`), and the two comments in `src/Hydro3D.jl` say so.
 
-`BracketingNonlinearSolve` is the other package, and it is the worked example of
-a dependency admitted into an inner loop *after* measuring it there.
-`BracketedCoupling` hands its one scalar equation to it, per cell, per step. It
-was already inside OrdinaryDiffEq's closure and already loaded by `using
-Hydro3D`, so it cost nothing in the manifest or the load time; what had to be
-shown was the inner-loop cost, and the adoption gate measured it before any
-`src/` edit: 0 bytes per solve at 1 to 16 groups for every method in the
-package, no failures over the 240-cell sweep, and 0.88 times the wall time of the
-hand-written Newton it replaced with the default `Brent()` (0.57 with `ModAB()`). Two things about using it that are easy to get
-wrong, both handled in `solve_coupling(::BracketedCoupling, …)`:
+`SciMLBase` is the other package: `BracketedCoupling` hands its one scalar
+equation, per cell, per step, through SciMLBase's `IntervalNonlinearProblem`
+interface, and `ZBrent` in `src/rootfind.jl` implements that interface. It was
+already inside OrdinaryDiffEq's closure and already loaded, so it cost nothing.
+
+`BracketingNonlinearSolve` is the worked example of a library measured in an
+inner loop and then *not* kept there. It was adopted first, after a gate
+measured 0 bytes per solve and no failures over the 240-cell sweep. Its `Brent`
+then turned out to be a transcription of textbook pseudocode rather than of
+Brent's algorithm: no minimum step, and `f(c)` recomputed every iteration. On
+the coupling's equation that meant 20.1 evaluations a cell and 70 in the worst,
+against 7.7 and 12 for an in-tree `zbrent` of about 60 lines of code. So `ZBrent` is written in-tree, and
+BracketingNonlinearSolve is test-only (`[extras]`): the suite checks `ZBrent`
+against its `ModAB`, `ITP` and `Bisection`. `[extras]` is not on the load path
+when the suite is run directly, so `test/runtests.jl` loads it by UUID -- it is in
+the manifest anyway, through OrdinaryDiffEq. Two things about bracketing
+root-finders that are easy to get wrong, both handled in
+`solve_coupling(::BracketedCoupling, …)`:
 
 - **Every method stops on bracket width, never on the residual.** Where the
   residual is what you promise — here it is the cell's energy-conservation
@@ -97,7 +105,7 @@ wrong, both handled in `solve_coupling(::BracketedCoupling, …)`:
   parameter the same code allocated 2.8 kB a cell.
 
 The `[deps]` list is `Printf`, `Dates`, `LinearAlgebra` (all stdlibs),
-`OrdinaryDiffEq` and `BracketingNonlinearSolve`. The bar for `[deps]` is still real — this code is
+`OrdinaryDiffEq` and `SciMLBase`. The bar for `[deps]` is still real — this code is
 meant to run on compute nodes where a large tree is a liability — but it is a
 bar, not a wall, and "the package calls it" clears it.
 
@@ -131,6 +139,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | File | Contents |
 |:---|:---|
 | `staticvec.jl` | `SVec{N,T}`, a stack-allocated fixed-size vector. Deliberately *not* an `AbstractArray`, so a stray broadcast cannot allocate. |
+| `rootfind.jl` | `ZBrent`: Brent's method for a bracketed scalar root, as Brent (1973) and Numerical Recipes' `zbrent` write it -- with the minimum step and one evaluation per iteration. Implements SciMLBase's `IntervalNonlinearProblem` interface. No physics. |
 | `newton.jl` | The linear solve of one Newton step on a bordered (arrowhead) system — `ArrowheadSolve`, `DenseSolve`. No physics: the caller supplies the four Jacobian blocks. `QuokkaCoupling` is the only caller left. |
 | `constants.jl` | `CGS` submodule. The code itself is unit-agnostic. |
 | `planck.jl` | The normalised incomplete Planck integral (two series, no table), `RadiationGroups`, the group centres and the Planck fractions. Included before `opacity.jl`, which needs the group type. |
@@ -138,7 +147,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `opacity.jl` | `AbstractOpacity` and four concrete laws. Planck / energy / flux means are distinguished; `dkappa_dT` is the optional temperature derivative the coupling's exact Jacobian needs. |
 | `rsla.jl` | `AbstractChatLimiter` and the pointwise `chat_factor`: the rule that makes the reduced speed of light local. The array drivers that apply it are in `radiation_system.jl`, as `source_terms.jl` holds the loop over cells for `coupling.jl`'s physics. |
 | `coupling.jl` | `AbstractCoupling`, `CouplingState`, and the coupling physics in three layers: `coupling_coefficients` (the per-group emission rate and absorption coefficient — the single source of truth), `coupling_rhs` / `coupling_jacobian` built from it for the ODE, and `group_energies` / `energy_balance` built from it for the scalar reduction. |
-| `coupling_solvers.jl` | The two one-step solvers: `BracketedCoupling` (the default; its scalar equation goes to a BracketingNonlinearSolve root-finder, `Brent` by default) and `QuokkaCoupling`. |
+| `coupling_solvers.jl` | The two one-step solvers: `BracketedCoupling` (the default; its scalar equation goes to a bracketing root-finder, `ZBrent` by default) and `QuokkaCoupling`. |
 | `coupling_ode.jl` | `AdaptiveCoupling`, the error-controlled reference solve, and the `ODEFunction` it is written against. |
 | `grid.jl` | `CartesianGrid`, sweep index ranges, and the threading helpers `threaded_jk` / `reduce_max_jk`. |
 | `variables.jl` | State-vector layout and pointwise conversions. |
@@ -216,7 +225,7 @@ Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`,
 `NG >= 2` does not use the driver above. It packs each cell into a `CouplingState` and hands it to an `AbstractCoupling` (`src/coupling.jl`, `src/coupling_solvers.jl`, `src/coupling_ode.jl`). Those solvers **do** carry the `dkappa/dT` term, so their Jacobians are exact:
 
 - **`coupling_coefficients` is the single source of truth**, not `coupling_rhs`. It returns the per-group emission rate `rho kappa_P B` and absorption coefficient `rho kappa_E`, with `coupling_coefficients_dT` for their temperature derivatives, and everything else is built from it: `coupling_rhs` / `coupling_jacobian` for `AdaptiveCoupling`, and `group_energies` / `energy_balance` for the two one-step solvers. It is stated as that pair rather than as a rate because the group block of a backward-Euler step is linear in `E_g` *precisely when* the exchange has the form `emission - absorption * E_g`, and a solver that eliminates the block needs to see that, not a rate.
-- **`BracketedCoupling` is the default.** It takes `E_gas` as its *only* unknown: `group_energy_values` solves the group block in closed form, `energy_balance` is the scalar equation left, and that equation is handed as a lambda to a bracketing root-finder from BracketingNonlinearSolve (`root_finder`, `Brent()` by default, `ModAB()` for speed, `Bisection()` as the reference). No `1 + NG` system, no Jacobian assembly, no linear solve, zero bytes.
+- **`BracketedCoupling` is the default.** It takes `E_gas` as its *only* unknown: `group_energy_values` solves the group block in closed form, `energy_balance` is the scalar equation left, and that equation is handed as a lambda to a bracketing root-finder from BracketingNonlinearSolve (`root_finder`, `ZBrent()` by default; BracketingNonlinearSolve's `ModAB()` and `Bisection()` plug in unchanged). No `1 + NG` system, no Jacobian assembly, no linear solve, zero bytes.
 - **Three things the solve adds to a bare root-finder call, and each has a test.** The bracket is *marched outward from the old gas energy* by factors of two, because with a steeply temperature-dependent opacity the step can have several roots and a bracketing method returns one without saying which — on the wide bracket `[cv Tfloor, E_tot]` one sweep cell returned a gas energy 23 times the physical one, depending on the method. The *tolerance is converted*, because the library stops on bracket width in `E_gas` while the promise is on `G`, the energy-conservation error, which differs by `dG/dE_gas`. And `iterations` counts the march plus one per root-finder call, because the library does not report evaluations and counting them through the lambda allocates.
 - **Why it is the default, and this is the thing to know before changing it.** The unreduced `(1 + NG)` Newton does not merely overshoot with a steeply temperature-dependent opacity — its Newton *direction* goes wrong, because it linearises about a state where the group block is unsatisfied and `E_g` is far from equilibrium with `T`. Over 240 cells spanning three opacity laws and `tau_cell` from 1e-4 to 1e12, `BracketedCoupling` fails none and `QuokkaCoupling` fails 75. `docs/coupling-findings.md` derives it in §5 and `docs/coupling-experiments/coupling_study.jl` reproduces every number.
 - The reduction also makes the convergence test unconditional: `G` is a difference of energies with no `tau (B - E)` left in it to cancel, so nothing amplifies round-off by `tau_cell`. That is the failure Quokka's replaced base variables exist to avoid, avoided a different way — see §2 and §3 of the findings.

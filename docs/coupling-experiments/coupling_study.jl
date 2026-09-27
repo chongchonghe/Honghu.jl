@@ -773,13 +773,14 @@ function _counted_solve(rf, s::CouplingState{NG,M,T}; tol=1e-9, maxit=100) where
 end
 
 """
-Brent against ModAB as `BracketedCoupling`'s root-finder: robustness and cost
+`ZBrent` against BracketingNonlinearSolve's `Brent` and `ModAB` as
+`BracketedCoupling`'s root-finder: robustness and cost
 over the 240-cell sweep, cost per cell against group count, and the four test
 problems. Everything is the shipped solver except the evaluation counts, which
 come from `_counted_solve`.
 """
 function section_rootfind()
-    finders = ["Brent (default)" => Brent(), "ModAB" => ModAB()]
+    finders = ["ZBrent (default)" => ZBrent(), "SciML Brent" => Brent(), "SciML ModAB" => ModAB()]
     cells = [(cell_state(; NG=4, opacity=mk(tau / DT), Tgas=Tg, Trad=Tr, dt=DT))
              for (_, mk) in LAWS for (Tg, Tr) in STATES for tau in TAUS]
     ref = [solve_coupling(BracketedCoupling(root_finder=Bisection(), tolerance=1e-13), s)
