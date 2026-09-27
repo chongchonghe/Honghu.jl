@@ -3,7 +3,7 @@ uuid = "dadb9192-06c8-4952-8646-5842d530648b"
 authors = ["ChongChong He <che1234@umd.edu> and contributors"]
 version = "0.1.0"
 
-# Three stdlibs and one package tree.
+# Three stdlibs and two packages from one tree.
 #
 # OrdinaryDiffEq supplies one of the three matter-radiation coupling solvers:
 # `AdaptiveCoupling`, the error-controlled reference. It is the only coupling
@@ -12,18 +12,25 @@ version = "0.1.0"
 # taken, not along an ODE trajectory -- so it is the only one that needs an
 # integrator, and the only one that allocates.
 #
-# It used to supply two. `ImplicitEulerStepper` is gone with `DirectCoupling`,
-# and with it the two sub-package dependencies that existed only to name
-# `ImplicitEuler` (OrdinaryDiffEqSDIRK) and `NLNewton`
-# (OrdinaryDiffEqNonlinearSolve). Both are still inside OrdinaryDiffEq's own
-# closure, so removing them changes the manifest not at all -- but naming a
-# package in `[deps]` is a statement that this code calls it, and it no longer
-# does.
+# BracketingNonlinearSolve supplies the root-finder `BracketedCoupling` hands
+# its one scalar equation to (`ModAB` by default, `Bisection` as the reference).
+# It costs nothing to add: it is already inside OrdinaryDiffEq's closure and is
+# already loaded by `using Hydro3D`, so the manifest and the load time are both
+# unchanged. It is named here because this code now calls it. Measured before
+# adoption: zero bytes per solve at 1 to 16 groups, no failures over the
+# 240-cell sweep, and 0.57 times the wall time of the hand-written Newton it
+# replaced, because a derivative-free method skips the Planck integral's
+# temperature derivative on every evaluation.
+#
+# `ImplicitEulerStepper` is gone with `DirectCoupling`, and with it the two
+# sub-package dependencies that existed only to name `ImplicitEuler`
+# (OrdinaryDiffEqSDIRK) and `NLNewton` (OrdinaryDiffEqNonlinearSolve).
 #
 # What the tree does cost, measured on this machine: `using Hydro3D` goes from
 # 0.035 s to 1.53 s, and a fresh install has ~190 packages to precompile instead
 # of none. That is the price of the decision, paid by everyone on every run.
 [deps]
+BracketingNonlinearSolve = "70df07ce-3d50-431d-a3e7-ca6ddb60ac1e"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
@@ -42,6 +49,10 @@ Hydro3DPlotsExt = "Plots"
 # 7 is what this is tested against. The coupling supplies its own `jac` and
 # `tgrad` through `ODEFunction`, so it never asks an integrator to differentiate
 # anything and never touches the `autodiff` specifier that changed shape in 7.
+# 1.12 is what this is tested against: its default algorithm is `ModAB`, and
+# every method terminates on bracket width rather than on the residual, which
+# `BracketedCoupling` converts for (see its solve).
+BracketingNonlinearSolve = "1.12"
 OrdinaryDiffEq = "7"
 Plots = "1"
 julia = "1.9"

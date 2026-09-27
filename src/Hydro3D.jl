@@ -59,6 +59,13 @@ using LinearAlgebra: lu!, ldiv!
 # dependencies this file used to name went with `ImplicitEulerStepper`.
 using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23
 
+# Three names for `BracketedCoupling`, which hands its one scalar equation to a
+# bracketing root-finder. `solve` is `CommonSolve.solve`, the same function the
+# line above imports, and `successful_retcode` likewise, so neither is imported
+# twice. `IntervalNonlinearProblem` is SciMLBase's and is not exported by
+# BracketingNonlinearSolve, so it is named explicitly here.
+using BracketingNonlinearSolve: IntervalNonlinearProblem, ModAB, Bisection
+
 # --- core types and kernels --------------------------------------------------
 include("staticvec.jl")
 include("newton.jl")     # Newton on a bordered system; knows no physics

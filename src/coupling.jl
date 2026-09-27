@@ -342,9 +342,9 @@ The derivative follows by differentiating the same expression,
     dE_g/dT = dt chat_g (d emission_g/dT - d absorption_g/dT E_g)
               / (1 + dt chat_g absorption_g) ,
 
-and `dE_g/dE_gas` is that over `cv`. It is returned alongside rather than as a
-separate function because every caller that wants one wants both, and the two
-share the coefficient evaluation.
+and `dE_g/dE_gas` is that over `cv`. It is returned alongside the energies
+because the two share the coefficient evaluation. [`group_energy_values`](@ref)
+is the form without it, and is what a derivative-free root-finder should call.
 
 This is a property of the *backward-Euler step*, not of the coupling ODE: the
 group equations are linear in `E_g` with time-dependent coefficients, so along a
@@ -356,13 +356,38 @@ integrates the full `1 + NG` system.
     Tgas = gas_temperature_of(s, Egas)
     emis, absorp = coupling_coefficients(s, Tgas)
     demis, dabsorp = coupling_coefficients_dT(s, Tgas)
+    Erad, den, cdt = _eliminate_groups(s, emis, absorp)
+    dErad = SVec{NG,T}(ntuple(g -> cdt[g] * (demis[g] - dabsorp[g] * Erad[g]) /
+                                  (s.cv * den[g]), Val(NG))...)
+    return (Erad, dErad)
+end
+
+"""
+    group_energy_values(state, Egas) -> Erad
+
+[`group_energies`](@ref) without the derivative: the group energies that solve
+the backward-Euler group block at this gas energy, and nothing else.
+
+This is what [`BracketedCoupling`](@ref)'s root-finder evaluates at every trial
+gas energy. Its methods are derivative-free, and leaving the derivative out
+leaves out `planck_fractions_dT`, which is a large part of what an evaluation
+costs -- measured, it is why a derivative-free method taking 13 evaluations beats
+a Newton iteration taking 9.
+"""
+@inline function group_energy_values(s::CouplingState{NG,M,T}, Egas) where {NG,M,T}
+    emis, absorp = coupling_coefficients(s, gas_temperature_of(s, Egas))
+    return first(_eliminate_groups(s, emis, absorp))
+end
+
+# The closed-form solve of the group block from its two coefficients, written
+# once and shared by the two forms above. Returns the denominator and the
+# `dt chat` factor as well, which the derivative needs.
+@inline function _eliminate_groups(s::CouplingState{NG,M,T}, emis, absorp) where {NG,M,T}
     cdt = s.dt * s.chat
     rad0 = s.Erad + s.src + s.work
     den = SVec{NG,T}(ntuple(g -> one(T) + cdt[g] * absorp[g], Val(NG))...)
     Erad = SVec{NG,T}(ntuple(g -> (rad0[g] + cdt[g] * emis[g]) / den[g], Val(NG))...)
-    dErad = SVec{NG,T}(ntuple(g -> cdt[g] * (demis[g] - dabsorp[g] * Erad[g]) /
-                                  (s.cv * den[g]), Val(NG))...)
-    return (Erad, dErad)
+    return (Erad, den, cdt)
 end
 
 """

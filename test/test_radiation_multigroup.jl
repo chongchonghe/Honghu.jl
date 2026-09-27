@@ -308,6 +308,12 @@ end
     # Newton stops on the residual of the true equations however good the matrix
     # that got it there, so declaring `dkappa/dT` must not move the answer. What
     # it moves is the iteration count, and by enough to be worth the interface.
+    #
+    # The iteration claim is `QuokkaCoupling`'s alone now. `BracketedCoupling`
+    # hands its equation to a derivative-free root-finder, so `dkappa/dT` enters
+    # only its tolerance conversion and cannot change how many evaluations the
+    # root-finder takes. The root-invariance half applies to both, and is the
+    # half that matters.
     kap(rho, T) = 1e2 * T^2
     law = UserOpacity(planck=kap, dplanck_dT=(rho, T) -> 2e2 * T)
     blind = UserOpacity(kap)
@@ -318,7 +324,7 @@ end
         @test exact.converged && zeroed.converged
         @test isapprox(exact.Egas, zeroed.Egas; rtol=1e-8)
         @test isapprox(sumvec(exact.Erad), sumvec(zeroed.Erad); rtol=1e-8)
-        @test exact.iterations < zeroed.iterations
+        method isa QuokkaCoupling && @test exact.iterations < zeroed.iterations
     end
 end
 
