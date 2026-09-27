@@ -20,6 +20,7 @@ using Hydro3D: gbase, multigroup_source_step!, group_opacities, group_centers,
                CouplingState, coupling_rhs, coupling_jacobian, solve_coupling, sumvec,
                solve_jacobian, maxabs
 using LinearAlgebra: cond          # only, so Hydro3D's own `dot`/`norm` still win
+using BracketingNonlinearSolve: Bisection, ITP   # alternative root-finders for BracketedCoupling
 
 """
 A constant `chat` array of the shape the source drivers want.
@@ -454,6 +455,7 @@ end
         # -- but the claim is in its docstring, so it is asserted rather than
         # argued.
         @test coupling_bytes(BracketedCoupling(), s) == 0
+        @test coupling_bytes(BracketedCoupling(root_finder=Bisection()), s) == 0
         @test coupling_bytes(QuokkaCoupling(), s) == 0
         # `DenseSolve` allocates and cannot not: a `Matrix` is heap storage
         # however small `NG` is, and `QuokkaCoupling` pays that bill every Newton
@@ -470,6 +472,56 @@ end
         ad = coupling_bytes(AdaptiveCoupling(), s)
         @test 4_000 < ad < 20_000
         @test ad > 4 * qd
+    end
+end
+
+@testset "BracketedCoupling: the root-finder chooses how, not what" begin
+    # `BracketedCoupling` is an equation handed to a root-finder, and the three
+    # testsets below each pin one thing the solve adds on top of a bare call.
+
+    # 1. Any bracketing method lands on the same root. `Bisection` is the
+    #    reference: slow, and impossible to get wrong on a valid bracket.
+    for NG in (2, 4), k0 in (1e-3, 1.0, 1e3, 1e9), (Tg, Tr) in ((1.3, 0.5), (0.5, 1.3))
+        s = cell_state(; NG, opacity=law(k0), Tgas=Tg, Trad=Tr)
+        Etot = s.Egas + sumvec(s.Erad)
+        results = [solve_coupling(BracketedCoupling(root_finder=rf), s)
+                   for rf in (Hydro3D.ModAB(), ITP(), Bisection())]
+        @test all(r.converged for r in results)
+        for r in results[2:end]
+            @test abs(r.Egas - results[1].Egas) <= 2e-9 * Etot
+        end
+    end
+
+    # 2. Energy is conserved to the tolerance in a radiation-dominated cell,
+    #    whichever method is used. Every method stops on bracket width in `E_gas`,
+    #    and here `dG/dE_gas` is ~4000, so an unconverted width tolerance leaves a
+    #    conservation error thousands of times the promised one -- measured
+    #    3e-6 of the cell's energy with `Bisection`. This is the assertion the
+    #    tolerance conversion exists for.
+    for rf in (Hydro3D.ModAB(), Bisection()), k0 in (1.0, 1e3, 1e9)
+        s = cell_state(; NG=4, opacity=ConstantOpacity(k0), Tgas=10.0, Trad=1.0)
+        r = solve_coupling(BracketedCoupling(root_finder=rf), s)
+        Etot = s.Egas + sumvec(s.Erad)
+        @test r.converged
+        @test abs(r.Egas + sumvec(r.Erad) - Etot) <= 1e-9 * Etot
+    end
+
+    # 3. Where the step has several roots, the one returned is the one connected
+    #    to where the cell started. With `kappa ~ T^2`, gas at 0.1 and radiation
+    #    at 3, `G` changes sign at 0.110, 1.17 and 2.52; the error-controlled ODE
+    #    ends at 0.109. From the wide bracket `[cv Tfloor, E_tot]`, `ModAB` and
+    #    `Bisection` both returned 2.52 -- the gas handed 23 times the energy it
+    #    physically reaches. Marching the bracket out from the old gas energy is
+    #    what makes the answer independent of the method.
+    s = cell_state(; NG=4, opacity=PowerLawOpacity(kappa0=10.0, n=2.0), Tgas=0.1, Trad=3.0)
+    ode = solve_coupling(AdaptiveCoupling(reltol=1e-8, abstol=1e-14), s).Egas
+    for rf in (Hydro3D.ModAB(), ITP(), Bisection())
+        r = solve_coupling(BracketedCoupling(root_finder=rf), s)
+        @test r.converged
+        @test r.Egas < 0.2
+        # ... and within one backward-Euler step's discretisation error of the
+        # trajectory, which at this optical depth is about one per cent
+        @test abs(r.Egas - ode) / ode < 0.02
     end
 end
 
