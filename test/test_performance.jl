@@ -92,6 +92,13 @@ end
     @test bytes_per_cell(() -> Hydro3D.radiation_source_step!(sim.U, sim.R, rw.chat,
                                                               sim.eos, rad0, g, 1e-3,
                                                               nothing, 0.0, sim.floors), sim) < LIMIT
+    # and with dust, which sends even a grey run through the multigroup driver
+    # and the dust-temperature solve
+    radd = RadiationPhysics(c=10.0, chat=1.0, a_rad=1.0, opacity=ConstantOpacity(1.0),
+                            beta_order=1, dust=BateKetoDust(coefficient=1.0))
+    @test bytes_per_cell(() -> Hydro3D.radiation_source_step!(sim.U, sim.R, rw.chat,
+                                                              sim.eos, radd, g, 1e-3,
+                                                              nothing, 0.0, sim.floors), sim) < LIMIT
 end
 
 @testset "a full step scales linearly in cells" begin

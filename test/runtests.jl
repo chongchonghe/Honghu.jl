@@ -25,6 +25,7 @@ const BracketingNonlinearSolve = Base.require(Base.PkgId(
     include("test_radiation.jl")
     include("test_rootfind.jl")
     include("test_radiation_multigroup.jl")
+    include("test_dust.jl")
     include("test_rsla.jl")
     include("test_coupling_adaptive.jl")
     include("test_io.jl")

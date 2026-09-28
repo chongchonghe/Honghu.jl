@@ -171,7 +171,7 @@ AdaptiveCoupling(; reltol=1e-2, abstol=1e-10, alg=nothing) =
 #     version diverged outright this one still returned a finite answer.
 _default_alg() = Rosenbrock23()
 
-function solve_coupling(m::AdaptiveCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}
+function solve_coupling(m::AdaptiveCoupling, s::CouplingState{NG,M,T,O,NoDust}) where {NG,M,T,O}
     # The energy the cell has to play with, and hence what `abstol` is a
     # fraction of. Same scale the one-step solvers measure their residual against.
     scale = max(abs(s.Egas + dot(gas_scale(s), s.Erad + s.src)), eps(T))
@@ -197,3 +197,11 @@ function solve_coupling(m::AdaptiveCoupling, s::CouplingState{NG,M,T}) where {NG
     steps = sol.stats.naccept + sol.stats.nreject
     return CouplingResult{NG,T}(Egas, Erad, steps, successful_retcode(sol))
 end
+
+# A dust model is solved by `BracketedCoupling` alone, and `RadiationPhysics`
+# refuses the other combinations. This catches a hand-built state too: every
+# other solver's method is written for `NoDust`, so a dust state lands here.
+solve_coupling(m::AbstractCoupling,
+               ::CouplingState{NG,M,T,O,D}) where {NG,M,T,O,D<:BateKetoDust} =
+    throw(ArgumentError("a dust model is supported by BracketedCoupling only, " *
+                        "got $(nameof(typeof(m)))"))

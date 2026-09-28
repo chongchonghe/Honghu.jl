@@ -12,7 +12,7 @@ run!(sim; tmax)
 The hydrodynamic problems are the standard verification suite (Sod, smooth
 advection, Kelvin-Helmholtz, Sedov); the radiation problems exercise each limit
 of the two-moment system in turn: free streaming, static diffusion, stiff
-matter coupling, a Marshak wave, a shadow, and the Mach 3 radiative shock.
+matter coupling, dust-gas coupling, a Marshak wave, a shadow, and the Mach 3 radiative shock.
 
 # Varying a problem
 
@@ -41,6 +41,8 @@ module Problems
 
 using ..Hydro3D
 using ..Hydro3D: SVec, AbstractClosure
+# for `rad_dust_reference`, the one problem whose reference is an ODE solve
+using OrdinaryDiffEq: ODEProblem, Rodas5P, AutoFiniteDiff
 
 include("exact.jl")
 include("hydro.jl")
@@ -48,9 +50,9 @@ include("radiation.jl")
 include("metrics.jl")     # needs the problem functions it dispatches on
 
 export sod_shock_tube, smooth_advection, kelvin_helmholtz, sedov_blast
-export radiation_streaming, radiation_diffusion, matter_coupling
+export radiation_streaming, radiation_diffusion, matter_coupling, rad_dust
 export marshak_wave, radiation_shadow, radhydro_shock
 export marshak_vaytet, total_erad
-export sod_exact, diffusion_exact, radhydro_shock_exact, interpolate_to
+export rad_dust_reference, sod_exact, diffusion_exact, radhydro_shock_exact, interpolate_to
 
 end # module Problems

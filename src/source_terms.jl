@@ -69,15 +69,17 @@ test problems (Marshak wave, matter-radiation equilibration) assume; it is set
 automatically when hydrodynamics is disabled.
 
 This method is the grey (`NG == 1`) driver; a multigroup `phys` selects
-[`multigroup_source_step!`](@ref) instead, by dispatch on the group count.
+[`multigroup_source_step!`](@ref) instead, by dispatch on the group count, and
+so does a grey `phys` with a dust model, which this driver does not have.
 
 Returns a [`SourceStats`](@ref).
 """
 function radiation_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
-                                phys::RadiationPhysics{1,M,T},
+                                phys::RadiationPhysics{1,M,T,O,C,SC,L,NoDust},
                                 g::CartesianGrid{T}, dt::T, source::S, t::T,
                                 floors::Floors{T};
-                                update_momentum::Bool=true) where {M,T,A<:AbstractArray{T,4},S}
+                                update_momentum::Bool=true) where {M,T,A<:AbstractArray{T,4},S,
+                                                                   O,C,SC,L}
     c = phys.c
     arad = phys.a_rad
     op = phys.opacity
@@ -396,6 +398,7 @@ function multigroup_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
     cl = phys.closure
     grp = phys.groups
     method = phys.coupling
+    dust = phys.dust
     keep_beta = phys.beta_order >= 1 && update_momentum
     maxouter = keep_beta ? phys.max_outer_iterations : 1
     lag_tol = T(1e-13)
@@ -472,18 +475,21 @@ function multigroup_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
 
             for _ in 1:maxouter
                 res = solve_coupling(method,
-                                     CouplingState{NG,M,T,typeof(op)}(Eint0, Erad0, src,
-                                                                      work, rho, cv, op,
-                                                                      dt, c, chatv, arad,
-                                                                      kB, grp, Tfloor,
-                                                                      efloor))
+                                     CouplingState{NG,M,T,typeof(op),typeof(dust)}(Eint0,
+                                                                      Erad0, src, work, rho,
+                                                                      cv, op, dt, c, chatv,
+                                                                      arad, kB, grp, Tfloor,
+                                                                      efloor, dust))
                 Eint = res.Egas
                 Erad = res.Erad
                 citers += res.iterations
                 res.converged || (fails += 1)
 
-                # keep the opacities and the emission consistent with the solution
+                # keep the opacities and the emission consistent with the
+                # solution, at the temperature of whatever the radiation couples
+                # to: the gas, or with a dust model the dust
                 Tnew = max(temperature(eos, rho, Eint), Tfloor)
+                Tnew = dust isa NoDust ? Tnew : res.Tdust
                 kapF = group_opacities(op, grp, rho, Tnew)
 
                 # --- flux, momentum ------------------------------------------
@@ -560,8 +566,9 @@ function multigroup_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
     return SourceStats(prod(g.n), nit[], maxn[], nfail[])
 end
 
-# `RadiationPhysics{1}` is the more specific method above, so a grey run never
-# reaches this one and its numbers are exactly what they were before multigroup.
+# `RadiationPhysics{1,…,NoDust}` is the more specific method above, so a grey run
+# without dust never reaches this one and its numbers are exactly what they were
+# before multigroup. A grey run with dust does, and is solved as one group.
 radiation_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
                        phys::RadiationPhysics{NG,M,T},
                        g::CartesianGrid{T}, dt::T, source::S, t::T, floors::Floors{T};

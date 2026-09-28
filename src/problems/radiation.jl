@@ -109,6 +109,84 @@ function matter_coupling(; n::Integer=4, kappa=1e3, T_gas=1.0, T_rad=0.1, cv=1.0
 end
 
 """
+    rad_dust(; n = 8, groups = GREY, chat_over_c = 0.1, coefficient = 1e6,
+             kappa = 1e4, kwargs...) -> (sim, tmax)
+
+Gas, dust and radiation in a uniform static medium, from Quokka's `RadDust` and
+`RadDustMG` tests: the gas starts at `T = 1` with no radiation, and cools by
+colliding with dust that radiates. The radiation couples to the dust only
+([`BateKetoDust`](@ref)), so the gas cools at the collisional rate
+`coefficient n^2 sqrt(T) (T - T_d)` rather than at the radiative one -- here a
+hundred times slower -- and the dust temperature sits between the two.
+
+Units and numbers are Quokka's: `c = 1e8`, `chat = 0.1 c`, `rho = 1`,
+`a_rad = 1`, `cv = 1.5` (`mu = 1`, `k_B = 1`, `gamma = 5/3`), `rho kappa = 1e4`,
+`coefficient = 1e6`, and the radiation time step `0.8 dx / chat = 1e-8` at eight
+cells. One difference: Quokka replaces `B = a T^4` by `B = a T` so that its
+reference solution is a linear ODE; this code has no hook for the emission law,
+so it keeps `a T^4`, and [`rad_dust_reference`](@ref) integrates the model's own
+ODE instead.
+
+`groups` other than `GREY` gives the multigroup form (`RadDustMG` uses edges
+`1e-3, 0.1, 1, 10, 1e3`); with a constant opacity the answer does not depend on
+the grouping, which is the point of that test.
+"""
+function rad_dust(; n::Integer=8, groups::Hydro3D.RadiationGroups=Hydro3D.GREY, chat_over_c=0.1,
+                  coefficient=1e6, kappa=1e4, kwargs...)
+    c = 1e8
+    rad = RadiationPhysics(; c, chat=chat_over_c * c, a_rad=1.0, groups, beta_order=0,
+                           opacity=ConstantOpacity(kappa),
+                           dust=BateKetoDust(; coefficient))
+    sim = Simulation(; n=(n, 1, 1), xhi=(1.0, 1.0, 1.0),
+                     eos=IdealGas(; gamma=5 / 3, cv=1.5), radiation=rad, hydro=false,
+                     boundaries=Boundaries(Periodic()), floors=Floors(erad=1e-20),
+                     cfl_radiation=0.8, kwargs...)
+    set_initial_conditions!(sim) do x, y, z
+        (rho=1.0, T=1.0, Erad=1e-20, Fx=0.0)
+    end
+    return sim, 3e-5
+end
+
+"""
+    rad_dust_reference(ts; groups = GREY, chat_over_c = 0.1, coefficient = 1e6,
+                       kappa = 1e4) -> (T_gas, E_rad)
+
+The error-controlled solution of [`rad_dust`](@ref) at the times `ts`: the gas
+temperature and the total radiation energy density. The model's ODE -- `E_gas`
+and the `E_g` evolved, `T_d` solved at every evaluation from the dust balance --
+integrated with `Rodas5P` at `reltol = 1e-10`. With a constant opacity the dust
+balance is monotone in `T_d`, so that inner solve has one root and a bracket.
+"""
+function rad_dust_reference(ts; groups::Hydro3D.RadiationGroups{NG}=Hydro3D.GREY, chat_over_c=0.1,
+                            coefficient=1e6, kappa=1e4) where {NG}
+    c, chat, cv, rho, arad, kB = 1e8, chat_over_c * 1e8, 1.5, 1.0, 1.0, 1.0
+    K = coefficient * rho^2
+    chi = rho * kappa
+    function dust_T(T, E)
+        h(x, _) = c * chi * (arad * x^4 * sum(Tuple(planck_fractions(groups, x, kB))) -
+                             sum(E)) - K * sqrt(T) * (T - x)
+        # at fixed T and E the balance increases with T_d: bracket from zero to
+        # above both the gas and the radiation temperature
+        hi = 2 * max(T, (max(sum(E), 0.0) / arad)^0.25) + 1
+        Hydro3D.solve(Hydro3D.IntervalNonlinearProblem{false}(h, (1e-12, hi), nothing),
+                      Hydro3D.ZBrent(); abstol=0.0).u
+    end
+    function rhs(u, _, _)
+        T = max(u[1] / cv, 1e-12)
+        E = u[2:end]
+        Td = dust_T(T, E)
+        f = planck_fractions(groups, Td, kB)
+        dE = [chat * chi * (arad * Td^4 * f[g] - E[g]) for g in 1:NG]
+        return vcat(-K * sqrt(T) * (T - Td), dE)
+    end
+    u0 = vcat(cv * 1.0, fill(1e-20 / NG, NG))
+    prob = ODEProblem(rhs, u0, (0.0, maximum(ts)))
+    sol = Hydro3D.solve(prob, Rodas5P(autodiff=AutoFiniteDiff()); reltol=1e-10,
+                        abstol=1e-14, saveat=ts)
+    return ([u[1] / cv for u in sol.u], [sum(u[2:end]) for u in sol.u])
+end
+
+"""
     marshak_wave(; n = 256, kappa = 300.0, T_wall = 1.0, cv = 1.0,
                  closure = LevermoreClosure(), beta_order = 0, kwargs...)
         -> (sim, tmax)

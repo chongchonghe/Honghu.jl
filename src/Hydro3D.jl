@@ -74,6 +74,7 @@ include("constants.jl")
 include("planck.jl")     # RadiationGroups, needed by the multigroup opacity below
 include("eos.jl")
 include("opacity.jl")
+include("dust.jl")            # the dust-gas thermal coupling model
 include("rsla.jl")             # the variable reduced speed of light, pointwise
 include("coupling.jl")            # per-cell matter-radiation coupling interface
 include("coupling_solvers.jl")    # ... and the two in-tree solvers
@@ -114,6 +115,7 @@ export LevermoreClosure, EddingtonClosure
 # multigroup radiation
 export RadiationGroups, ngroups, planck_integral, planck_fractions
 export AbstractCoupling, BracketedCoupling, QuokkaCoupling, AdaptiveCoupling
+export AbstractDustModel, NoDust, BateKetoDust
 export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit, per_group
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 

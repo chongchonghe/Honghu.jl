@@ -99,6 +99,9 @@ properties, and the step.
     the exchange is never scaled by it -- see [`coupling_rhs`](@ref).
   - `groups`    : the frequency group structure, for the Planck fractions
   - `Tfloor`, `Efloor` : admissibility floors on gas temperature and group energy
+  - `dust`      : the [`AbstractDustModel`](@ref). With [`NoDust`](@ref), the
+    default when it is omitted, the radiation couples to the gas; with
+    [`BateKetoDust`](@ref) it couples to the dust, and `opacity` is the dust's
 
 The *law* is carried, not a frozen pair of numbers, because the coupling is
 solved by Newton's method and the exact Jacobian of an emission term whose
@@ -108,7 +111,7 @@ it -- and the two would then be inconsistent, which is worse for a Rosenbrock
 method than no Jacobian at all. Quokka re-evaluates the opacity in every Newton
 iteration for the same reason, and so does the grey driver in `source_terms.jl`.
 """
-struct CouplingState{NG,M,T<:AbstractFloat,O<:AbstractOpacity}
+struct CouplingState{NG,M,T<:AbstractFloat,O<:AbstractOpacity,D<:AbstractDustModel}
     Egas::T
     Erad::SVec{NG,T}
     src::SVec{NG,T}
@@ -124,13 +127,23 @@ struct CouplingState{NG,M,T<:AbstractFloat,O<:AbstractOpacity}
     groups::RadiationGroups{NG,M,T}
     Tfloor::T
     Efloor::T
+    dust::D
 end
+
+# Without a dust model, as every caller that predates it constructs the state.
+CouplingState{NG,M,T,O}(Egas, Erad, src, work, rho, cv, opacity, dt, c, chat, a_rad, k_B,
+                        groups, Tfloor, Efloor) where {NG,M,T,O} =
+    CouplingState{NG,M,T,O,NoDust}(Egas, Erad, src, work, rho, cv, opacity, dt, c, chat,
+                                   a_rad, k_B, groups, Tfloor, Efloor, NoDust())
 
 """
     CouplingResult{NG,T}
 
 What a coupling solver returns: the new gas internal energy, the new group
-radiation energies, how many iterations it took, and whether it converged.
+radiation energies, how many iterations it took, whether it converged, and --
+with a dust model -- the dust temperature `Tdust`, which the flux update needs
+because the opacity is the dust's. Without one `Tdust` is `NaN`: there is no
+dust, and the radiation couples at the gas temperature.
 
 `converged = false` is reported rather than thrown so that one stubborn cell in
 a large grid shows up in the run's diagnostics instead of killing the run.
@@ -140,7 +153,11 @@ struct CouplingResult{NG,T<:AbstractFloat}
     Erad::SVec{NG,T}
     iterations::Int
     converged::Bool
+    Tdust::T
 end
+
+CouplingResult{NG,T}(Egas, Erad, iterations, converged) where {NG,T} =
+    CouplingResult{NG,T}(Egas, Erad, iterations, converged, T(NaN))
 
 """
     solve_coupling(method, state) -> CouplingResult
@@ -424,6 +441,47 @@ two parts, and [`BracketedCoupling`](@ref) is the only thing that relies on it.
                                 Erad::SVec{NG,T}) where {NG,M,T}
     cs = gas_scale(s)
     return (Egas - (s.Egas - dot(cs, s.work))) + dot(cs, Erad - (s.Erad + s.src + s.work))
+end
+
+"""
+    dust_energy_balance(state, Td) -> (H, Egas, Erad)
+
+The one equation a backward-Euler step with [`BateKetoDust`](@ref) reduces to,
+with the dust temperature `Td` as the unknown, and the state it implies.
+
+Given `Td`, everything else is closed form:
+
+ 1. The group block is the dust-free one with the coefficients evaluated at
+    `Td`: `E_g = (rad0_g + dt chat_g emission_g(Td)) / (1 + dt chat_g
+    absorption_g(Td))`, which is `_eliminate_groups` unchanged.
+ 2. The gas energy follows from energy conservation, [`energy_balance`](@ref)
+    `= 0` solved for `E_gas`: the dust holds no energy, so whatever the
+    radiation gained over the step the gas lost. `T = E_gas / cv`.
+ 3. What is left is the gas equation,
+
+        H = (gas0 - E_gas) - dt K sqrt(T) (T - Td) ,
+
+    the energy the radiation took from the dust minus the energy the dust took
+    from the gas by collisions. It is zero exactly where the dust is in balance.
+
+Steps 1 and 2 hold for every trial `Td`, so the total energy is conserved to
+round-off at every iterate, not only at the root. `H` is written with the sign
+that makes it increase with `Td` -- hotter dust radiates more and is fed less --
+so it brackets like [`energy_balance`](@ref) does in `E_gas`.
+
+`H` is *not* a good convergence test: its collision term multiplies the
+round-off in `T - Td` by `dt K sqrt(T)`, which reaches 1e8 of the cell's energy
+in a strongly coupled cell. [`BracketedCoupling`](@ref) tests the state across
+its final bracket instead; `docs/coupling-new-method-dust.md` §4.
+"""
+@inline function dust_energy_balance(s::CouplingState{NG,M,T,O,D}, Td) where {NG,M,T,O,D<:BateKetoDust}
+    emis, absorp = coupling_coefficients(s, Td)
+    Erad = first(_eliminate_groups(s, emis, absorp))
+    Egas = -energy_balance(s, zero(T), Erad)
+    gas0 = s.Egas - dot(gas_scale(s), s.work)
+    Tgas = gas_temperature_of(s, Egas)
+    K = dust_gas_coefficient(s.dust, s.rho)
+    return ((gas0 - Egas) - s.dt * K * sqrt(Tgas) * (Tgas - Td), Egas, Erad)
 end
 
 """

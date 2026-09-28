@@ -1,6 +1,6 @@
 # Dust-gas thermal coupling with the one-variable method: implementation plan
 
-Status: **plan, for review. Nothing in `src/` has changed yet.** The math in §2–§5 has been checked by a prototype, `docs/coupling-experiments/dust_prototype.jl`, and §6 gives its numbers. §8 lists the decisions that need your answer before the code is written.
+Status: **implemented, 2026-09-28.** All five recommendations in §8 were accepted as written. §9 says what was built and what it measured. The math in §2–§5 was first checked by a prototype, `docs/coupling-experiments/dust_prototype.jl`, and §6 gives its numbers.
 
 Scope: the thermal coupling of gas, dust and multigroup radiation, with the Bate & Keto (2015) dust model as used in the draft `external/quokka-dust-gas-tex/main.tex` §2.1 and in Quokka's `SolveGasDustRadiationEnergyExchange`. Photoelectric heating, cosmic-ray heating and line cooling are out of scope. The numerical method is **not** the draft's: the draft (and Quokka) runs a $(1+N_G)$ Newton iteration in $(E_{\rm gas}, R_g)$ with a regime switch between "well-coupled" and "decoupled" dust. This plan reduces the step to one scalar equation in the dust temperature, solved inside a bracket, in the same way `BracketedCoupling` reduces the dust-free step to one equation in $E_{\rm gas}$ (`docs/coupling-new-method.md`).
 
@@ -163,10 +163,34 @@ About 250 lines in `src/` and 200 in `test/`. About half a day, including the te
 
 **Not planned:** photoelectric heating, cosmic-ray heating, line cooling; gas and dust opacity at the same time (§8, decision 3); storing $T_d$ between steps (§8, decision 5).
 
-## 8. Decisions for review
+## 8. Decisions (all five recommendations accepted)
 
 1. **The API shape.** Recommended: `RadiationPhysics(…; dust = BateKetoDust(coefficient = 1e6))`. Dust is part of the physics, not the solver, and `coupling = BracketedCoupling()` stays the solver choice. The alternative, a separate `DustCoupling <: AbstractCoupling`, would mix physics and solver in one type.
 2. **The other two solvers.** Recommended: dust is supported by `BracketedCoupling` only, and the constructor refuses the other combinations. `QuokkaCoupling` with dust would mean porting Quokka's two-regime Newton, which this plan exists to replace. `AdaptiveCoupling` with dust would need an inner $T_d$ solve inside every right-hand-side evaluation, plus its implicit-function Jacobian. That is a useful reference, but the test can build its own reference, as §6 does.
 3. **Gas opacity together with dust.** Recommended: not now. The draft and Quokka both assume the gas has no opacity when the dust model is on. Supporting both at once would bring back two temperatures in the emission, and then no single-variable closed form exists. It would need a nested bracket.
 4. **The `RadDust` reference.** Quokka's test replaces $B = aT^4$ by $B = aT$, so that its exact solution can be written down. Hydro3D has no hook to override the emission law. Recommended: keep $aT^4$ and use the `Rodas5P` reference of §6, which the test can compute in a few seconds. The alternative is an emission-law hook, which is a new API for one test.
 5. **The initial guess for $T_d$.** Recommended: $T^0$, as Quokka does. Storing $T_d$ as a diagnostic field would give a better starting point, and root continuity across steps in the multi-root case, but it adds a field to the state arrays.
+
+## 9. Implementation and results
+
+The code follows §7. The only difference from the plan is in method dispatch. The dust-free `solve_coupling` methods of all three solvers are now written for `CouplingState{…,NoDust}`, and one fallback `solve_coupling(::AbstractCoupling, ::CouplingState{…,<:BateKetoDust})` throws `ArgumentError`. With the methods left general, Julia reported the `BracketedCoupling` dust method as ambiguous. A hand-built dust state handed to `QuokkaCoupling` or `AdaptiveCoupling` now fails loudly; it cannot be solved as if there were no dust.
+
+| file | what |
+|:---|:---|
+| `src/dust.jl` | `AbstractDustModel`, `NoDust`, `BateKetoDust(; coefficient, particle_mass = 1)`, `dust_gas_coefficient` |
+| `src/coupling.jl` | `CouplingState` gains `dust` (the old 15-argument constructor still works and means `NoDust`); `CouplingResult` gains `Tdust` (`NaN` without dust); `dust_energy_balance(s, Td) -> (H, Egas, Erad)` |
+| `src/coupling_solvers.jl` | the `BateKetoDust` method of `solve_coupling(::BracketedCoupling, …)`; `_energy_bracket(G, s, x0, xmin)` |
+| `src/radiation_system.jl` | `RadiationPhysics(; dust = NoDust())`, and the refusal of any other solver |
+| `src/source_terms.jl` | the grey driver is `NoDust` only; the multigroup driver passes the dust model and evaluates the flux opacity and $B$ at `res.Tdust` |
+| `src/problems/radiation.jl` | `Problems.rad_dust(; groups)` and `Problems.rad_dust_reference(ts; groups)` |
+| `test/test_dust.jl` | the tests below |
+
+`H` is defined as the negative of §2's, so that it increases with $T_d$. The march and the root-finder are then the same ones the dust-free equation uses.
+
+**Tests** (58 new, and the suite passes 1401 of 1401):
+
+- A sweep of 432 cells ($N_G \in \{1,4\}$; two opacity laws; gas temperature, radiation temperature, $\rho$ and $K$ spread over the regimes of §6): 0 failures, worst relative energy error below $10^{-13}$, and the state within $1.01\times10^{-9}\,E_{\rm tot}$ of a solve at tolerance $10^{-12}$. A mutation check confirms the width test matters: with the residual test instead, this sweep reports 127 cells unconverged.
+- $K \to \infty$ equals dust-free `BracketedCoupling` to $10^{-11}$, and $K = 0$ leaves the gas unchanged with the dust balance satisfied.
+- The multi-root cell of §3 returns $T_d \in (0.0113, 0.0115)$.
+- The `ArgumentError`s, and 0 bytes per cell (`test_dust.jl`, and `test_performance.jl` through the full grey driver with dust and `beta_order = 1`).
+- `RadDust` over the full history against `rad_dust_reference`, grey and with `RadDustMG`'s four groups: relative L1 error $2.2\times10^{-4}$ for both (Quokka's tolerance is $3\times10^{-3}$), 0 failures, 5.1 iterations per cell on average, 8 at most, about 1 s for 3000 steps.

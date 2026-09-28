@@ -119,7 +119,7 @@ QuokkaCoupling(; tolerance=1e-9, max_iterations::Integer=100,
 
 # --- Quokka's replaced base variables ----------------------------------------
 
-function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}
+function solve_coupling(m::QuokkaCoupling, s::CouplingState{NG,M,T,O,NoDust}) where {NG,M,T,O}
     cs = gas_scale(s)
     kdt = (s.dt * s.chat) * s.rho
 
@@ -326,7 +326,7 @@ end
 BracketedCoupling(; tolerance=1e-9, max_iterations::Integer=100, root_finder=ZBrent()) =
     BracketedCoupling(float(tolerance), Int(max_iterations), root_finder)
 
-function solve_coupling(m::BracketedCoupling, s::CouplingState{NG,M,T}) where {NG,M,T}
+function solve_coupling(m::BracketedCoupling, s::CouplingState{NG,M,T,O,NoDust}) where {NG,M,T,O}
     Etot = abs(s.Egas + dot(gas_scale(s), s.Erad + s.src))
     atol = m.tolerance * Etot
 
@@ -334,7 +334,8 @@ function solve_coupling(m::BracketedCoupling, s::CouplingState{NG,M,T}) where {N
     # than being captured, so this closes over nothing and cannot be boxed.
     G = (Egas, s) -> energy_balance(s, Egas, group_energy_values(s, Egas))
 
-    lo, hi, nbracket, found = _energy_bracket(G, s)
+    Emin = s.cv * s.Tfloor
+    lo, hi, nbracket, found = _energy_bracket(G, s, max(s.Egas, Emin), Emin)
     if !found
         Egas, Erad = apply_energy_floors(s, s.Egas, s.Erad + s.src)
         return CouplingResult{NG,T}(Egas, Erad, nbracket, false)
@@ -364,25 +365,84 @@ function solve_coupling(m::BracketedCoupling, s::CouplingState{NG,M,T}) where {N
     return CouplingResult{NG,T}(Egas, Erad, nbracket + nsolve, converged)
 end
 
-"""
-    _energy_bracket(G, state) -> (lo, hi, evaluations, found)
+# --- with dust: one equation in the dust temperature ---------------------------
 
-A bracket of `G` around the root continuously connected to the old gas energy:
+# With `BateKetoDust` the radiation couples to the dust, and the unknown is the
+# dust temperature: `dust_energy_balance` gives the group energies and the gas
+# energy from it in closed form, and leaves one equation. Same bracket march,
+# same root-finder, same tolerance -- but a different convergence test, because
+# that equation's residual amplifies round-off by the collisional coupling
+# strength and the state across the final bracket does not. The derivation, the
+# bracket and the measurements are in `docs/coupling-new-method-dust.md`.
+function solve_coupling(m::BracketedCoupling,
+                        s::CouplingState{NG,M,T,O,D}) where {NG,M,T,O,D<:BateKetoDust}
+    Etot = abs(s.Egas + dot(gas_scale(s), s.Erad + s.src))
+    atol = m.tolerance * Etot
+
+    H = (Td, s) -> first(dust_energy_balance(s, Td))
+
+    # From the old gas temperature, as Quokka starts its dust-temperature solve.
+    # Where the dust balance has several roots this selects the one connected to
+    # dust as warm as the gas; storing `T_d` between steps would do better.
+    lo, hi, nbracket, found = _energy_bracket(H, s, gas_temperature_of(s, s.Egas), s.Tfloor)
+    if !found
+        Egas, Erad = apply_energy_floors(s, s.Egas, s.Erad + s.src)
+        return CouplingResult{NG,T}(Egas, Erad, nbracket, false, gas_temperature_of(s, s.Egas))
+    end
+
+    # The root-finder stops on bracket width in `T_d`. Open with a relative width
+    # in temperature, then test what the promise is about: the gas energy -- and,
+    # by conservation, the radiation energy -- across the final bracket.
+    sol = solve(IntervalNonlinearProblem{false}(H, (lo, hi), s), m.root_finder;
+                abstol=m.tolerance * hi / 2, maxiters=m.max_iterations)
+    width = _dust_state_width(s, sol.left, sol.right)
+    nsolve = 1
+    # Convert by the slope across the current bracket, with a factor 4 margin:
+    # a factor 2 because the methods stop on the *half*-width, and another for
+    # the slope changing across a wide first bracket.
+    while width > atol && nsolve < 4
+        slope = width / max(sol.right - sol.left, eps(sol.u))
+        sol = solve(IntervalNonlinearProblem{false}(H, (sol.left, sol.right), s),
+                    m.root_finder; abstol=atol / (4 * slope), maxiters=m.max_iterations)
+        width = _dust_state_width(s, sol.left, sol.right)
+        nsolve += 1
+    end
+
+    Td = sol.u
+    _, Egas, Erad = dust_energy_balance(s, Td)
+    Egas, Erad = apply_energy_floors(s, Egas, Erad)
+    # `iterations`: the march, plus per solve one for the call and two for the
+    # width test.
+    return CouplingResult{NG,T}(Egas, Erad, nbracket + 3 * nsolve, width <= atol, Td)
+end
+
+# How far apart the gas energies at the two ends of a bracket in `T_d` are: a
+# bound on the error of the returned state, since the root lies inside.
+@inline _dust_state_width(s, lo, hi) =
+    abs(dust_energy_balance(s, lo)[2] - dust_energy_balance(s, hi)[2])
+
+"""
+    _energy_bracket(G, state, x0, xmin) -> (lo, hi, evaluations, found)
+
+A bracket of an increasing `G` around the root continuously connected to `x0`:
 start there, and step by factors of two in the direction the sign of `G` says the
-root lies until the sign changes. Downwards the walk stops at the temperature
-floor, where `G <= 0` whenever the state is admissible; upwards it stops once the
-gas holds more than the cell's total energy, where `G >= 0` whenever no group has
-been handed a negative starting energy by the lagged work term. Neither bound is
-trusted blindly: if the walk runs out without a sign change the cell is reported
-unconverged rather than guessed at.
+root lies until the sign changes, never below `xmin`.
+
+For the dust-free equation `x0` is the old gas energy and `xmin = cv Tfloor`.
+Downwards the walk stops at the temperature floor, where `G <= 0` whenever the
+state is admissible; upwards it stops once the gas holds more than the cell's
+total energy, where `G >= 0` whenever no group has been handed a negative
+starting energy by the lagged work term. For the dust equation `x0` is the old
+gas temperature and `xmin = Tfloor`; see [`dust_energy_balance`](@ref). Neither
+bound is trusted blindly: if the walk runs out without a sign change the cell is
+reported unconverged rather than guessed at.
 
 `G::F` rather than `G`, so the walk specialises on the equation and allocates
 nothing -- a function argument that is only passed through is not specialised on
 by default, and the measured cost of that was 2.8 kB a cell.
 """
-@inline function _energy_bracket(G::F, s::CouplingState{NG,M,T}) where {F,NG,M,T}
-    Emin = s.cv * s.Tfloor
-    x = max(s.Egas, Emin)
+@inline function _energy_bracket(G::F, s::CouplingState{NG,M,T}, x0, Emin) where {F,NG,M,T}
+    x = x0
     g = G(x, s)
     n = 1
     iszero(g) && return (x, x, n, true)

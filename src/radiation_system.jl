@@ -6,6 +6,7 @@
                      groups = GREY, k_B = 1,
                      closure = LevermoreClosure(),
                      coupling = QuokkaCoupling(),
+                     dust = NoDust(),
                      beta_order = 1,
                      tolerance = 1e-9,
                      max_iterations = 100,
@@ -47,6 +48,12 @@ Parameters of the two-moment (M1) radiation module, grey or multigroup.
     allocation-free), [`QuokkaCoupling`](@ref) or [`AdaptiveCoupling`](@ref). A
     grey run ignores it and uses [`radiation_source_step!`](@ref)'s own 2×2
     Newton driver.
+  - `dust`     : an [`AbstractDustModel`](@ref). [`NoDust`](@ref), the default,
+    couples the radiation to the gas. [`BateKetoDust`](@ref) couples it to dust
+    at its own temperature instead, and the dust to the gas by collisions; the
+    `opacity` is then the dust's, the gas has none, and `coupling` must be
+    [`BracketedCoupling`](@ref). A grey run with dust goes through the
+    multigroup driver, which handles one group unchanged.
   - `closure`  : [`LevermoreClosure`](@ref) (the M1 default) or
     [`EddingtonClosure`](@ref), which fixes `chi = 1/3`. Use the latter only to
     reproduce reference solutions derived under the P1 approximation; it cannot
@@ -58,7 +65,7 @@ Parameters of the two-moment (M1) radiation module, grey or multigroup.
     implicit coupling solve (see [`radiation_source_step!`](@ref)).
 """
 struct RadiationPhysics{NG,M,T<:AbstractFloat,O<:AbstractOpacity,C<:AbstractClosure,
-                        S<:AbstractCoupling,L<:AbstractChatLimiter}
+                        S<:AbstractCoupling,L<:AbstractChatLimiter,D<:AbstractDustModel}
     c::T
     chat::T
     a_rad::T
@@ -72,6 +79,7 @@ struct RadiationPhysics{NG,M,T<:AbstractFloat,O<:AbstractOpacity,C<:AbstractClos
     tolerance::T
     max_iterations::Int
     max_outer_iterations::Int
+    dust::D
 end
 
 function RadiationPhysics(; c, chat=c, a_rad, opacity,
@@ -80,6 +88,7 @@ function RadiationPhysics(; c, chat=c, a_rad, opacity,
                           closure::AbstractClosure=LevermoreClosure(),
                           coupling::AbstractCoupling=BracketedCoupling(),
                           chat_limiter::AbstractChatLimiter=ConstantChat(),
+                          dust::AbstractDustModel=NoDust(),
                           beta_order::Integer=1,
                           tolerance=1e-9,
                           max_iterations::Integer=100,
@@ -87,12 +96,16 @@ function RadiationPhysics(; c, chat=c, a_rad, opacity,
     0 <= beta_order <= 1 || throw(ArgumentError("beta_order must be 0 or 1, got $beta_order"))
     chat <= c || throw(ArgumentError("the reduced speed of light must satisfy chat <= c"))
     k_B > 0 || throw(ArgumentError("k_B must be positive, got $k_B"))
+    dust isa NoDust || coupling isa BracketedCoupling ||
+        throw(ArgumentError("a dust model is supported by BracketedCoupling only, " *
+                            "got coupling = $(nameof(typeof(coupling)))"))
     cc, cch, ar, kb, tol =
         promote(float(c), float(chat), float(a_rad), float(k_B), float(tolerance))
     gr = _convert_groups(groups, typeof(cc))
     RadiationPhysics(cc, cch, ar, kb, gr, opacity, closure, coupling,
                      _convert_limiter(chat_limiter, typeof(cc)), Int(beta_order), tol,
-                     Int(max_iterations), Int(max_outer_iterations))
+                     Int(max_iterations), Int(max_outer_iterations),
+                     _convert_dust(dust, typeof(cc)))
 end
 
 # A limiter's parameters must be the simulation's float type, for the same
