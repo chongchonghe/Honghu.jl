@@ -417,3 +417,41 @@ Hydro3D.flux_form(l::Ripple) = l.flux
     @test err(Ripple(0.12, 0.05, true)) > 5 * flat
     @test !flux_form(StabilityBound()) && flux_form(StabilityBound(flux_form=true))
 end
+
+# phi = 0.1 where the absorption coefficient is below 1.5e-12 and 0.02 above it;
+# with a negligible opacity the density profile is a position switch.
+struct PhiStep <: Hydro3D.AbstractChatLimiter
+    flux::Bool
+end
+Hydro3D._convert_limiter(l::PhiStep, ::Type{T}) where {T} = l
+Hydro3D.chat_factor(l::PhiStep, phi0, w::LocalCell) = w.chiE < 1.5e-12 ? 0.1 : 0.02
+Hydro3D.flux_form(l::PhiStep) = l.flux
+
+@testset "a steady beam crosses a jump in phi unchanged" begin
+    # Free streaming through vacuum, phi dropping five-fold halfway across. The
+    # steady state of the unmodified equations is a uniform beam, and the RSLA
+    # must not move it. On the time derivative it does not; inside the divergence
+    # div(phi F) = 0 forces F ~ 1/phi, and the beam comes out five times brighter.
+    function beam(flux)
+        rad = RadiationPhysics(; c=1.0, chat=0.1, a_rad=1.0, beta_order=0,
+                               opacity=ConstantOpacity(1e-12), chat_limiter=PhiStep(flux))
+        sim = Simulation(; n=(32, 1, 1), radiation=rad, hydro=false,
+                         boundaries=Boundaries(Outflow()),
+                         radiation_boundaries=Boundaries((Fixed((1.0, 0.999, 0.0, 0.0)),
+                                                          Outflow()),
+                                                         (Outflow(), Outflow()),
+                                                         (Outflow(), Outflow())))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=x < 0.5 ? 1.0 : 2.0, p=1.0, Erad=1e-10, Fx=0.0)
+        end
+        run!(sim; tmax=200.0, verbose=false)       # many crossing times at 0.02 c
+        E = sim.R[IERAD, sim.grid.lo[1]:sim.grid.hi[1], 1, 1]
+        return E[8], E[24]
+    end
+    lo, hi = beam(false)
+    @test lo ≈ 1 rtol = 1e-3
+    @test hi ≈ 1 rtol = 1e-3
+    lo, hi = beam(true)
+    @test lo ≈ 1 rtol = 1e-3
+    @test hi ≈ 5 rtol = 1e-2
+end
