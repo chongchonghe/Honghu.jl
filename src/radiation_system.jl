@@ -5,7 +5,7 @@
     RadiationPhysics(; c, chat = c, a_rad, opacity,
                      groups = GREY, k_B = 1,
                      closure = LevermoreClosure(),
-                     coupling = QuokkaCoupling(),
+                     coupling = BracketedCoupling(),
                      dust = NoDust(),
                      beta_order = 1,
                      tolerance = 1e-9,
