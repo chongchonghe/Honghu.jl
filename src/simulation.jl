@@ -555,27 +555,21 @@ end
 
 # --- driver ------------------------------------------------------------------
 
-# The radiation transport step: the RSLA CFL condition, plus -- only when a
-# `chat` limiter is active -- the radiation-force feedback bound. That bound
-# constrains the standard RSLA too, but adding a step restriction to the default
-# path would silently change every existing result, so it rides with the
-# limiter that also implements the other half of the same constraint.
+# The radiation transport step: the RSLA CFL condition -- which the standard
+# RSLA and the stability-bound limiter are both stable at, whatever the ratio of
+# radiation to gas pressure -- plus, only when asked for, the shorter step at
+# which the limiter can reach `phi = 1` in thick, radiation-rich cells (see
+# `energy_exchange_dt`).
 @inline _rad_dt(sim::Simulation) = _rad_dt(sim, sim.radiation.chat_limiter)
 
-@inline _rad_dt(sim::Simulation, ::ConstantChat) =
+@inline _rad_dt(sim::Simulation, ::AbstractChatLimiter) =
     radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
 
-function _rad_dt(sim::Simulation, ::AbstractChatLimiter)
+function _rad_dt(sim::Simulation, lim::StabilityBound)
     dt = radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
-    # The radiation-force channel is a loop through the *gas velocity*: an
-    # amplified flux perturbation accelerates the gas, and the gas re-seeds the
-    # radiation on the next step. With hydrodynamics disabled the gas cannot
-    # move and the loop is open, so the constraint is pure cost -- on the Vaytet
-    # Marshak wave, a static problem with hot radiation over cold gas, it was
-    # 5.4x the steps for no change in the answer.
-    sim.hydro_enabled || return dt
-    return min(dt, radiation_pressure_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid,
-                                         sim.cfl_radiation, sim.floors))
+    lim.energy_step || return dt
+    return min(dt, energy_exchange_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid,
+                                      lim.xi, sim.floors))
 end
 
 """

@@ -7,83 +7,87 @@
 # that a local `chat` beats a global one on a shock and on a Marshak wave, and
 # that a per-group `chat` does not conserve energy.
 
-using Hydro3D: chat_factor, per_group, update_chat!, radiation_pressure_dt,
-               _signal_speed, ConstantChat, StabilityBound, OpticalDepthFit,
-               CouplingState, solve_coupling, gbase, IERAD, IEGAS, gas_scale
+using Hydro3D: chat_factor, per_group, update_chat!, energy_exchange_dt, LocalCell,
+               stability_denominator, _signal_sum, ConstantChat, StabilityBound,
+               OpticalDepthFit, CouplingState, solve_coupling, gbase, IERAD, IEGAS,
+               gas_scale
 
 const ISO = 1 / sqrt(3)          # the signal speed of an isotropic radiation field
 
+# A 1D cell of unit width: `sdx = sig`, `chiE = chiF = tau`.
+cell1d(cdt, tau; sig=ISO, hrat=0.0) = LocalCell(cdt, sig, tau, tau, hrat, 1.0)
+
 @testset "the limiter rule" begin
-    phi0, nu0 = 0.03, 0.8
+    phi0 = 0.03
+    cdt = 0.8 / phi0                                # a step at CFL number 0.8
 
     @testset "ConstantChat is the standard RSLA" begin
-        for tau in (0.0, 1.0, 1e6), prat in (0.0, 1.0)
-            @test chat_factor(ConstantChat(), phi0, nu0, tau, prat, ISO) == phi0
+        for tau in (0.0, 1.0, 1e6), hrat in (0.0, 1.0)
+            @test chat_factor(ConstantChat(), phi0, cell1d(cdt, tau; hrat)) == phi0
         end
     end
 
     @testset "StabilityBound stays inside [phi0, 1]" begin
         lim = StabilityBound()
-        for tau in (0.0, 0.1, 1.0, 1.15, 2.0, 1e8), prat in (0.0, 1e-6, 1.0, 1e6),
+        for tau in (0.0, 0.1, 1.0, 1.15, 2.0, 1e8), hrat in (0.0, 1e-6, 1.0, 1e6),
             sig in (ISO, 0.5, 1.0)
-            phi = chat_factor(lim, phi0, nu0, tau, prat, sig)
+            phi = chat_factor(lim, phi0, cell1d(cdt, tau; sig, hrat))
             @test phi0 <= phi <= 1
         end
     end
 
-    @testset "... rises with optical depth and reaches one" begin
-        lim = StabilityBound()
-        taus = (0.0, 0.2, 0.5, 0.8, 1.0, 1.2, 2.0)
-        phis = [chat_factor(lim, phi0, nu0, t, 0.0, ISO) for t in taus]
-        @test issorted(phis)
-        # Unbounded for tau >= 2 sig: beyond that the source damping wins at any
-        # step, which is the whole idea of the improved RSLA.
-        @test chat_factor(lim, phi0, nu0, 2ISO + 1e-9, 0.0, ISO) == 1
-        @test chat_factor(lim, phi0, nu0, 1e8, 0.0, ISO) == 1
-    end
-
-    @testset "... reduces to the CFL bound as tau -> 0" begin
+    @testset "... is the 1D closed form nu (2 sig - tau) <= 2 when K -> 0" begin
         lim = StabilityBound(beta=1.0)
-        # nu_phi = (phi/phi0) nu0 must equal the largest CFL number the closure's
-        # signal speed allows, 1/sig.
-        for sig in (ISO, 0.5, 1.0), nu in (0.1, 0.4, 0.8)
-            phi = chat_factor(lim, phi0, nu, 0.0, 0.0, sig)
-            phi < 1 || continue                       # clipped, nothing to check
-            @test (phi / phi0) * nu ≈ 1 / sig rtol = 1e-12
+        for tau in (0.0, 0.2, 0.5, 0.8, 1.0), sig in (ISO, 1.0)
+            2sig > tau || continue
+            phi = chat_factor(lim, phi0, cell1d(cdt, tau; sig))
+            phi < 1 || continue
+            @test phi * cdt * (2sig - tau) ≈ 2 rtol = 1e-12
         end
-        # ... and with the isotropic signal speed that is the sqrt(3) of the
-        # published bound, so the generalisation contains the original.
-        @test chat_factor(lim, phi0, 0.8, 0.0, 0.0, ISO) ≈ phi0 * sqrt(3) / 0.8
+        # No bound at all beyond tau = 2 sig: the source damping wins at any step.
+        @test chat_factor(lim, phi0, cell1d(cdt, 2ISO + 1e-9)) == 1
+        @test chat_factor(lim, phi0, cell1d(cdt, 1e8)) == 1
+        # ... and there `beta` has nothing to multiply: phi is exactly one, not
+        # beta, so thick interiors run the unmodified scheme.
+        @test chat_factor(StabilityBound(beta=0.5), phi0, cell1d(cdt, 1e8)) == 1
     end
 
-    @testset "... a beamed cell is bounded sqrt(3) tighter than an isotropic one" begin
+    @testset "... reduces to the CFL bound of the closure's signal speed" begin
         lim = StabilityBound(beta=1.0)
-        iso = chat_factor(lim, phi0, 0.8, 0.0, 0.0, ISO)
-        beam = chat_factor(lim, phi0, 0.8, 0.0, 0.0, 1.0)
+        for sig in (ISO, 0.5, 1.0)
+            phi = chat_factor(lim, phi0, cell1d(cdt, 0.0; sig))
+            @test phi * cdt * sig ≈ 1 rtol = 1e-12
+        end
+        iso = chat_factor(lim, phi0, cell1d(cdt, 0.0))
+        beam = chat_factor(lim, phi0, cell1d(cdt, 0.0; sig=1.0))
         @test iso ≈ sqrt(3) * beam rtol = 1e-12
     end
 
-    @testset "... the radiation-force channel caps it" begin
+    @testset "... the heat-capacity channel caps it in radiation-rich cells" begin
         lim = StabilityBound(beta=1.0)
-        # Deep in the optically thick limit the tau channel is unbounded, so
-        # whatever survives is phi_P.
-        phi = chat_factor(lim, phi0, nu0, 1e8, 0.1, ISO)
-        @test phi ≈ phi0 / (2 * nu0 * 0.1) rtol = 1e-12
-        # Below phi0 the floor takes over: the limiter never asks for less than
-        # the reduction the user requested.
-        @test chat_factor(lim, phi0, nu0, 1e8, 100.0, ISO) == phi0
-        # ... and a cell with no radiation in it must not divide by zero.
-        @test isfinite(chat_factor(lim, phi0, nu0, 1e8, 0.0, ISO))
+        # Thick limit: the damping chiE/(2 + K) saturates at 1/(hrat cdt), so the
+        # bound is phi cdt (sig - 1/(hrat cdt)) <= 1.
+        hrat = 10 / cdt                               # sig hrat cdt = 5.8 > 1
+        phi = chat_factor(lim, phi0, cell1d(cdt, 1e12; hrat))
+        @test phi * cdt * (ISO - 1 / (hrat * cdt)) ≈ 1 rtol = 1e-9
+        # Where sig hrat cdt < 1 it does not: a thick enough cell reaches one.
+        @test chat_factor(lim, phi0, cell1d(cdt, 1e12; hrat=0.5 / cdt)) == 1
+        # The standard RSLA is never excluded: at phi = phi0 the bound is at
+        # most the CFL number times sig, whatever hrat is.
+        for hrat in (0.0, 1.0, 1e6), tau in (0.0, 1.0, 1e6)
+            w = cell1d(cdt, tau; hrat)
+            @test phi0 * cdt * stability_denominator(w) <= 0.8 * ISO + 1e-12
+        end
     end
 
     @testset "OpticalDepthFit interpolates between phi0 and one" begin
         lim = OpticalDepthFit(s=1.0, p=2.0)
-        @test chat_factor(lim, phi0, nu0, 0.0, 0.0, ISO) ≈ phi0
-        @test chat_factor(lim, phi0, nu0, 1e8, 0.0, ISO) ≈ 1
-        @test chat_factor(lim, phi0, nu0, 1.0, 0.0, ISO) ≈ (phi0 + 1) / 2
+        @test chat_factor(lim, phi0, cell1d(cdt, 0.0)) ≈ phi0
+        @test chat_factor(lim, phi0, cell1d(cdt, 1e8)) ≈ 1
+        @test chat_factor(lim, phi0, cell1d(cdt, 1.0)) ≈ (phi0 + 1) / 2
         # A tau large enough to overflow `(s tau)^p` must still give the limit
         # rather than a NaN out of Inf/Inf.
-        @test chat_factor(lim, phi0, nu0, 1e200, 0.0, ISO) == 1
+        @test chat_factor(lim, phi0, cell1d(cdt, 1e200)) == 1
     end
 
     @testset "per_group defaults to false" begin
@@ -95,36 +99,104 @@ const ISO = 1 / sqrt(3)          # the signal speed of an isotropic radiation fi
     end
 end
 
-@testset "the signal speed comes from the closure" begin
+@testset "the signal speed comes from the closure, per direction" begin
     c = 2.0
+    inv3 = (1.0, 1.0, 1.0)                        # three active unit-width directions
     R = zeros(4, 3, 1, 1)
     R[IERAD, 1, 1, 1] = 1.0                       # isotropic: f = 0
     R[IERAD, 2, 1, 1] = 1.0
-    R[2, 2, 1, 1] = 0.9999 * c                    # nearly free-streaming
+    R[2, 2, 1, 1] = 0.9999 * c                    # nearly free-streaming along x
     R[IERAD, 3, 1, 1] = 1.0
     R[2, 3, 1, 1] = 0.5 * c
-    @test _signal_speed(LevermoreClosure(), R, 1, 1, 1, 1, c) ≈ ISO rtol = 1e-9
-    @test _signal_speed(LevermoreClosure(), R, 2, 1, 1, 1, c) > 0.99
-    @test ISO < _signal_speed(LevermoreClosure(), R, 3, 1, 1, 1, c) < 1
+    @test _signal_sum(LevermoreClosure(), R, 1, 1, 1, 1, c, inv3) ≈ 3ISO rtol = 1e-9
+    # A beam along x: speed one along it, the 0.1 floor across it -- not one in
+    # every direction, which is what bounding by the largest speed would say.
+    beam = _signal_sum(LevermoreClosure(), R, 2, 1, 1, 1, c, inv3)
+    @test 0.99 + 2 * 0.1 - 0.02 < beam < 1 + 2 * 0.1 + 0.02
+    @test _signal_sum(LevermoreClosure(), R, 2, 1, 1, 1, c, (1.0, 0.0, 0.0)) > 0.99
     # The Eddington closure cannot free-stream, and the bound must not pretend
-    # otherwise: it is 1/sqrt(3) whatever the flux.
+    # otherwise: it is 1/sqrt(3) in every direction whatever the flux.
     for i in 1:3
-        @test _signal_speed(EddingtonClosure(), R, i, 1, 1, 1, c) ≈ ISO
+        @test _signal_sum(EddingtonClosure(), R, i, 1, 1, 1, c, inv3) ≈ 3ISO
     end
     # An empty or inadmissible cell -- which ghost cells filled by a user
-    # boundary condition can be -- must not produce a NaN.
+    # boundary condition can be -- must not produce a NaN, and an inadmissible
+    # one gets the fastest speed the closure has.
     Rbad = zeros(4, 1, 1, 1)
-    @test isfinite(_signal_speed(LevermoreClosure(), Rbad, 1, 1, 1, 1, c))
+    @test isfinite(_signal_sum(LevermoreClosure(), Rbad, 1, 1, 1, 1, c, inv3))
     Rbad[IERAD, 1, 1, 1] = 1.0
     Rbad[2, 1, 1, 1] = 5.0 * c                    # |f| > 1
-    @test _signal_speed(LevermoreClosure(), Rbad, 1, 1, 1, 1, c) == 1
+    @test _signal_sum(LevermoreClosure(), Rbad, 1, 1, 1, 1, c, inv3) == 3
+end
+
+# A uniform static medium carrying a grid-scale checkerboard in E_rad, at a
+# fixed local phi (or under a real limiter). Returns the growth factor per
+# substep of the checkerboard, which the von Neumann analysis predicts exactly.
+struct FixedPhi <: Hydro3D.AbstractChatLimiter
+    phi::Float64
+end
+Hydro3D.chat_factor(l::FixedPhi, phi0, cell::LocalCell) = l.phi
+Hydro3D._convert_limiter(l::FixedPhi, ::Type{T}) where {T} = l
+
+function checkerboard_growth(lim; D, n=8, phi0=1e-3, tau, Pcal, nst=24, nmeas=12)
+    cv, gamma = 1.0, 5 / 3
+    a_rad = Pcal * (gamma - 1) * cv               # P = a T^4 / (rho a_iso^2), T = rho = 1
+    dx = 1 / n
+    rad = RadiationPhysics(; c=1.0, chat=phi0, a_rad, beta_order=0,
+                           opacity=ConstantOpacity(tau / dx), chat_limiter=lim)
+    sim = Simulation(; n=ntuple(d -> d <= D ? n : 1, 3), eos=IdealGas(; gamma, cv),
+                     radiation=rad, hydro=false, boundaries=Boundaries(Periodic()),
+                     cfl_radiation=0.4, radiation_reconstruction=PCM())
+    cell(x) = floor(Int, x / dx)
+    set_initial_conditions!(sim) do x, y, z
+        s = iseven(cell(x) + (D > 1) * cell(y) + (D > 2) * cell(z)) ? 1.0 : -1.0
+        (rho=1.0, T=1.0, Erad=a_rad * (1 + 1e-3 * s))
+    end
+    g = sim.grid
+    I = (g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3])
+    sgn = [(-1.0)^((i - g.lo[1]) + (D > 1) * (j - g.lo[2]) + (D > 2) * (k - g.lo[3]))
+           for i in I[1], j in I[2], k in I[3]]
+    proj() = abs(sum(sim.R[IERAD, I...] .* sgn))
+    dt = Hydro3D.radiation_timestep(sim.radiation, g, sim.cfl_radiation)
+    a1 = 0.0
+    for s in 1:nst
+        step!(sim, dt)
+        s == nst - nmeas && (a1 = proj())
+    end
+    return (proj() / a1)^(1 / nmeas)
+end
+
+@testset "the bound is exact: a checkerboard in 1, 2 and 3 dimensions" begin
+    # The derivation says the checkerboard's growth factor crosses one exactly at
+    # the bound. So a fixed phi a tenth above it must grow, a tenth below it must
+    # decay, and the limiter at beta = 1 must sit on the boundary itself -- in
+    # every dimension, which is what the old `rho kappa dx_min` got wrong by a
+    # factor D.
+    for D in (1, 2, 3), (tau, Pcal) in ((0.3, 1e-6), (1.0, 1e-1))
+        n = 8
+        dt = 0.4 / (1e-3 * D * n)                 # the RSLA step at phi0 = 1e-3
+        K = 4 * Pcal * (2 / 3) * dt * tau * n
+        den = dt * (D * ISO * n - tau * n / (2 + K))
+        phib = 1 / den
+        @test checkerboard_growth(FixedPhi(0.9phib); D, tau, Pcal) < 1
+        @test checkerboard_growth(FixedPhi(1.1phib); D, tau, Pcal) > 1.05
+        @test checkerboard_growth(StabilityBound(beta=1.0); D, tau, Pcal) ≈ 1 atol = 1e-3
+        @test checkerboard_growth(StabilityBound(); D, tau, Pcal) < 0.98
+    end
+    # ... and the standard RSLA is stable at its own step however radiation-rich
+    # the gas: no step restriction is needed for stability.
+    for D in (1, 2), Pcal in (1.0, 100.0)
+        @test checkerboard_growth(ConstantChat(); D, tau=10.0, Pcal) < 1
+    end
 end
 
 @testset "the limiter is a no-op where it should be" begin
-    # `beta -> 0` drives the bound below phi0, and the floor takes over, so the
-    # limiter must reproduce the standard RSLA it is a generalisation of --
-    # exactly, not approximately. This is the whole plumbing under test at once.
-    for lim in (StabilityBound(beta=1e-12), StabilityBound(beta=1e-12, per_group=true))
+    # A fitting form with `s = 0` is `phi = phi0` in every cell, so it must
+    # reproduce the standard RSLA -- exactly, not approximately -- through the
+    # whole variable-chat path. This is the plumbing under test at once. (A
+    # vanishing `beta` no longer does this: thick cells run at `phi = 1` whatever
+    # `beta` is, because there is no bound there for it to multiply.)
+    for lim in (OpticalDepthFit(s=0.0, p=1.0), OpticalDepthFit(s=0.0, p=1.0, per_group=true))
         a, tmax = P.marshak_vaytet(n=24, ngroups=3, chat_over_c=0.05)
         b, _ = P.marshak_vaytet(n=24, ngroups=3, chat_over_c=0.05, chat_limiter=lim)
         run!(a; tmax=tmax / 50, verbose=false)
@@ -294,21 +366,13 @@ end
     end
 end
 
-@testset "the radiation-pressure step constraint" begin
-    # Only bites where radiation pressure is dynamically significant, and is not
-    # evaluated at all where the gas cannot move.
+@testset "the energy-exchange step is opt-in and only shortens" begin
     sim, _ = P.radhydro_shock(n=32, chat_limiter=StabilityBound())
-    phys = sim.radiation
-    dt_rsla = Hydro3D.radiation_timestep(phys, sim.grid, sim.cfl_radiation)
-    dt_P = radiation_pressure_dt(sim.U, sim.R, sim.eos, phys, sim.grid,
-                                 sim.cfl_radiation, sim.floors)
-    @test dt_P <= dt_rsla * (1 + 1e-12)   # never longer than the RSLA step
-    @test dt_P > 0
-
-    # A static problem must not pay for it: `advance_radiation!` subcycles on
-    # `_rad_dt`, and with hydro disabled that has to be the plain RSLA step.
-    stat, _ = P.marshak_vaytet(n=16, ngroups=2, chat_over_c=0.02,
-                               chat_limiter=StabilityBound())
-    @test Hydro3D._rad_dt(stat) ==
-          Hydro3D.radiation_timestep(stat.radiation, stat.grid, stat.cfl_radiation)
+    dt_rsla = Hydro3D.radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
+    # Off by default: the limiter runs at the plain RSLA step.
+    @test Hydro3D._rad_dt(sim) == dt_rsla
+    on, _ = P.radhydro_shock(n=32, chat_limiter=StabilityBound(energy_step=true))
+    dt_E = energy_exchange_dt(on.U, on.R, on.eos, on.radiation, on.grid, 0.5, on.floors)
+    @test dt_E > 0
+    @test Hydro3D._rad_dt(on) == min(dt_rsla, dt_E)
 end
