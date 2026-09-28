@@ -75,19 +75,23 @@ if "checkerboard" in SECTIONS
     Hydro3D.chat_factor(l::FixedPhi, phi0, w::Hydro3D.LocalCell) = l.phi
     Hydro3D._convert_limiter(l::FixedPhi, ::Type{T}) where {T} = l
 
-    function cb_growth(lim; D, n=16, phi0=1e-3, tau, Pcal, nst=36, nmeas=18)
+    function cb_growth(lim; D, n=16, phi0=1e-3, tau, Pcal, nst=60, nmeas=20)
         cv, gamma = 1.0, 5 / 3
         a_rad = Pcal * (gamma - 1) * cv
         dx = 1 / n
+        # A tight coupling tolerance: at P = 1e-6 the perturbation is ~1e-10 of the
+        # gas energy, below the default, and near the bound its damping is done by
+        # the implicit solve alone.
         rad = RadiationPhysics(; c=1.0, chat=phi0, a_rad, beta_order=0,
-                               opacity=ConstantOpacity(tau / dx), chat_limiter=lim)
+                               opacity=ConstantOpacity(tau / dx), chat_limiter=lim,
+                               tolerance=1e-14)
         sim = Simulation(; n=ntuple(d -> d <= D ? n : 1, 3), eos=IdealGas(; gamma, cv),
                          radiation=rad, hydro=false, boundaries=Boundaries(Periodic()),
                          cfl_radiation=0.4, radiation_reconstruction=PCM())
         cell(x) = floor(Int, x / dx)
         set_initial_conditions!(sim) do x, y, z
             s = iseven(cell(x) + (D > 1) * cell(y) + (D > 2) * cell(z)) ? 1.0 : -1.0
-            (rho=1.0, T=1.0, Erad=a_rad * (1 + 1e-3 * s))
+            (rho=1.0, T=1.0, Erad=a_rad * (1 + 1e-4 * s))
         end
         g = sim.grid
         I = (g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3])
@@ -95,13 +99,23 @@ if "checkerboard" in SECTIONS
                for i in I[1], j in I[2], k in I[3]]
         proj() = abs(sum(sim.R[1, I...] .* sgn))
         dt = Hydro3D.radiation_timestep(sim.radiation, g, sim.cfl_radiation)
-        a1 = 0.0
+        a = Float64[proj()]
         for s in 1:nst
             step!(sim, dt)
-            s == nst - nmeas && (a1 = proj())
-            isfinite(proj()) || return Inf
+            push!(a, proj())
+            (!isfinite(a[end]) || a[end] > 100 * a[1]) && break
         end
-        return (proj() / a1)^(1 / nmeas), dt
+        # A growing mode is measured over the last linear stretch before it has
+        # grown a hundredfold; a decaying one over steps 4 to 16, after the
+        # initial transient and before it reaches the floor set by the neutral
+        # thermal mode.
+        if a[end] > 1.5 * a[1] || !isfinite(a[end])
+            s2 = findlast(isfinite, a)
+            s2 = findlast(x -> x < 100 * a[1], a[1:s2])
+            s1 = max(1, s2 - 8)
+            return (a[s2] / a[s1])^(1 / (s2 - s1)), dt
+        end
+        return (a[17] / a[5])^(1 / 12), dt
     end
     rows = []
     for D in (1, 2, 3), (tau, Pcal) in ((0.3, 1e-6), (1.0, 1e-6), (1.0, 1e-1))
@@ -110,14 +124,13 @@ if "checkerboard" in SECTIONS
         chi = tau * n
         K = 4 * Pcal * (2 / 3) * dt * chi
         phib = 1 / (dt * (D * sqrt(1 / 3) * n - chi / (2 + K)))
-        for fac in (0.6, 0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.2)
-            g, _ = cb_growth(FixedPhi(fac * phib); D, n, tau, Pcal, nst=D == 3 ? 24 : 36,
-                             nmeas=12)
+        for fac in (0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2)
+            g, _ = cb_growth(FixedPhi(fac * phib); D, n, tau, Pcal)
             push!(rows, (D, tau, Pcal, "fixed", fac, fac * phib, g))
         end
         for (name, lim) in (("new", StabilityBound()), ("new_beta1", StabilityBound(beta=1.0)),
                             ("earlier", EarlierBound(; D)))
-            g, dt = cb_growth(lim; D, n, tau, Pcal, nst=D == 3 ? 24 : 36, nmeas=12)
+            g, dt = cb_growth(lim; D, n, tau, Pcal)
             push!(rows, (D, tau, Pcal, name, NaN, NaN, g))
             @printf("  D=%d tau=%.1f P=%.0e %-10s g = %.5f\n", D, tau, Pcal, name, g)
         end
