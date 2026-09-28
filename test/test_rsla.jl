@@ -90,11 +90,11 @@ cell1d(cdt, tau; sig=ISO, hrat=0.0) = LocalCell(cdt, sig, sig, tau, tau, hrat, 1
         @test chat_factor(lim, phi0, cell1d(cdt, 1e200)) == 1
     end
 
-    @testset "per_group defaults to false" begin
+    @testset "per_group: on for the stability bound, off for the fitting form" begin
         @test !per_group(ConstantChat())
-        @test !per_group(StabilityBound())
+        @test per_group(StabilityBound())
+        @test !per_group(StabilityBound(per_group=false))
         @test !per_group(OpticalDepthFit(s=1.0, p=2.0))
-        @test per_group(StabilityBound(per_group=true))
         @test per_group(OpticalDepthFit(s=1.0, p=2.0, per_group=true))
     end
 end

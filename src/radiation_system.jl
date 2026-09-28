@@ -636,8 +636,8 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
                     chat[gr, i, j, k] = c * chat_factor(lim, phi0, w)
                 end
             else
-                # One `phi` for the whole cell, from the most restrictive group:
-                # see [`per_group`](@ref) for why.
+                # `per_group = false`: one `phi` for the whole cell, from the most
+                # restrictive group (see [`per_group`](@ref)).
                 phi = one(T)
                 for gr in 1:NG
                     kP, kE, kF = _limiter_opacities(op, groups, kappa, rho, Tgas, gr)

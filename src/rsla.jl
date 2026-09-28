@@ -84,7 +84,8 @@ read before variable `chat` existed, bit for bit.
 struct ConstantChat <: AbstractChatLimiter end
 
 """
-    StabilityBound(; beta = 0.9, per_group = false, energy_step = false, xi = 0.5)
+    StabilityBound(; beta = 0.9, per_group = true, energy_step = false, xi = 0.5,
+                   flux_form = false)
 
 The IRSLA in its parameter-free form: in each cell take the *largest* `phi` that
 the step is still stable at.
@@ -151,8 +152,8 @@ because it costs steps, by a factor of about
 `4 (gamma - 1) P_rad/P_gas * sigma C_r / (xi phi0)` wherever it binds, and at
 most `1/phi0`.
 
-`per_group` is discussed under [`per_group`](@ref); the short version is that the
-default, `false`, is the one that conserves energy.
+`per_group` is discussed under [`per_group`](@ref): each group gets its own
+`phi` by default.
 """
 struct StabilityBound{T<:AbstractFloat} <: AbstractChatLimiter
     beta::T
@@ -162,7 +163,7 @@ struct StabilityBound{T<:AbstractFloat} <: AbstractChatLimiter
     flux_form::Bool
 end
 
-function StabilityBound(; beta=0.9, per_group::Bool=false, energy_step::Bool=false, xi=0.5,
+function StabilityBound(; beta=0.9, per_group::Bool=true, energy_step::Bool=false, xi=0.5,
                         flux_form::Bool=false)
     b, x = promote(float(beta), float(xi))
     return StabilityBound(b, per_group, energy_step, x, flux_form)
@@ -198,39 +199,28 @@ OpticalDepthFit(; s, p, per_group::Bool=false, flux_form::Bool=false) =
     per_group(limiter) -> Bool
 
 Whether each frequency group is allowed its own `phi`, or the cell takes one
-value for all of them (the default).
+value for all of them, from its most restrictive group.
 
-The groups are independent in *transport*. They are not independent in the
-**coupling**, and there a per-group `phi` costs a property the RSLA otherwise
-keeps. From
+[`StabilityBound`](@ref) defaults to one `phi` per group. The groups are
+independent in transport; in the coupling they are not, and summing the source
+terms gives
 
-    d/dt [e + sum_g E_g] = c rho sum_g (phi_g - 1) (kappa_P B_g - kappa_E E_g)
+    d/dt [e + sum_g E_g] = c rho sum_g (phi_g - 1) (kappa_P B_g - kappa_E E_g),
 
-with `phi` uniform the sum collapses onto the gas equation and leaves the exact
-identity
-
-    Delta [e + sum_g E_g] = (1 - phi) Delta e.
-
-The RSLA does not conserve energy -- nobody claims it does -- but its error is
-*determined by how much energy the gas gained or lost*, and by nothing else. It
-does not depend on the spectrum, on how many absorption-emission cycles the run
-performed, or on which groups they went through. Measured here, in a single cell
-with no transport, over 400 coupling steps: the identity holds to five decimals
-at `phi = 0.1` and at `phi = 0.01`.
-
-With `phi` varying between groups the sum does not collapse and the identity
-fails outright. At `phi = (1, 0.1)` it predicts no drift at all -- the gas
-equation is unmodified, `phi_1 = 1` -- and the actual drift is -44.5 per cent of
-the cell's initial energy; at `(1, 0.01)`, -56.7 per cent. Swapping which group
-is the fast one changes the answer again. What is left is an error set by the
-path energy took through the spectrum, which is not a quantity anyone can
-account for.
-
-The default is `false` because a conservation property one can state is worth
-more than a few per cent of L1 error. `phi` is then taken from the most
-restrictive group -- the largest value every group is simultaneously stable at,
-which the von Neumann analysis confirms is stable for the coupled multigroup
-system. Pass `per_group = true` for one `phi` per group.
+so with `phi` uniform over groups *and cells* the RSLA obeys the identity
+`Delta [e + sum_g E_g] = (1 - phi) Delta e`, and with a per-group `phi` it does
+not (measured in one cell, no transport, 400 coupling steps: a drift of -44.5
+per cent of the cell's energy at `phi = (1, 0.1)` where the identity predicts
+none). That identity, however, is a property of a *global* reduction and is lost
+by any local limiter, per-cell or per-group. What a local `phi` keeps, in the
+time-derivative form of [`flux_form`](@ref), is exact conservation of
+`e + sum_g E_g/phi_g`: the coupling conserves it cell by cell, and the flux
+differences telescope in `E_g/phi_g`. That holds with a per-group `phi` exactly
+as with a per-cell one. The von Neumann analysis finds both stable for the
+coupled multigroup system, and a per-group `phi` is the more accurate of the
+two, since a transparent group no longer holds the thick ones back (on the Vaytet
+Marshak wave, 7.7 against 10.7 per cent at `phi0 = 0.01`). Pass
+`per_group = false` for one `phi` per cell.
 """
 per_group(::AbstractChatLimiter) = false
 per_group(l::StabilityBound) = l.per_group
