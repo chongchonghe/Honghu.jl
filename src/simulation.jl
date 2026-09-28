@@ -420,7 +420,7 @@ function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}) where {D}
     g = sim.grid
     nrad = nradvars(sim.radiation)
     reconstruct!(rw.qL, rw.qR, rw.prim, sim.radiation_reconstruction, Val(D), g, nrad)
-    rad_fluxes!(rw.flux, rw.qL, rw.qR, R, rw.chat, sim.radiation, Val(D), g)
+    rad_fluxes!(rw.flux, rw.qL, rw.qR, R, _sweep_chat(sim), sim.radiation, Val(D), g)
     flux_divergence!(dR, rw.flux, Val(D), g, nrad)
     return nothing
 end
@@ -441,8 +441,16 @@ function rad_rhs!(dR::Array{T,4}, R::Array{T,4}, sim::Simulation{T}, t::T) where
     g.active[1] && _rad_sweep!(dR, R, sim, Val(1))
     g.active[2] && _rad_sweep!(dR, R, sim, Val(2))
     g.active[3] && _rad_sweep!(dR, R, sim, Val(3))
+    _sweep_chat(sim) === nothing && scale_by_phi!(dR, sim.rw.chat, sim.radiation, g)
     return dR
 end
+
+# The `chat` the flux sweep uses: the per-cell array under the standard RSLA or
+# the flux form of a local limiter; `nothing` -- the unreduced flux, each cell
+# scaled by its own `phi` afterwards -- under the default time-derivative form.
+@inline _sweep_chat(sim::Simulation) = _sweep_chat(sim.radiation.chat_limiter, sim.rw.chat)
+@inline _sweep_chat(::ConstantChat, chat) = chat
+@inline _sweep_chat(lim::AbstractChatLimiter, chat) = flux_form(lim) ? chat : nothing
 
 # --- stage drivers -----------------------------------------------------------
 

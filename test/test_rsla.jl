@@ -7,7 +7,7 @@
 # that a local `chat` beats a global one on a shock and on a Marshak wave, and
 # that a per-group `chat` does not conserve energy.
 
-using Hydro3D: chat_factor, per_group, update_chat!, energy_exchange_dt, LocalCell,
+using Hydro3D: chat_factor, per_group, flux_form, update_chat!, energy_exchange_dt, LocalCell,
                stability_denominator, _signal_sum, ConstantChat, StabilityBound,
                OpticalDepthFit, CouplingState, solve_coupling, gbase, IERAD, IEGAS,
                gas_scale
@@ -196,7 +196,8 @@ end
     # whole variable-chat path. This is the plumbing under test at once. (A
     # vanishing `beta` no longer does this: thick cells run at `phi = 1` whatever
     # `beta` is, because there is no bound there for it to multiply.)
-    for lim in (OpticalDepthFit(s=0.0, p=1.0), OpticalDepthFit(s=0.0, p=1.0, per_group=true))
+    for lim in (OpticalDepthFit(s=0.0, p=1.0, flux_form=true),
+                OpticalDepthFit(s=0.0, p=1.0, per_group=true, flux_form=true))
         a, tmax = P.marshak_vaytet(n=24, ngroups=3, chat_over_c=0.05)
         b, _ = P.marshak_vaytet(n=24, ngroups=3, chat_over_c=0.05, chat_limiter=lim)
         run!(a; tmax=tmax / 50, verbose=false)
@@ -204,6 +205,16 @@ end
         @test a.R == b.R
         @test a.diag.steps == b.diag.steps
     end
+    # The default time-derivative form is the same scheme when phi is uniform --
+    # F_HLL(chat) = (chat/c) F_HLL(c) term by term -- but reaches it through a
+    # different product, so it agrees to round-off rather than bit for bit.
+    a, tmax = P.marshak_vaytet(n=24, ngroups=3, chat_over_c=0.05)
+    b, _ = P.marshak_vaytet(n=24, ngroups=3, chat_over_c=0.05,
+                            chat_limiter=OpticalDepthFit(s=0.0, p=1.0))
+    run!(a; tmax=tmax / 50, verbose=false)
+    run!(b; tmax=tmax / 50, verbose=false)
+    @test isapprox(a.R, b.R; rtol=1e-10)
+    @test a.diag.steps == b.diag.steps
 
     # At chat = c there is nothing left to reduce: phi is pinned at one by its
     # own floor, so an IRSLA run is the exact-limit no-op the paper's battery
@@ -375,4 +386,34 @@ end
     dt_E = energy_exchange_dt(on.U, on.R, on.eos, on.radiation, on.grid, 0.5, on.floors)
     @test dt_E > 0
     @test Hydro3D._rad_dt(on) == min(dt_rsla, dt_E)
+end
+
+# A limiter that reads the gas temperature through `hrat` (which rises through a
+# shock) and ripples an otherwise uniform `phi` by `amp`.
+struct Ripple <: Hydro3D.AbstractChatLimiter
+    phi::Float64
+    amp::Float64
+    flux::Bool
+end
+Hydro3D._convert_limiter(l::Ripple, ::Type{T}) where {T} = l
+Hydro3D.chat_factor(l::Ripple, phi0, w::LocalCell) = l.phi * (1 - l.amp * min(1.0, w.hrat / 0.08))
+Hydro3D.flux_form(l::Ripple) = l.flux
+
+@testset "phi belongs on the time derivative, not inside the divergence" begin
+    # The RSLA changes how fast radiation relaxes, not where it relaxes to. With
+    # phi on the time derivative that holds cell by cell for any phi(x); with phi
+    # inside the divergence the steady state picks up a spurious F . grad(ln phi),
+    # and a few per cent of ripple in phi costs more than the RSLA itself.
+    l1(T, ref) = sum(abs, T .- ref) / sum(abs, ref)
+    n = 64
+    r, tmax = P.radhydro_shock_super(; n, chat_over_c=1.0)
+    run!(r; tmax, verbose=false)
+    ref = vec(gas_temperature(r))
+    err(lim) = (s = first(P.radhydro_shock_super(; n, chat_limiter=lim));
+                run!(s; tmax, verbose=false); l1(vec(gas_temperature(s)), ref))
+    flat = err(Ripple(0.12, 0.0, false))
+    @test err(Ripple(0.12, 0.0, true)) ≈ flat rtol = 1e-6   # uniform phi: the same scheme
+    @test err(Ripple(0.12, 0.05, false)) < 1.5 * flat
+    @test err(Ripple(0.12, 0.05, true)) > 5 * flat
+    @test !flux_form(StabilityBound()) && flux_form(StabilityBound(flux_form=true))
 end

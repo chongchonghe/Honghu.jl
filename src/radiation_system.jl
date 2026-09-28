@@ -113,9 +113,9 @@ end
 # inner loop and a `Float64` `beta` in a `Float32` run would promote every one.
 _convert_limiter(l::ConstantChat, ::Type{T}) where {T} = l
 _convert_limiter(l::StabilityBound, ::Type{T}) where {T} =
-    StabilityBound(T(l.beta), l.per_group, l.energy_step, T(l.xi))
+    StabilityBound(T(l.beta), l.per_group, l.energy_step, T(l.xi), l.flux_form)
 _convert_limiter(l::OpticalDepthFit, ::Type{T}) where {T} =
-    OpticalDepthFit(T(l.s), T(l.p), l.per_group)
+    OpticalDepthFit(T(l.s), T(l.p), l.per_group, l.flux_form)
 
 # `GREY` is a Float64 constant; a Float32 simulation needs its own copy.
 _convert_groups(g::RadiationGroups{NG,M,T}, ::Type{T}) where {NG,M,T} = g
@@ -302,7 +302,7 @@ As in the hydro sweep, an inadmissible reconstructed state (non-positive energy
 density, or a reduced flux at or beyond the causal limit) falls back to the
 piecewise-constant state of the adjoining cells.
 """
-function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::A,
+function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::Union{A,Nothing},
                      phys::RadiationPhysics{NG,MM,T},
                      ::Val{D}, g::CartesianGrid{T}) where {NG,MM,T,A<:AbstractArray{T,4},D}
     e1, e2, e3 = _shift(Val(D))
@@ -349,7 +349,7 @@ function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::A,
                 FzR = R[b+IFRZ, i, j, k]
             end
 
-            chatf = min(chat[gr, im, jm, km], chat[gr, i, j, k])
+            chatf = _face_chat(chat, c, gr, im, jm, km, i, j, k)
 
             F = hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chatf, Val(D), cl)
 
@@ -360,6 +360,39 @@ function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::A,
         end
     end
     return nothing
+end
+
+# The reduced speed at a face: the minimum of the two cells it separates, or --
+# when `chat` is `nothing` -- the true speed of light, for the time-derivative
+# form of a local chat (see `flux_form`), in which the flux is the unreduced one
+# and each cell scales its own update afterwards.
+@inline _face_chat(chat::AbstractArray, c, gr, im, jm, km, i, j, k) =
+    @inbounds min(chat[gr, im, jm, km], chat[gr, i, j, k])
+@inline _face_chat(::Nothing, c, gr, im, jm, km, i, j, k) = c
+
+"""
+    scale_by_phi!(dR, chat, phys, grid)
+
+Multiply each interior cell's radiation right-hand side by its own reduction
+`chat_g/c`, group by group: the time-derivative form of a local reduced speed of
+light (see [`flux_form`](@ref)).
+"""
+function scale_by_phi!(dR::AbstractArray{T,4}, chat::AbstractArray{T,4},
+                       phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T}) where {NG,M,T}
+    c = phys.c
+    ir = g.lo[1]:g.hi[1]
+    threaded_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]) do j, k
+        @inbounds for i in ir, gr in 1:NG
+            # A division, not a multiplication by 1/c: it is exactly one where
+            # chat = c, so a cell at phi = 1 runs the unmodified scheme bit for bit.
+            phi = chat[gr, i, j, k] / c
+            b = gbase(gr)
+            for n in 0:3
+                dR[b+n, i, j, k] *= phi
+            end
+        end
+    end
+    return dR
 end
 
 """

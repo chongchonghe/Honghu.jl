@@ -153,11 +153,13 @@ struct StabilityBound{T<:AbstractFloat} <: AbstractChatLimiter
     per_group::Bool
     energy_step::Bool
     xi::T
+    flux_form::Bool
 end
 
-function StabilityBound(; beta=0.9, per_group::Bool=false, energy_step::Bool=false, xi=0.5)
+function StabilityBound(; beta=0.9, per_group::Bool=false, energy_step::Bool=false, xi=0.5,
+                        flux_form::Bool=false)
     b, x = promote(float(beta), float(xi))
-    return StabilityBound(b, per_group, energy_step, x)
+    return StabilityBound(b, per_group, energy_step, x, flux_form)
 end
 
 """
@@ -180,10 +182,11 @@ struct OpticalDepthFit{T<:AbstractFloat} <: AbstractChatLimiter
     s::T
     p::T
     per_group::Bool
+    flux_form::Bool
 end
 
-OpticalDepthFit(; s, p, per_group::Bool=false) =
-    OpticalDepthFit(promote(float(s), float(p))..., per_group)
+OpticalDepthFit(; s, p, per_group::Bool=false, flux_form::Bool=false) =
+    OpticalDepthFit(promote(float(s), float(p))..., per_group, flux_form)
 
 """
     per_group(limiter) -> Bool
@@ -226,6 +229,41 @@ system. Pass `per_group = true` for one `phi` per group.
 per_group(::AbstractChatLimiter) = false
 per_group(l::StabilityBound) = l.per_group
 per_group(l::OpticalDepthFit) = l.per_group
+
+"""
+    flux_form(limiter) -> Bool
+
+Where a local `phi` enters the transport step. `false`, the default, puts it
+where the RSLA puts `chat`: on the time derivative,
+
+    (1/phi_i) dU_i/dt = -(G_{i+1/2} - G_{i-1/2})/dx + S_i,
+
+so each cell's update is `phi_i` times the flux difference of the *unreduced*
+HLL flux (wave speeds `+/- sigma c`). `true` puts it inside the divergence,
+`dU_i/dt = -(phi G)_{i+1/2} + (phi G)_{i-1/2} + ...`, with the interface value
+the minimum of the two cells -- the form of the earlier drafts, kept for
+comparison.
+
+The two agree wherever `phi` is uniform, and for [`ConstantChat`](@ref) they are
+the same scheme: `F_HLL(chat) = (chat/c) F_HLL(c)` exactly, term by term. They
+differ where `phi` varies, and there only the default is right. The RSLA
+changes how fast the radiation relaxes, not where it relaxes to: its steady
+states are those of the unmodified equations. With `phi` on the time derivative
+that stays true cell by cell, for any `phi(x)`. With `phi` inside the divergence
+the steady state instead solves `div F + F . grad(ln phi) = S`, and the spurious
+term costs real accuracy: on the Mach 5 supercritical shock a 5 per cent ripple
+in an otherwise uniform `phi` takes the error from 0.19 to 2.3 per cent, worse
+than the RSLA it replaces. The default also keeps a stateable conservation law:
+the flux differences telescope in `E_g/phi_g`, which is exactly the radiation
+energy the coupling conserves together with the gas (`e + sum_g E_g/phi_g`).
+
+The minimum at interfaces is not needed by the default form: each cell's update
+is scaled by its own `phi`, so the stability of a transparent cell is set by its
+own speed whatever its neighbours run at.
+"""
+flux_form(::AbstractChatLimiter) = false
+flux_form(l::StabilityBound) = l.flux_form
+flux_form(l::OpticalDepthFit) = l.flux_form
 
 """
     chat_factor(limiter, phi0, cell::LocalCell) -> phi
