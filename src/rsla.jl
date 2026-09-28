@@ -43,7 +43,7 @@ Three are provided:
 abstract type AbstractChatLimiter end
 
 """
-    LocalCell(cdt, sdx, chiE, chiF, hrat, dxmin)
+    LocalCell(cdt, sdx, sdxE, chiE, chiF, hrat, dxmin)
 
 What a limiter may read about one cell and one group, all local:
 
@@ -51,6 +51,9 @@ What a limiter may read about one cell and one group, all local:
   - `sdx`   : `sum_d sigma_d / dx_d` over the active directions, where
     `sigma_d = max(0.1, sqrt(T_dd))` is the HLL signal speed along `d` as a
     fraction of `chat` -- exactly the speed `m1_flux` hands the Riemann solver;
+  - `sdxE`  : the same sum with each term scaled by the wave-speed correction
+    `epsilon_d = min(1, 1/(chi_F dx_d))` of the energy dissipation, if it is on
+    (see [`RadiationPhysics`](@ref)); equal to `sdx` if it is off;
   - `chiE`  : `rho kappa_E`, the absorption coefficient that damps `E_rad`;
   - `chiF`  : `rho kappa_F`, the coefficient that damps the flux;
   - `hrat`  : `4 a_rad T^3 kappa_P/kappa_E / (rho c_v)`, the ratio of the
@@ -61,6 +64,7 @@ What a limiter may read about one cell and one group, all local:
 struct LocalCell{T<:AbstractFloat}
     cdt::T
     sdx::T
+    sdxE::T
     chiE::T
     chiF::T
     hrat::T
@@ -282,14 +286,17 @@ function chat_factor end
 """
     stability_denominator(cell) -> D
 
-`D = max(sdx - chiE/(2 + K), sdx - chiF/2)` with `K = hrat cdt chiE`, so that the
-bound of [`StabilityBound`](@ref) is `phi cdt D <= 1`. `D <= 0` means no bound.
+`D = max(sdxE - chiE/(2 + K), sdx - chiF/2)` with `K = hrat cdt chiE`, so that
+the bound of [`StabilityBound`](@ref) is `phi cdt D <= 1`. `D <= 0` means no
+bound. The energy channel carries `sdxE` because the energy's grid-scale
+amplification comes from the HLL dissipation of `E`, which the wave-speed
+correction scales; the flux's does not.
 """
 @inline function stability_denominator(w::LocalCell{T}) where {T}
     K = w.hrat * w.cdt * w.chiE
     # `K` overflows to Inf in a cell whose gas has no heat capacity to speak of;
     # the limit of chiE/(2 + K) is then zero, which is what IEEE gives anyway.
-    dE = w.sdx - w.chiE / (2 + K)
+    dE = w.sdxE - w.chiE / (2 + K)
     dF = w.sdx - w.chiF / 2
     return max(dE, dF)
 end

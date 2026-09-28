@@ -119,7 +119,8 @@ HLL flux of the grey M1 system across one interface with normal along direction
 @inline function hll_radiation(erL::T, FxL::T, FyL::T, FzL::T,
                                erR::T, FxR::T, FyR::T, FzR::T,
                                c::T, chat::T, ::Val{D},
-                               cl::AbstractClosure=LevermoreClosure()) where {T<:AbstractFloat,D}
+                               cl::AbstractClosure=LevermoreClosure(),
+                               epsE::T=one(T)) where {T<:AbstractFloat,D}
     ci = one(T) / c
     tL = eddington_tensor(cl, FxL * ci / erL, FyL * ci / erL, FzL * ci / erL)
     tR = eddington_tensor(cl, FxR * ci / erR, FyR * ci / erR, FzR * ci / erR)
@@ -139,6 +140,10 @@ HLL flux of the grey M1 system across one interface with normal along direction
     U_L = SVec(erL, FxL, FyL, FzL)
     U_R = SVec(erR, FxR, FyR, FzR)
 
-    # frozen Eddington tensor => the interface is always inside the star region
-    (S_R * GL - S_L * GR + (S_R * S_L) * (U_R - U_L)) / (S_R - S_L)
+    # frozen Eddington tensor => the interface is always inside the star region.
+    # `epsE` scales the dissipation of the energy component only: the optional
+    # wave-speed correction of an optically thick face (see RadiationPhysics).
+    dU = U_R - U_L
+    dU = SVec(epsE * dU[1], dU[2], dU[3], dU[4])
+    (S_R * GL - S_L * GR + (S_R * S_L) * dU) / (S_R - S_L)
 end

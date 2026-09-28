@@ -134,13 +134,14 @@ struct RadiationWorkspace{T<:AbstractFloat}
     Rtmp::Array{T,4}
     Utmp::Array{T,4}
     chat::Array{T,4}
+    chiF::Array{T,4}
 end
 
 function RadiationWorkspace(g::CartesianGrid{T}, nrad::Integer=NRAD,
                             ng::Integer=nrad ÷ NRAD) where {T}
     RadiationWorkspace(allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
                        allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
-                       allocate(g, NHYDRO), allocate(g, ng))
+                       allocate(g, NHYDRO), allocate(g, ng), allocate(g, ng))
 end
 
 """
@@ -420,7 +421,8 @@ function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}) where {D}
     g = sim.grid
     nrad = nradvars(sim.radiation)
     reconstruct!(rw.qL, rw.qR, rw.prim, sim.radiation_reconstruction, Val(D), g, nrad)
-    rad_fluxes!(rw.flux, rw.qL, rw.qR, R, _sweep_chat(sim), sim.radiation, Val(D), g)
+    rad_fluxes!(rw.flux, rw.qL, rw.qR, R, _sweep_chat(sim), sim.radiation, Val(D), g,
+                sim.radiation.wavespeed_correction ? rw.chiF : nothing)
     flux_divergence!(dR, rw.flux, Val(D), g, nrad)
     return nothing
 end
@@ -476,8 +478,13 @@ end
 @inline _stage_chat!(sim::Simulation, U, R, dt, t) =
     _stage_chat!(sim, sim.radiation.chat_limiter, U, R, dt, t)
 
-@inline _stage_chat!(::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Array{T,4},
-                     dt::T, t::T) where {T} = nothing
+function _stage_chat!(sim::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Array{T,4},
+                      dt::T, t::T) where {T}
+    sim.radiation.wavespeed_correction || return nothing
+    fill_ghosts!(U, sim.boundaries, sim.grid, t)
+    update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
+    return nothing
+end
 
 function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
                       R::Array{T,4}, dt::T, t::T) where {T}
@@ -488,6 +495,8 @@ function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
     # boundary sweep and keeps the ordering here independent of what it does.
     fill_ghosts!(U, sim.boundaries, g, t)
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
+    sim.radiation.wavespeed_correction &&
+        update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, g, sim.floors)
     update_chat!(sim.rw.chat, U, R, sim.eos, sim.radiation, g, sim.floors, dt)
     return nothing
 end

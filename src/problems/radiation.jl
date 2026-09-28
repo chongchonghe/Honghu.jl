@@ -543,7 +543,8 @@ stability bound caps `phi` at the RSLA step (see [`StabilityBound`](@ref)).
 function radhydro_pulse_dyn(; n::Integer=128, nx::Integer=n, chat_over_c=1.0, v0=3e7,
                             kappa0=500.0,
                             chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
-                            beta_order::Integer=1, kwargs...)
+                            beta_order::Integer=1, wavespeed_correction::Bool=false,
+                            kwargs...)
     c = Hydro3D.CGS.c_light
     a_rad = Hydro3D.CGS.a_rad
     k_B = Hydro3D.CGS.k_B
@@ -555,7 +556,7 @@ function radhydro_pulse_dyn(; n::Integer=128, nx::Integer=n, chat_over_c=1.0, v0
     # gas + radiation pressure balance: rho k T/mu + a T^4/3 = const
     rhoprof(x) = (T = Tprof(x); rho0 * T_lo / T + (a_rad * mu / (3 * k_B)) * (T_lo^4 / T - T^3))
     rad = RadiationPhysics(; c, chat=chat_over_c * c, a_rad, k_B, beta_order, chat_limiter,
-                           opacity=ConstantOpacity(kappa0))
+                           opacity=ConstantOpacity(kappa0), wavespeed_correction)
     sim = Simulation(; n=(nx, 1, 1), xlo=(-512.0, 0.0, 0.0), xhi=(512.0, 1.0, 1.0),
                      eos=IdealGas(; gamma, cv), radiation=rad,
                      boundaries=Boundaries(Periodic()), cfl=0.8, cfl_radiation=0.4,
