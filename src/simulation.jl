@@ -576,8 +576,13 @@ end
 function _rad_dt(sim::Simulation, lim::StabilityBound)
     dt = radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
     lim.energy_step || return dt
-    return min(dt, energy_exchange_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid,
-                                      lim.xi, sim.floors))
+    dtE = energy_exchange_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid, lim.xi,
+                             sim.floors)
+    # Never below the step of the unreduced scheme: there `phi = 1` is stable in
+    # every cell, so a shorter step would cost more than not reducing at all --
+    # which a strongly radiation-dominated cell would otherwise ask for.
+    dtc = dt * sim.radiation.chat / sim.radiation.c
+    return min(dt, max(dtE, dtc))
 end
 
 """

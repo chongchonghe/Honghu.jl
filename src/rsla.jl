@@ -141,9 +141,11 @@ bound cannot reach one however thick the cell, and `phi` saturates near
 `phi0/(sigma C_r)`. That is a limit of the step, not of the limiter: removing it
 takes a shorter step. `energy_step = true` asks for one, capping the substep at
 `xi / (hrat c sum_d sigma_d/dx_d)` so that thick cells can run at `phi = 1`
-(see [`energy_exchange_dt`](@ref)). It is off by default because it costs steps,
-by a factor of about `4 (gamma - 1) P_rad/P_gas * sigma C_r / (xi phi0)`
-wherever it binds.
+(see [`energy_exchange_dt`](@ref)), but never below the CFL step of the unreduced
+scheme, at which `phi = 1` is stable everywhere anyway. It is off by default
+because it costs steps, by a factor of about
+`4 (gamma - 1) P_rad/P_gas * sigma C_r / (xi phi0)` wherever it binds, and at
+most `1/phi0`.
 
 `per_group` is discussed under [`per_group`](@ref); the short version is that the
 default, `false`, is the one that conserves energy.

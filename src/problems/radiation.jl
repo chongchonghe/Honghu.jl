@@ -520,3 +520,49 @@ function total_erad(sim)
     end
     return out
 end
+
+"""
+    radhydro_pulse_dyn(; n = 128, chat_over_c = 1.0, v0 = 3e7, kappa0 = 500.0,
+                       chat_limiter = ConstantChat(), kwargs...) -> (sim, tmax)
+
+The advecting radiation pulse in the dynamic diffusion limit of He, Wibking &
+Krumholz (2024a), in the form of Quokka's `RadhydroPulseDyn` test, in CGS: a
+Gaussian temperature pulse, `T` from `1e7` to `2e7` K over a width of 24 cm, in
+pressure balance between gas and radiation, carried by a uniform flow of
+`v0 = 3e7` cm/s through a periodic box 1024 cm wide. The opacity is `500 cm² g⁻¹`
+at `rho ≈ 1.2 g cm⁻³`, so a cell is thousands of mean free paths thick and the
+optical depth of the pulse times `v0/c` is about ten: the radiation is carried
+with the gas rather than diffusing through it.
+
+This is the regime in which Wibking & Krumholz (2022) show the RSLA makes
+order-unity errors whatever `chat` is, and it is radiation-rich -- radiation
+holds about a third of the heat capacity -- which is the regime in which the
+stability bound caps `phi` at the RSLA step (see [`StabilityBound`](@ref)).
+`chat_over_c = 1` is the reference; `tmax = 4.8e-6` s moves the pulse by 144 cm.
+"""
+function radhydro_pulse_dyn(; n::Integer=128, nx::Integer=n, chat_over_c=1.0, v0=3e7,
+                            kappa0=500.0,
+                            chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
+                            beta_order::Integer=1, kwargs...)
+    c = Hydro3D.CGS.c_light
+    a_rad = Hydro3D.CGS.a_rad
+    k_B = Hydro3D.CGS.k_B
+    mu = 2.33 * Hydro3D.CGS.m_u
+    gamma = 5 / 3
+    cv = k_B / (mu * (gamma - 1))
+    T_lo, T_hi, rho0, width = 1.0e7, 2.0e7, 1.2, 24.0
+    Tprof(x) = T_lo + (T_hi - T_lo) * exp(-x^2 / (2 * width^2))
+    # gas + radiation pressure balance: rho k T/mu + a T^4/3 = const
+    rhoprof(x) = (T = Tprof(x); rho0 * T_lo / T + (a_rad * mu / (3 * k_B)) * (T_lo^4 / T - T^3))
+    rad = RadiationPhysics(; c, chat=chat_over_c * c, a_rad, k_B, beta_order, chat_limiter,
+                           opacity=ConstantOpacity(kappa0))
+    sim = Simulation(; n=(nx, 1, 1), xlo=(-512.0, 0.0, 0.0), xhi=(512.0, 1.0, 1.0),
+                     eos=IdealGas(; gamma, cv), radiation=rad,
+                     boundaries=Boundaries(Periodic()), cfl=0.8, cfl_radiation=0.4,
+                     kwargs...)
+    set_initial_conditions!(sim) do x, y, z
+        T = Tprof(x)
+        (rho=rhoprof(x), vx=v0, T=T, Erad=a_rad * T^4, Fx=0.0)
+    end
+    return sim, 4.8e-6
+end

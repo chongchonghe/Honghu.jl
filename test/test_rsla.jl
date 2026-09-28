@@ -385,7 +385,14 @@ end
     on, _ = P.radhydro_shock(n=32, chat_limiter=StabilityBound(energy_step=true))
     dt_E = energy_exchange_dt(on.U, on.R, on.eos, on.radiation, on.grid, 0.5, on.floors)
     @test dt_E > 0
-    @test Hydro3D._rad_dt(on) == min(dt_rsla, dt_E)
+    dt_c = dt_rsla * on.radiation.chat / on.radiation.c   # the unreduced CFL step
+    @test Hydro3D._rad_dt(on) == min(dt_rsla, max(dt_E, dt_c))
+    # ... and in a radiation-dominated gas it stops at the unreduced step rather
+    # than asking for more than running at the true speed of light would cost.
+    rich, _ = P.radhydro_pulse_dyn(n=32, chat_over_c=0.01,
+                                   chat_limiter=StabilityBound(energy_step=true))
+    dtr = Hydro3D.radiation_timestep(rich.radiation, rich.grid, rich.cfl_radiation)
+    @test Hydro3D._rad_dt(rich) ≈ dtr * 0.01
 end
 
 # A limiter that reads the gas temperature through `hrat` (which rises through a
