@@ -234,6 +234,10 @@ end
     # still "work" and would quietly use the wrong speed at the boundary.
     sim, _ = P.marshak_vaytet(n=16, ngroups=2, chat_over_c=0.02,
                               chat_limiter=StabilityBound())
+    # `chat` is computed from the state at the start of a substep, which in the
+    # first step is the uniform initial state; the second step starts from one in
+    # which the wall's radiation has entered the domain.
+    step!(sim)
     step!(sim)
     ch = sim.rw.chat
     @test all(>(0), ch)

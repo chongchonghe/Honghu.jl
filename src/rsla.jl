@@ -267,7 +267,7 @@ flux_form(l::OpticalDepthFit) = l.flux_form
 The local speed of light reduction factor, in `[phi0, 1]`, for one cell and one
 group. `phi0` is the global nominal reduction `chat/c` the user asked for.
 
-Pointwise and allocation-free: it is called once per cell per group per stage.
+Pointwise and allocation-free: it is called once per cell per group per substep.
 """
 function chat_factor end
 

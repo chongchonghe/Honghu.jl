@@ -472,14 +472,23 @@ function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
     return sim
 end
 
-# Recompute the local reduced speed of light for one IMEX stage from the state
-# that stage is about to transport. A no-op under `ConstantChat`, down to the
+# Compute the local reduced speed of light for one IMEX substep from the state at
+# its start; both stages then use it. A no-op under `ConstantChat`, down to the
 # ghost fills -- which is what makes the default path bit-for-bit unchanged.
 @inline _stage_chat!(sim::Simulation, U, R, dt, t) =
     _stage_chat!(sim, sim.radiation.chat_limiter, U, R, dt, t)
 
 function _stage_chat!(sim::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Array{T,4},
                       dt::T, t::T) where {T}
+    sim.radiation.wavespeed_correction || return nothing
+    fill_ghosts!(U, sim.boundaries, sim.grid, t)
+    update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
+    return nothing
+end
+
+# The flux absorption coefficient of the wave-speed correction for one stage,
+# from the state that stage transports.
+function _stage_chiF!(sim::Simulation{T}, U::Array{T,4}, t::T) where {T}
     sim.radiation.wavespeed_correction || return nothing
     fill_ghosts!(U, sim.boundaries, sim.grid, t)
     update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
@@ -511,12 +520,15 @@ step into scratch storage and applies the implicit coupling there; stage 3
 forms the Shu-Osher combination of the two stages, adds the transport of the
 stage-2 state, and applies the implicit coupling again.
 
-Each stage begins by recomputing the local reduced speed of light from the state
-that stage transports, so the transport and the coupling that follows it see the
-same `chat` -- the order the improved RSLA is derived for, in which every
-explicit stage is immediately followed by the implicit solve that damps what it
-amplified. With the default [`ConstantChat`](@ref) limiter the two
-[`update_chat!`](@ref) calls are no-ops.
+The local reduced speed of light is computed once, from the state at the start
+of the substep, and both stages use it. That is the scheme the stability bound
+is derived for -- one `phi` per cell held fixed through the whole PD-ARS step --
+and it keeps `e + sum_g E_g/phi_g` exactly conserved over the substep: each stage
+conserves it for its own `phi`, so a `phi` that changed between the stages would
+leave a residual `(E(2) - E^n)(1/phi_b - 1/phi_a)`. With the default
+[`ConstantChat`](@ref) limiter the [`update_chat!`](@ref) call is a no-op. The
+flux absorption coefficient of the optional wave-speed correction is a property
+of the flux, not of `phi`, and is still refreshed for each stage.
 """
 function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     g = sim.grid
@@ -537,7 +549,9 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
                                 sim.source, t + dt, fl; update_momentum=upd)
 
     # --- stage 3: Shu-Osher combination + implicit coupling ------------------
-    _stage_chat!(sim, rw.Utmp, rw.Rtmp, dt, t + dt)
+    # Same `chat` as stage 2; only the wave-speed correction's `chiF` follows
+    # the stage state.
+    _stage_chiF!(sim, rw.Utmp, t + dt)
     rad_rhs!(rw.dR, rw.Rtmp, sim, t + dt)
     combine!(sim.R, T(1 - IMEX_ALPHA), sim.R, T(IMEX_ALPHA), rw.Rtmp,
              T(IMEX_AEX_32) * dt, rw.dR, g, nradvars(sim.radiation))
