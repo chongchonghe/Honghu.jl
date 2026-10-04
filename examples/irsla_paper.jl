@@ -22,6 +22,15 @@ const SECTIONS = isempty(OPTS) ?
 
 l1(T, ref) = sum(abs, T .- ref) / sum(abs, ref)
 
+# The RSLA and IRSLA runs take beta = 0.9 times the largest stable step of the
+# standard RSLA (paper, Proposition 2), so that the IRSLA is compared with the RSLA
+# at its best. In Hydro3D's CFL number, C_r = D nu0, with nu0 <= 1/max(sum_d sigma_d):
+# max sum_d sigma_d = sqrt(D) for the M1 closure and D/sqrt(3) for P1 (Eddington).
+# The chat = c reference runs keep the problems' own, more conservative steps.
+const BETA = 0.9
+const CR_P1 = BETA * sqrt(3)          # any D: D * BETA * sqrt(3)/D
+cr_m1(D) = BETA * sqrt(D)             # D * BETA/sqrt(D)
+
 function writecsv(name, header, rows)
     open(outpath(name), "w") do io
         println(io, join(header, ","))
@@ -146,7 +155,8 @@ if "shock_super" in SECTIONS
     runs = [("rsla", ConstantChat()), ("irsla", StabilityBound()),
             ("irsla_flux", StabilityBound(flux_form=true)),
             ("earlier", EarlierBound())]
-    res = Dict(name => score(radhydro_shock_super(chat_limiter=lim)...) for (name, lim) in runs)
+    res = Dict(name => score(radhydro_shock_super(chat_limiter=lim, cfl_radiation=CR_P1)...)
+               for (name, lim) in runs)
     @printf("  reference: %d substeps\n", ref.sub)
     for (name, _) in runs
         r = res[name]
@@ -161,7 +171,7 @@ if "shock_super" in SECTIONS
     push!(rows, ("reference", 0.0, ref.sub))
     # beta scan
     for beta in (0.3, 0.5, 0.7, 0.9, 1.0, 1.1, 1.2, 1.5)
-        r = score(radhydro_shock_super(chat_limiter=StabilityBound(; beta))...)
+        r = score(radhydro_shock_super(chat_limiter=StabilityBound(; beta), cfl_radiation=CR_P1)...)
         e = l1(r.T, ref.T)
         push!(rows, ("beta=$beta", isfinite(e) ? e : Inf, r.sub))
         @printf("  beta = %.1f   L1 = %.4f%%\n", beta, 100e)
@@ -171,8 +181,8 @@ if "shock_super" in SECTIONS
     rows = []
     for n in (64, 128, 256, 512)
         rr = score(radhydro_shock_super(; n, chat_over_c=1.0)...)
-        a = score(radhydro_shock_super(; n)...)
-        b = score(radhydro_shock_super(; n, chat_limiter=StabilityBound())...)
+        a = score(radhydro_shock_super(; n, cfl_radiation=CR_P1)...)
+        b = score(radhydro_shock_super(; n, chat_limiter=StabilityBound(), cfl_radiation=CR_P1)...)
         push!(rows, (n, l1(a.T, rr.T), l1(b.T, rr.T), a.sub, b.sub))
         @printf("  n = %3d   RSLA %.4f%%   IRSLA %.4f%%\n", n, 100l1(a.T, rr.T), 100l1(b.T, rr.T))
     end
@@ -186,8 +196,9 @@ if "shock_sub" in SECTIONS
     ref = score(radhydro_shock(n=256, chat_factor=433.0)...)
     for cf in (10.0, 3.0, 1.0)
         phi0 = cf * 4 / sqrt(3e6)
-        a = score(radhydro_shock(n=256, chat_factor=cf)...)
-        b = score(radhydro_shock(n=256, chat_factor=cf, chat_limiter=StabilityBound())...)
+        a = score(radhydro_shock(n=256, chat_factor=cf, cfl_radiation=CR_P1)...)
+        b = score(radhydro_shock(n=256, chat_factor=cf, chat_limiter=StabilityBound(),
+                                 cfl_radiation=CR_P1)...)
         push!(rows, (phi0, l1(a.T, ref.T), l1(b.T, ref.T), a.sub, b.sub))
         @printf("  phi0 = %.4f   RSLA %.4f%%   IRSLA %.4f%%\n", phi0, 100l1(a.T, ref.T),
                 100l1(b.T, ref.T))
@@ -204,9 +215,11 @@ if "vaytet" in SECTIONS
     rows = []
     prof = Dict{String,Any}()
     for phi0 in (0.003, 0.01, 0.03)
-        a = score(first(vay(chat_over_c=phi0)), tmax)
-        b = score(first(vay(chat_over_c=phi0, chat_limiter=StabilityBound())), tmax)
-        c = score(first(vay(chat_over_c=phi0, chat_limiter=StabilityBound(per_group=false))), tmax)
+        a = score(first(vay(chat_over_c=phi0, cfl_radiation=cr_m1(1))), tmax)
+        b = score(first(vay(chat_over_c=phi0, chat_limiter=StabilityBound(),
+                            cfl_radiation=cr_m1(1))), tmax)
+        c = score(first(vay(chat_over_c=phi0, chat_limiter=StabilityBound(per_group=false),
+                            cfl_radiation=cr_m1(1))), tmax)
         push!(rows, (phi0, l1(a.T, ref.T), l1(b.T, ref.T), l1(c.T, ref.T), maximum(b.T),
                      a.sub, b.sub))
         @printf("  phi0 = %.3f   RSLA %.3f%%   IRSLA %.3f%%   IRSLA per cell %.3f%%\n", phi0,
@@ -233,14 +246,15 @@ if "pulse" in SECTIONS
                                 ("irsla_wc", StabilityBound(), true),
                                 ("irsla_estep", StabilityBound(energy_step=true), false))
             r = score(radhydro_pulse_dyn(chat_over_c=phi0, chat_limiter=lim,
-                                         wavespeed_correction=wc)...)
+                                         wavespeed_correction=wc, cfl_radiation=CR_P1)...)
             push!(rows, (phi0, name, lp(r.T, ref.T), minimum(r.phi), maximum(r.phi), r.sub))
             @printf("  phi0 = %.2f %-12s L1 = %8.3f%%  phi in [%.3f, %.3f]  %d substeps\n",
                     phi0, name, 100lp(r.T, ref.T), extrema(r.phi)..., r.sub)
             phi0 == 0.1 && (prof[name] = r)
         end
     end
-    for cfl in (4.0, 40.0)
+    # chat = c at the RSLA steps of phi0 = 0.1 and 0.01
+    for cfl in (CR_P1 / 0.1, CR_P1 / 0.01)
         r = score(radhydro_pulse_dyn(cfl_radiation=cfl, wavespeed_correction=true)...)
         push!(rows, (1.0, "exact_wc_cfl$(cfl)", lp(r.T, ref.T), 1.0, 1.0, r.sub))
         @printf("  chat = c, correction on, cfl = %4.1f   L1 = %.3f%%\n", cfl, 100lp(r.T, ref.T))
@@ -259,13 +273,13 @@ if "diffusion2d" in SECTIONS
     # A 1e-3 random perturbation of the temperature seeds every mode, as any
     # real flow does; without it a smooth start takes no notice of a grid-scale
     # instability for a long time.
-    function blob(; n=64, phi0=0.01, lim=ConstantChat(), tmax=30.0)
+    function blob(; n=64, phi0=0.01, lim=ConstantChat(), tmax=30.0, cfl=cr_m1(2))
         dx = 1 / n
         chi = 0.5 / dx
         rad = RadiationPhysics(; c=1.0, chat=phi0, a_rad=1.0, beta_order=0,
                                opacity=ConstantOpacity(chi), chat_limiter=lim)
         sim = Simulation(; n=(n, n, 1), eos=IdealGas(; gamma=5 / 3, cv=100.0), radiation=rad,
-                         hydro=false, boundaries=Boundaries(Periodic()), cfl_radiation=0.4)
+                         hydro=false, boundaries=Boundaries(Periodic()), cfl_radiation=cfl)
         rng = Xoshiro(42)
         set_initial_conditions!(sim) do x, y, z
             T = (1 + exp(-((x - 0.5)^2 + (y - 0.5)^2) / (2 * 0.08^2))) *
@@ -274,7 +288,7 @@ if "diffusion2d" in SECTIONS
         end
         score(sim, tmax)
     end
-    ref = blob(phi0=1.0)
+    ref = blob(phi0=1.0, cfl=0.4)
     rows = []
     for (name, lim) in (("rsla", ConstantChat()), ("irsla", StabilityBound()),
                         ("earlier", EarlierBound(D=2)))
@@ -300,8 +314,10 @@ if "timing" in SECTIONS
                                                                         chat_over_c=0.01)))
         ts = Float64[]
         for lim in (ConstantChat(), StabilityBound())
-            sim, _ = label == "shock_super_512" ? radhydro_shock_super(; n=512, chat_limiter=lim) :
-                        marshak_vaytet(; n=256, ngroups=8, chat_over_c=0.01, chat_limiter=lim)
+            sim, _ = label == "shock_super_512" ?
+                     radhydro_shock_super(; n=512, chat_limiter=lim, cfl_radiation=CR_P1) :
+                     marshak_vaytet(; n=256, ngroups=8, chat_over_c=0.01, chat_limiter=lim,
+                                    cfl_radiation=cr_m1(1))
             for _ in 1:5; step!(sim); end          # compile
             nsub0 = sim.diag.rad_substeps
             t = @elapsed for _ in 1:60; step!(sim); end

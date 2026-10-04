@@ -85,8 +85,11 @@ function measure(tau, scheme, mode; amp=1e-5)
                            # speed of light's step is ~1e-9 of the gas energy,
                            # below the default tolerance of the coupling solve
                            tolerance=1e-14)
+    # The RSLA and IRSLA take 0.9 times the RSLA's largest stable step for the P1
+    # closure, nu0 = 0.9 sqrt(3) (paper, Proposition 2); the chat = c run keeps 0.4.
+    cfl = scheme === :exact ? 0.4 : 0.9 * sqrt(3)
     sim = Simulation(; n=(NCELL, 1, 1), eos=IdealGas(; gamma=GAMMA, cv=1 / (GAMMA - 1)),
-                     radiation=rad, boundaries=Boundaries(Periodic()), cfl_radiation=0.4)
+                     radiation=rad, boundaries=Boundaries(Periodic()), cfl_radiation=cfl)
     dt = Hydro3D.radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
     phi = scheme === :irsla ? background_phi(lim, rad, dt, tau, k) : phi0
     Om, v = eigenmode(tau, phi, mode)
