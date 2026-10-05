@@ -90,10 +90,9 @@ cell1d(cdt, tau; sig=ISO, hrat=0.0) = LocalCell(cdt, sig, sig, tau, tau, hrat, 1
         @test chat_factor(lim, phi0, cell1d(cdt, 1e200)) == 1
     end
 
-    @testset "per_group: on for the stability bound, off for the fitting form" begin
+    @testset "per_group: always for the stability bound, off for the fitting form" begin
         @test !per_group(ConstantChat())
         @test per_group(StabilityBound())
-        @test !per_group(StabilityBound(per_group=false))
         @test !per_group(OpticalDepthFit(s=1.0, p=2.0))
         @test per_group(OpticalDepthFit(s=1.0, p=2.0, per_group=true))
     end
@@ -291,7 +290,7 @@ end
     # exactly: the RSLA's non-conservation is a known function of the gas energy
     # change and of nothing else. With a per-group phi that identity fails, and
     # what replaces it depends on the path energy took through the spectrum. See
-    # `per_group` for why this is the reason the default is one phi per cell.
+    # `per_group` for why this identity is lost by any local phi anyway.
     c, arad, kB, rho, cv, NG = 1.0, 1.0, 1.0, 1.0, 1.0, 2
     grp = RadiationGroups(0.1, 20.0, NG)
     op = ConstantOpacity(1e3)

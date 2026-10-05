@@ -219,19 +219,16 @@ if "vaytet" in SECTIONS
         a = score(first(vay(chat_over_c=phi0, cfl_radiation=cr_m1(1))), tmax)
         b = score(first(vay(chat_over_c=phi0, chat_limiter=StabilityBound(),
                             cfl_radiation=cr_m1(1))), tmax)
-        c = score(first(vay(chat_over_c=phi0, chat_limiter=StabilityBound(per_group=false),
-                            cfl_radiation=cr_m1(1))), tmax)
-        push!(rows, (phi0, l1(a.T, ref.T), l1(b.T, ref.T), l1(c.T, ref.T), maximum(b.T),
-                     a.sub, b.sub))
-        @printf("  phi0 = %.3f   RSLA %.3f%%   IRSLA %.3f%%   IRSLA per cell %.3f%%\n", phi0,
-                100l1(a.T, ref.T), 100l1(b.T, ref.T), 100l1(c.T, ref.T))
-        phi0 == 0.01 && (prof["a"] = a; prof["b"] = b; prof["c"] = c)
+        push!(rows, (phi0, l1(a.T, ref.T), l1(b.T, ref.T), maximum(b.T), a.sub, b.sub))
+        @printf("  phi0 = %.3f   RSLA %.3f%%   IRSLA %.3f%%\n", phi0,
+                100l1(a.T, ref.T), 100l1(b.T, ref.T))
+        phi0 == 0.01 && (prof["a"] = a; prof["b"] = b)
     end
-    writecsv("vaytet_scores.csv", ("phi0", "L1_rsla", "L1_irsla", "L1_irsla_percell", "Tmax_irsla",
-                                   "sub_rsla", "sub_irsla"), rows)
+    writecsv("vaytet_scores.csv", ("phi0", "L1_rsla", "L1_irsla", "Tmax_irsla", "sub_rsla",
+                                   "sub_irsla"), rows)
     xs = collect(range(20 / 128, 20 - 20 / 128, length=64))
-    writecsv("vaytet_profiles.csv", ("x", "T_ref", "T_rsla", "T_irsla", "T_irsla_percell", "phi_irsla"),
-             [(xs[i], ref.T[i], prof["a"].T[i], prof["b"].T[i], prof["c"].T[i], prof["b"].phi[i])
+    writecsv("vaytet_profiles.csv", ("x", "T_ref", "T_rsla", "T_irsla", "phi_irsla"),
+             [(xs[i], ref.T[i], prof["a"].T[i], prof["b"].T[i], prof["b"].phi[i])
               for i in eachindex(xs)])
 end
 

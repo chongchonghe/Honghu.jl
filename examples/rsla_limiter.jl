@@ -74,7 +74,7 @@ let
     for phi0 in (0.03, 0.01, 0.003)
         b = score(() -> vaytet(chat_over_c=phi0, chat_limiter=StabilityBound()), tv)
         c = score(() -> vaytet(chat_over_c=phi0,
-                               chat_limiter=StabilityBound(per_group=true)), tv)
+                               chat_limiter=StabilityBound()), tv)
         @printf("%8.4f  %17.3f%%  %17.3f%%\n", phi0, 100l1(b.T, refv.T),
                 100l1(c.T, refv.T))
     end

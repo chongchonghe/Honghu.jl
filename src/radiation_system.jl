@@ -124,7 +124,7 @@ end
 # inner loop and a `Float64` `beta` in a `Float32` run would promote every one.
 _convert_limiter(l::ConstantChat, ::Type{T}) where {T} = l
 _convert_limiter(l::StabilityBound, ::Type{T}) where {T} =
-    StabilityBound(T(l.beta), l.per_group, l.energy_step, T(l.xi), l.flux_form)
+    StabilityBound(T(l.beta), l.energy_step, T(l.xi), l.flux_form)
 _convert_limiter(l::OpticalDepthFit, ::Type{T}) where {T} =
     OpticalDepthFit(T(l.s), T(l.p), l.per_group, l.flux_form)
 
@@ -671,8 +671,8 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
                     chat[gr, i, j, k] = c * chat_factor(lim, phi0, w)
                 end
             else
-                # `per_group = false`: one `phi` for the whole cell, from the most
-                # restrictive group (see [`per_group`](@ref)).
+                # The fitting form with `per_group = false`: one `phi` for the whole
+                # cell, from the most restrictive group (see [`per_group`](@ref)).
                 phi = one(T)
                 for gr in 1:NG
                     kP, kE, kF = _limiter_opacities(op, groups, kappa, rho, Tgas, gr)

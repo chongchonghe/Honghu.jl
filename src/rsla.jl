@@ -84,7 +84,7 @@ read before variable `chat` existed, bit for bit.
 struct ConstantChat <: AbstractChatLimiter end
 
 """
-    StabilityBound(; beta = 0.9, per_group = true, energy_step = false, xi = 0.5,
+    StabilityBound(; beta = 0.9, energy_step = false, xi = 0.5,
                    flux_form = false)
 
 The IRSLA in its parameter-free form: in each cell take the *largest* `phi` that
@@ -152,21 +152,19 @@ because it costs steps, by a factor of about
 `4 (gamma - 1) P_rad/P_gas * sigma C_r / (xi phi0)` wherever it binds, and at
 most `1/phi0`.
 
-`per_group` is discussed under [`per_group`](@ref): each group gets its own
-`phi` by default.
+Each frequency group always gets its own `phi`; see [`per_group`](@ref) for why
+one `phi` per cell has nothing to recommend it.
 """
 struct StabilityBound{T<:AbstractFloat} <: AbstractChatLimiter
     beta::T
-    per_group::Bool
     energy_step::Bool
     xi::T
     flux_form::Bool
 end
 
-function StabilityBound(; beta=0.9, per_group::Bool=true, energy_step::Bool=false, xi=0.5,
-                        flux_form::Bool=false)
+function StabilityBound(; beta=0.9, energy_step::Bool=false, xi=0.5, flux_form::Bool=false)
     b, x = promote(float(beta), float(xi))
-    return StabilityBound(b, per_group, energy_step, x, flux_form)
+    return StabilityBound(b, energy_step, x, flux_form)
 end
 
 """
@@ -201,7 +199,8 @@ OpticalDepthFit(; s, p, per_group::Bool=false, flux_form::Bool=false) =
 Whether each frequency group is allowed its own `phi`, or the cell takes one
 value for all of them, from its most restrictive group.
 
-[`StabilityBound`](@ref) defaults to one `phi` per group. The groups are
+[`StabilityBound`](@ref) always uses one `phi` per group; only the fitting form
+[`OpticalDepthFit`](@ref) keeps the switch, to reproduce earlier results. The groups are
 independent in transport; in the coupling they are not, and summing the source
 terms gives
 
@@ -219,11 +218,12 @@ differences telescope in `E_g/phi_g`. That holds with a per-group `phi` exactly
 as with a per-cell one. The von Neumann analysis finds both stable for the
 coupled multigroup system, and a per-group `phi` is the more accurate of the
 two, since a transparent group no longer holds the thick ones back (on the Vaytet
-Marshak wave, 7.7 against 10.7 per cent at `phi0 = 0.01`). Pass
-`per_group = false` for one `phi` per cell.
+Marshak wave, 21.2, 7.8 and 2.7 per cent against 26.0, 11.5 and 4.3 per cent at
+`phi0 = 0.003, 0.01, 0.03`), at the same cost. One `phi` per cell therefore has
+no advantage, and the stability bound does not offer it.
 """
 per_group(::AbstractChatLimiter) = false
-per_group(l::StabilityBound) = l.per_group
+per_group(::StabilityBound) = true
 per_group(l::OpticalDepthFit) = l.per_group
 
 """
