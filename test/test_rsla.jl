@@ -482,6 +482,39 @@ end
                            wavespeed_correction=true).wavespeed_correction
 end
 
+@testset "a negative energy after transport is left for the coupling solve" begin
+    # Ensman's supercritical shock (Melon Fuksman et al. 2021) on 64 cells: the
+    # dense cell at the wall (tau_cell ~ 5) runs at phi ~ 0.8 beside thin cells at
+    # phi ~ 0.02, and at a local CFL number of ~70 the transport stage drives E
+    # negative there. Flooring E before the solve added energy every substep and
+    # made the IRSLA ~17 times worse than the RSLA against chat = c; the solve
+    # conserves e + E/phi and absorbs the negative E.
+    CGS = Hydro3D.CGS
+    function ensman(; phi0, lim=ConstantChat(), cfl=0.9)
+        rho0, T0, gamma = 7.78e-10, 10.0, 1.4
+        rad = RadiationPhysics(; c=CGS.c_light, chat=phi0 * CGS.c_light, a_rad=CGS.a_rad,
+                               k_B=CGS.k_B, opacity=ConstantOpacity(3.1e-10 / rho0),
+                               chat_limiter=lim)
+        sim = Simulation(; n=(64, 1, 1), xhi=(7e10, 1.0, 1.0),
+                         eos=IdealGas(; gamma, cv=CGS.k_B / (CGS.m_u * (gamma - 1))),
+                         radiation=rad, cfl=0.4, cfl_radiation=cfl,
+                         boundaries=Boundaries((Reflecting(), Outflow()), (Periodic(), Periodic()),
+                                               (Periodic(), Periodic())),
+                         floors=Floors(erad=CGS.a_rad * 1e-4))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=rho0, vx=-20e5, T=T0, Erad=CGS.a_rad * T0^4, Fx=0.0)
+        end
+        run!(sim; tmax=7.5e3, verbose=false)
+        return vec(gas_temperature(sim)), sim
+    end
+    ref, _ = ensman(phi0=1.0)
+    err(T) = sum(abs, T .- ref) / sum(abs, ref)
+    rsla, _ = ensman(phi0=0.01)
+    irsla, sim = ensman(phi0=0.01, lim=StabilityBound())
+    @test sim.diag.floors_presolve == 0
+    @test err(irsla) < err(rsla) / 2
+end
+
 @testset "the flux is not clipped before the coupling solve" begin
     # A thick (tau_cell = 20), gas-dominated hot spot at phi0 = 0.01: the limiter
     # sets phi = 1, so the radiation runs at a local CFL number of ~90, and the

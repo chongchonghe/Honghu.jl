@@ -432,70 +432,84 @@ end
 
 # ---------------------------------------------------------------------------
 if "ensman" in SECTIONS
-    println("\n== Ensman supercritical radiative shock (Melon Fuksman et al. 2021, Sec. 4.1), M1, 512 cells ==")
-    # Constant mass opacity kappa = 3.1e-10/7.78e-10 cm^2/g (Melon Fuksman et al. fix
-    # kappa rho instead, which keeps every cell at tau_cell = 0.04 however compressed;
-    # with kappa fixed the shocked gas is thicker), no scattering, gas at
-    # 10 K and radiation in LTE, mu = 1, gamma = 7/5, inflow at u onto a reflecting
-    # wall. The reference is the RSLA at phi0 = 0.1, which Melon Fuksman et al. find
-    # close to chat = c for both shocks; chat = c itself is not affordable here.
+    println("\n== Ensman supercritical radiative shock (Melon Fuksman et al. 2021, Sec. 4.1), M1 ==")
+    # Melon Fuksman et al.'s setup -- gas at 10 K and radiation in LTE, mu = 1,
+    # gamma = 7/5, no scattering, inflow at 20 km/s onto a reflecting wall, to
+    # t = 7.5e3 s -- but with a constant mass opacity kappa = kfac * 3.1e-10/7.78e-10
+    # cm^2/g, so that the compressed gas is thicker (they fix kappa rho, which keeps
+    # every cell as thin as the upstream ones), and on the few cells a production
+    # run gives a shock. The reference is chat = c at the same resolution.
     # For each RSLA phi0 the IRSLA phi0 of equal accuracy is found by bisection in
-    # log(phi0): their ratio is the speedup in nominal steps, and the substep ratio
-    # the one realized with whole substeps per hydrodynamic step.
-    function ensman(; u, phi0, lim=ConstantChat(), n=512)
+    # log(phi0), down to 1e-4: their ratio is the speedup in nominal steps, and the
+    # substep ratio the one realized with whole substeps per hydrodynamic step.
+    function ensman(; phi0, lim=ConstantChat(), n, kfac, cfl=cr_m1(1))
         rho0, T0, mu, gamma, alpha = 7.78e-10, 10.0, 1.0, 1.4, 3.1e-10
         cv = Hydro3D.CGS.k_B / (mu * Hydro3D.CGS.m_u * (gamma - 1))
         rad = RadiationPhysics(; c=Hydro3D.CGS.c_light, chat=phi0 * Hydro3D.CGS.c_light,
                                a_rad=Hydro3D.CGS.a_rad, k_B=Hydro3D.CGS.k_B,
-                               opacity=ConstantOpacity(alpha / rho0), chat_limiter=lim)
+                               opacity=ConstantOpacity(kfac * alpha / rho0), chat_limiter=lim)
         sim = Simulation(; n=(n, 1, 1), xlo=(0.0, 0.0, 0.0), xhi=(7e10, 1.0, 1.0),
                          eos=IdealGas(; gamma, cv), radiation=rad,
                          boundaries=Boundaries((Reflecting(), Outflow()), (Periodic(), Periodic()),
                                                (Periodic(), Periodic())),
                          floors=Floors(erad=Hydro3D.CGS.a_rad * 1e-4), cfl=0.4,
-                         cfl_radiation=cr_m1(1))
+                         cfl_radiation=cfl)
         set_initial_conditions!(sim) do x, y, z
-            (rho=rho0, vx=u, T=T0, Erad=Hydro3D.CGS.a_rad * T0^4, Fx=0.0)
+            (rho=rho0, vx=-20e5, T=T0, Erad=Hydro3D.CGS.a_rad * T0^4, Fx=0.0)
         end
         return sim
     end
+    # The stability bound with every cell counted at the largest signal sum of the
+    # closure, sum_d sigma_d = 1 in 1D: no thin-cell gain from a radiation field
+    # that is not streaming, which 1D M1 grants and 3D isotropic radiation does not;
+    # what is left is the gain from the damping of thick cells.
+    struct DampingOnly <: Hydro3D.AbstractChatLimiter end
+    Hydro3D._convert_limiter(l::DampingOnly, ::Type) = l
+    Hydro3D.chat_factor(::DampingOnly, phi0, w::Hydro3D.LocalCell) =
+        Hydro3D.chat_factor(StabilityBound(), phi0,
+                            Hydro3D.LocalCell(w.cdt, 1 / w.dxmin, w.chiE, w.chiF, w.hrat, w.dxmin))
+    tmax = 7.5e3
     rows = []
-    for (label, u, tmax) in (("supercritical", -20e5, 7.5e3),)
-        ref = score(ensman(; u, phi0=0.1), tmax)
-        run(phi0, lim) = (r = score(ensman(; u, phi0, lim), tmax);
-                          (e=l1(r.T, ref.T), sub=r.sub, phi=r.phi, T=r.T, Tr=r.Tr))
-        for phi0 in (0.01, 0.001)
-            a = run(phi0, ConstantChat())
-            b = run(phi0, StabilityBound())
-            push!(rows, (label, "rsla", phi0, a.e, a.sub, minimum(a.phi), maximum(a.phi)))
-            push!(rows, (label, "irsla", phi0, b.e, b.sub, minimum(b.phi), maximum(b.phi)))
-            @printf("  %-13s phi0 = %.3f  RSLA %.4f%% (%d substeps)  IRSLA %.4f%%  phi in [%.4f, %.4f]\n",
-                    label, phi0, 100a.e, a.sub, 100b.e, extrema(b.phi)...)
-            if phi0 == 0.01
-                xs = collect(range(7e10 / 1024, 7e10 - 7e10 / 1024, length=512))
-                writecsv("ensman_profiles.csv", ("x", "T_ref", "Tr_ref", "T_rsla", "Tr_rsla",
-                                                 "T_irsla", "Tr_irsla", "phi_irsla"),
-                         [(xs[i], ref.T[i], ref.Tr[i], a.T[i], a.Tr[i], b.T[i], b.Tr[i], b.phi[i])
-                          for i in eachindex(xs)])
+    for (n, kfac, phis) in ((128, 10.0, (0.01, 0.001)), (64, 10.0, (0.01,)))
+        local ref = score(ensman(; phi0=1.0, n, kfac, cfl=0.4), tmax)
+        run(phi0, lim) = (r = score(ensman(; phi0, lim, n, kfac), tmax);
+                          (e=l1(r.T, ref.T), sub=r.sub, phi=r.phi, T=r.T, Tr=r.Tr,
+                           pre=r.sim.diag.floors_presolve, post=r.sim.diag.repairs_postsolve))
+        function matched(lim, phi0, target)
+            lo, hi = 1e-4, phi0
+            run(lo, lim).e > target || return (lo, missing)     # better still at 1e-4
+            for _ in 1:12
+                mid = sqrt(lo * hi)
+                run(mid, lim).e > target ? (lo = mid) : (hi = mid)
             end
-            # the IRSLA phi0 at which the IRSLA error equals the RSLA's at phi0
-            lo, hi = phi0 / 100, phi0
-            if run(lo, StabilityBound()).e > a.e
-                for _ in 1:12
-                    mid = sqrt(lo * hi)
-                    run(mid, StabilityBound()).e > a.e ? (lo = mid) : (hi = mid)
+            return (hi, run(hi, lim).sub)
+        end
+        for phi0 in phis
+            a = run(phi0, ConstantChat())
+            for (name, lim) in (("irsla", StabilityBound()), ("damping_only", DampingOnly()))
+                b = run(phi0, lim)
+                pm, subm = matched(lim, phi0, a.e)
+                sp = phi0 / pm
+                ss = subm === missing ? missing : a.sub / subm
+                push!(rows, (n, kfac, phi0, name, a.e, b.e, maximum(b.phi) / phi0, pm, sp,
+                             ss === missing ? NaN : ss, b.pre, b.post))
+                @printf("  n = %3d  kappa x%g  phi0 = %.3f  RSLA %6.2f%%  %-12s %6.2f%%  max phi/phi0 %5.1f  matched at phi0 = %.2e: speedup %s in phi0, %s in substeps  (pre-solve floors %d, post-solve repairs %d)\n",
+                        n, kfac, phi0, 100a.e, name, 100b.e, maximum(b.phi) / phi0, pm,
+                        subm === missing ? ">= $(round(sp; digits=1))" : string(round(sp; digits=2)),
+                        ss === missing ? "-" : string(round(ss; digits=2)), b.pre, b.post)
+                if n == 128 && phi0 == 0.01 && name == "irsla"
+                    local xs = collect(range(7e10 / 256, 7e10 - 7e10 / 256, length=128))
+                    writecsv("ensman_profiles.csv", ("x", "T_ref", "Tr_ref", "T_rsla", "Tr_rsla",
+                                                     "T_irsla", "Tr_irsla", "phi_irsla"),
+                             [(xs[i], ref.T[i], ref.Tr[i], a.T[i], a.Tr[i], b.T[i], b.Tr[i],
+                               b.phi[i]) for i in eachindex(xs)])
                 end
-                m = run(hi, StabilityBound())
-                push!(rows, (label, "irsla_matched_to_rsla_$(phi0)", hi, m.e, m.sub,
-                             minimum(m.phi), maximum(m.phi)))
-                @printf("  %-13s IRSLA matches it at phi0 = %.5f (%.4f%%, %d substeps): speedup %.2f in phi0, %.2f in substeps\n",
-                        label, hi, 100m.e, m.sub, phi0 / hi, a.sub / m.sub)
-            else
-                @printf("  %-13s IRSLA at phi0/100 is still as accurate as the RSLA\n", label)
             end
         end
     end
-    writecsv("ensman.csv", ("shock", "run", "phi0", "L1", "substeps", "phi_min", "phi_max"), rows)
+    writecsv("ensman.csv", ("n", "kappa_factor", "phi0", "limiter", "L1_rsla", "L1", "max_phi_over_phi0",
+                            "phi0_matched", "speedup_phi0", "speedup_substeps",
+                            "floors_presolve", "repairs_postsolve"), rows)
 end
 
 # ---------------------------------------------------------------------------
@@ -507,7 +521,8 @@ if "diffusion_thick_clipped" in SECTIONS
     # reference runs first, unclipped, and the clipped run goes through
     # `invokelatest` because this block was compiled before the redefinition.
     ref = thick(phi0=1.0, cfl=0.4)
-    @eval Hydro3D function floor_rad_energy!(R::AbstractArray{T,4},
+    @eval Hydro3D function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
+                                             chat::AbstractArray{T,4},
                                              phys::RadiationPhysics{NG,M,T},
                                              g::CartesianGrid{T},
                                              floors::Floors{T}) where {NG,M,T}

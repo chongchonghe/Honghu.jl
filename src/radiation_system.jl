@@ -240,34 +240,54 @@ function amend_rad_state!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
 end
 
 """
-    floor_rad_energy!(R, phys, grid, floors) -> Int
+    floor_rad_energy!(R, U, chat, phys, grid, floors) -> Int
 
-Raise the radiation energy density of the *interior* cells to the floor where it
-has fallen below it, and leave the flux alone. Used after the explicit transport
-stages of the IMEX scheme, before the implicit coupling solve.
+Hand the transport stage's radiation state to the implicit coupling solve
+unchanged where the solve can absorb it, and floor the radiation energy only
+where it cannot. Used after the explicit transport stages of the IMEX scheme,
+before the solve; returns the number of cells floored.
 
-The flux is deliberately not limited there. In an optically thick cell run at a
-local CFL number far above one -- which is what a local reduced speed of light
-does at `phi = 1` -- the transport stage leaves `|F| >> cE`, and the implicit
-solve that follows divides the flux by `1 + chat rho kappa_F dt >> 1`, which is
-exactly what turns it into the diffusion flux `-c grad E / (3 rho kappa_F)`.
-Clipping `|F|` to `cE` before that solve throws the diffusion flux away: on the
-thick, gas-dominated hot spot of the paper's test at `phi = 1` it raised the
-error from 0.0003% to 0.80%, twice that of the standard RSLA. The full repair,
-[`amend_rad_state!`](@ref), runs after the solve instead.
+Neither the flux nor the energy is limited where the solve can take the state.
+In an optically thick cell run at a local CFL number far above one -- which is
+what a local reduced speed of light does at `phi = 1` -- the transport stage
+leaves `|F| >> cE`, and the solve, which divides the flux by
+`1 + chat rho kappa_F dt >> 1`, is exactly what turns it into the diffusion flux
+`-c grad E / (3 rho kappa_F)`. Clipping `|F|` to `cE` first threw that flux away:
+on the thick hot spot of the paper's test it raised the IRSLA error from 0.0003%
+to 0.80%, twice that of the standard RSLA. The same stage can also leave `E < 0`
+where a thick cell at large `phi` borders cells at small `phi` across a steep
+jump; raising `E` to the floor there adds energy every substep, and on an Ensman
+shock resolved by 64 cells it made the IRSLA error 17 times that of the RSLA.
+
+The solve conserves `e_int + sum_g E_g/phi_g` (with `phi_g = chat_g/c`) and
+returns a positive temperature whenever that is positive, so a negative `E` is
+left for it to absorb. Only a cell whose budget is not positive is floored, as
+before; the full repair, [`amend_rad_state!`](@ref), runs after the solve.
 """
-function floor_rad_energy!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
+function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
+                           chat::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
                            g::CartesianGrid{T}, floors::Floors{T}) where {NG,M,T}
     ef = floors.erad / NG
+    c = phys.c
     nbad = Threads.Atomic{Int}(0)
     threaded_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]) do j, k
         local bad = 0
-        @inbounds for i in g.lo[1]:g.hi[1], gr in 1:NG
-            b = gbase(gr)
-            if !(R[b+IERAD, i, j, k] > ef)
-                R[b+IERAD, i, j, k] = ef
-                bad += 1
+        @inbounds for i in g.lo[1]:g.hi[1]
+            rho = U[IRHO, i, j, k]
+            mx, my, mz = U[IMX, i, j, k], U[IMY, i, j, k], U[IMZ, i, j, k]
+            budget = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
+            low = false
+            for gr in 1:NG
+                er = R[gbase(gr)+IERAD, i, j, k]
+                budget += er * c / chat[gr, i, j, k]
+                low |= !(er > ef)
             end
+            (low && !(budget > 0)) || continue
+            for gr in 1:NG
+                b = gbase(gr)
+                R[b+IERAD, i, j, k] > ef || (R[b+IERAD, i, j, k] = ef)
+            end
+            bad += 1
         end
         bad > 0 && Threads.atomic_add!(nbad, bad)
     end

@@ -25,6 +25,8 @@ them with [`reset_diagnostics!`](@ref).
 | `rad_substeps` | IMEX radiation substeps taken |
 | `floors_hydro` | cell updates that hit a gas density or pressure floor |
 | `floors_rad` | cell updates projected back onto the M1 admissible set |
+| `floors_presolve` | cells whose radiation energy was floored before a coupling solve, because the energy the solve conserves was not positive |
+| `repairs_postsolve` | cells whose radiation state was repaired after a coupling solve |
 | `newton_cells` | cells passed through the implicit coupling solve |
 | `newton_iterations` | Newton iterations summed over those cells |
 | `newton_max` | worst-case Newton iterations in any one cell |
@@ -39,13 +41,15 @@ mutable struct Diagnostics
     rad_substeps::Int
     floors_hydro::Int
     floors_rad::Int
+    floors_presolve::Int
+    repairs_postsolve::Int
     newton_cells::Int
     newton_iterations::Int
     newton_max::Int
     newton_failures::Int
 end
 
-Diagnostics() = Diagnostics(0, 0, 0, 0, 0, 0, 0, 0)
+Diagnostics() = Diagnostics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 """
     reset_diagnostics!(sim) -> Diagnostics
@@ -56,6 +60,7 @@ separately from the transient that preceded it.
 function reset_diagnostics!(sim)
     d = sim.diag
     d.steps = d.rad_substeps = d.floors_hydro = d.floors_rad = 0
+    d.floors_presolve = d.repairs_postsolve = 0
     d.newton_cells = d.newton_iterations = d.newton_max = d.newton_failures = 0
     return d
 end
@@ -542,14 +547,15 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     combine!(rw.Rtmp, one(T), sim.R, zero(T), sim.R, T(IMEX_AEX_21) * dt, rw.dR, g,
              nradvars(sim.radiation))
     copyto!(rw.Utmp, sim.U)
-    # Only the energy is floored before the solve; the flux of a thick cell at a
-    # large local CFL number is turned into the diffusion flux by the solve
-    # itself, and limiting it first would destroy that (see floor_rad_energy!).
-    floor_rad_energy!(rw.Rtmp, phys, g, fl)
+    # The transport stage's state goes to the solve as it is: the flux of a thick
+    # cell at a large local CFL number is turned into the diffusion flux by the
+    # solve, and a negative energy is absorbed by it (see floor_rad_energy!).
+    d = sim.diag
+    d.floors_presolve += floor_rad_energy!(rw.Rtmp, rw.Utmp, rw.chat, phys, g, fl)
     s1 = radiation_source_step!(rw.Utmp, rw.Rtmp, rw.chat, sim.eos, phys, g,
                                 T(IMEX_AIM_22) * dt,
                                 sim.source, t + dt, fl; update_momentum=upd)
-    amend_rad_state!(rw.Rtmp, phys, g, fl)
+    d.repairs_postsolve += amend_rad_state!(rw.Rtmp, phys, g, fl)
 
     # --- stage 3: Shu-Osher combination + implicit coupling ------------------
     # Same `chat` as stage 2; only the wave-speed correction's `chiF` follows
@@ -559,11 +565,11 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     combine!(sim.R, T(1 - IMEX_ALPHA), sim.R, T(IMEX_ALPHA), rw.Rtmp,
              T(IMEX_AEX_32) * dt, rw.dR, g, nradvars(sim.radiation))
     combine_gas!(sim.U, T(IMEX_ALPHA), rw.Utmp, g)
-    floor_rad_energy!(sim.R, phys, g, fl)
+    d.floors_presolve += floor_rad_energy!(sim.R, sim.U, rw.chat, phys, g, fl)
     s2 = radiation_source_step!(sim.U, sim.R, rw.chat, sim.eos, phys, g,
                                 T(IMEX_AIM_33) * dt,
                                 sim.source, t + dt, fl; update_momentum=upd)
-    amend_rad_state!(sim.R, phys, g, fl)
+    d.repairs_postsolve += amend_rad_state!(sim.R, phys, g, fl)
     return s1 + s2
 end
 
