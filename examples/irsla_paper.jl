@@ -5,7 +5,7 @@
 #     julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]
 #
 # Sections (all by default): checkerboard shock_super shock_sub vaytet pulse
-# diffusion2d diffusion_thick timing diffusion_thick_clipped. Each writes CSV files
+# diffusion2d diffusion_thick timing equal_accuracy diffusion_thick_clipped. Each writes CSV files
 # into DIR and prints a summary. `phi` in every table is the time average over the
 # run, weighted by the step, of the reduction factor of the first group.
 #
@@ -21,7 +21,7 @@ using Random: Xoshiro, rand
 
 const SECTIONS = isempty(OPTS) ?
     ["checkerboard", "shock_super", "shock_sub", "vaytet", "pulse", "diffusion2d",
-     "diffusion_thick", "timing", "diffusion_thick_clipped"] : OPTS
+     "diffusion_thick", "timing", "equal_accuracy", "diffusion_thick_clipped"] : OPTS
 
 l1(T, ref) = sum(abs, T .- ref) / sum(abs, ref)
 
@@ -368,6 +368,66 @@ if "timing" in SECTIONS
         @printf("  %-20s RSLA %.3g s/substep   IRSLA %.3g s/substep   ratio %.3f\n", label, ts..., ts[2] / ts[1])
     end
     writecsv("timing.csv", ("problem", "s_per_substep_rsla", "s_per_substep_irsla", "ratio"), rows)
+end
+
+# ---------------------------------------------------------------------------
+if "equal_accuracy" in SECTIONS
+    println("\n== the RSLA step count that matches the IRSLA's accuracy ==")
+    # The speedup at equal accuracy: raise the RSLA's phi0 until its error equals
+    # that of the IRSLA at the nominal phi0, by bisection in log(phi0), and compare
+    # the radiation substeps. Both run at the same nu0, so the RSLA's step shrinks
+    # as 1/phi0 (in whole substeps per hydrodynamic step).
+    function match(run, err_target, lo, hi; iters=14)
+        elo = run(lo).e
+        ehi = run(hi).e
+        (elo >= err_target >= ehi) || return (NaN, NaN, elo, ehi)
+        for _ in 1:iters
+            mid = sqrt(lo * hi)
+            run(mid).e > err_target ? (lo = mid) : (hi = mid)
+        end
+        r = run(hi)
+        return (hi, r.sub, r.e, ehi)
+    end
+    rows = []
+    # supercritical shock
+    let ref = score(radhydro_shock_super(chat_over_c=1.0)...)
+        run(phi0; lim=ConstantChat()) = (r = score(radhydro_shock_super(chat_over_c=phi0,
+                                                   chat_limiter=lim, cfl_radiation=CR_P1)...);
+                                         (e=l1(r.T, ref.T), sub=r.sub))
+        b = run(0.025; lim=StabilityBound())
+        p, sub, e, _ = match(run, b.e, 0.025, 0.5)
+        push!(rows, ("shock_super", 0.025, b.e, b.sub, p, sub, e, sub / b.sub))
+    end
+    # subcritical shock, at the smallest phi0
+    let ref = score(radhydro_shock(n=256, chat_factor=433.0)...)
+        cf(phi0) = phi0 * sqrt(3e6) / 4
+        run(phi0; lim=ConstantChat()) = (r = score(radhydro_shock(n=256, chat_factor=cf(phi0),
+                                                   chat_limiter=lim, cfl_radiation=CR_P1)...);
+                                         (e=l1(r.T, ref.T), sub=r.sub))
+        phi0 = 4 / sqrt(3e6)
+        b = run(phi0; lim=StabilityBound())
+        p, sub, e, _ = match(run, b.e, phi0, 0.1)
+        push!(rows, ("shock_sub", phi0, b.e, b.sub, p, sub, e, sub / b.sub))
+    end
+    # multigroup Marshak wave
+    let vay(; kw...) = marshak_vaytet(; n=64, ngroups=4, kw...)
+        tmax = last(vay())
+        ref = score(first(vay()), tmax)
+        run(phi0; lim=ConstantChat()) = (r = score(first(vay(chat_over_c=phi0, chat_limiter=lim,
+                                                         cfl_radiation=cr_m1(1))), tmax);
+                                         (e=l1(r.T, ref.T), sub=r.sub))
+        for phi0 in (0.003, 0.01, 0.03)
+            b = run(phi0; lim=StabilityBound())
+            p, sub, e, _ = match(run, b.e, phi0, min(1.0, 30phi0))
+            push!(rows, ("vaytet", phi0, b.e, b.sub, p, sub, e, sub / b.sub))
+        end
+    end
+    for r in rows
+        @printf("  %-12s phi0 = %.4f  IRSLA %.3f%% in %d substeps; RSLA matches at phi0 = %.4f (%.3f%%) in %d substeps: speedup %.2f\n",
+                r[1], r[2], 100r[3], r[4], r[5], 100r[7], r[6], r[8])
+    end
+    writecsv("equal_accuracy.csv", ("problem", "phi0", "L1_irsla", "sub_irsla", "phi0_rsla",
+                                    "sub_rsla", "L1_rsla", "speedup"), rows)
 end
 
 # ---------------------------------------------------------------------------
