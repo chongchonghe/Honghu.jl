@@ -469,6 +469,8 @@ if "ensman" in SECTIONS
         local ref = score(ensman(; phi0=1.0, n, kfac, cfl=0.4), tmax)
         run(phi0, lim) = (r = score(ensman(; phi0, lim, n, kfac), tmax);
                           (e=l1(r.T, ref.T), sub=r.sub, steps=r.steps, phi=r.phi, T=r.T, Tr=r.Tr,
+                           phiend=vec(r.sim.rw.chat[1, r.sim.grid.lo[1]:r.sim.grid.hi[1], 1, 1]) ./
+                                  r.sim.radiation.c,
                            pre=r.sim.diag.floors_presolve, post=r.sim.diag.repairs_postsolve))
         # A run that fails (a non-finite error) counts as less accurate than the target.
         worse(e, target) = !(e <= target)
@@ -502,9 +504,11 @@ if "ensman" in SECTIONS
                     local xs = collect(range(7e10 / 128, 7e10 - 7e10 / 128, length=64))
                     writecsv("ensman_profiles.csv", ("x", "T_ref", "Tr_ref", "T_rsla", "Tr_rsla",
                                                      "T_irsla", "Tr_irsla", "T_match", "Tr_match",
-                                                     "phi_irsla", "phi0_match"),
+                                                     "phi_irsla", "phi_match", "phiend_irsla",
+                                                     "phiend_match", "phi0_match"),
                              [(xs[i], ref.T[i], ref.Tr[i], a.T[i], a.Tr[i], b.T[i], b.Tr[i],
-                               m.T[i], m.Tr[i], b.phi[i], pm) for i in eachindex(xs)])
+                               m.T[i], m.Tr[i], b.phi[i], m.phi[i], b.phiend[i], m.phiend[i], pm)
+                              for i in eachindex(xs)])
                 end
             end
         end
