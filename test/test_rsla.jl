@@ -15,7 +15,7 @@ using Hydro3D: chat_factor, per_group, flux_form, update_chat!, energy_exchange_
 const ISO = 1 / sqrt(3)          # the signal speed of an isotropic radiation field
 
 # A 1D cell of unit width: `sdx = sig`, `chiE = chiF = tau`.
-cell1d(cdt, tau; sig=ISO, hrat=0.0) = LocalCell(cdt, sig, sig, tau, tau, hrat, 1.0)
+cell1d(cdt, tau; sig=ISO, hrat=0.0) = LocalCell(cdt, sig, tau, tau, hrat, 1.0)
 
 @testset "the limiter rule" begin
     phi0 = 0.03
@@ -137,13 +137,12 @@ end
 Hydro3D.chat_factor(l::FixedPhi, phi0, cell::LocalCell) = l.phi
 Hydro3D._convert_limiter(l::FixedPhi, ::Type{T}) where {T} = l
 
-function checkerboard_growth(lim; D, n=8, phi0=1e-3, tau, Pcal, nst=24, nmeas=12, wc=false)
+function checkerboard_growth(lim; D, n=8, phi0=1e-3, tau, Pcal, nst=24, nmeas=12)
     cv, gamma = 1.0, 5 / 3
     a_rad = Pcal * (gamma - 1) * cv               # P = a T^4 / (rho a_iso^2), T = rho = 1
     dx = 1 / n
     rad = RadiationPhysics(; c=1.0, chat=phi0, a_rad, beta_order=0,
-                           opacity=ConstantOpacity(tau / dx), chat_limiter=lim,
-                           wavespeed_correction=wc)
+                           opacity=ConstantOpacity(tau / dx), chat_limiter=lim)
     sim = Simulation(; n=ntuple(d -> d <= D ? n : 1, 3), eos=IdealGas(; gamma, cv),
                      radiation=rad, hydro=false, boundaries=Boundaries(Periodic()),
                      cfl_radiation=0.4, radiation_reconstruction=PCM())
@@ -467,18 +466,20 @@ Hydro3D.flux_form(l::PhiStep) = l.flux
     @test hi ≈ 5 rtol = 1e-2
 end
 
-@testset "the wave-speed correction lifts the heat-capacity cap in thick cells" begin
-    # A thick, radiation-rich cell at the RSLA step: without the correction the
-    # energy channel caps phi well below one, and phi = 1 grows; with it the bound
-    # has no energy channel left here (tau^2 > sigma (2 + Lambda tau)), phi = 1 is
-    # what the limiter picks, and it is stable.
-    for D in (1, 2)
-        kw = (; D, tau=100.0, Pcal=0.1)
-        @test checkerboard_growth(FixedPhi(1.0); kw...) > 1.05
-        @test checkerboard_growth(FixedPhi(1.0); wc=true, kw...) < 1
-        @test checkerboard_growth(StabilityBound(); wc=true, kw...) < 1
-        @test checkerboard_growth(StabilityBound(); kw...) < 1
+@testset "the wave-speed correction is refused with a local chat" begin
+    # Its stability bound does not hold (paper Sec. 3.2): a face's correction is
+    # set by both cells beside it, so a thick cell beside a thin one ran at
+    # phi = 1 behind an almost undamped face and grew by ~1e43 in 200 steps; and
+    # in a uniform medium the lowered dissipation lets modes near a quarter of the
+    # grid frequency grow wherever the radiation's inertia matters.
+    op = ConstantOpacity(1.0)
+    for lim in (StabilityBound(), OpticalDepthFit(s=1.0, p=2.0))
+        @test_throws ArgumentError RadiationPhysics(; c=1.0, chat=1e-3, a_rad=1.0,
+                                                    opacity=op, chat_limiter=lim,
+                                                    wavespeed_correction=true)
     end
+    @test RadiationPhysics(; c=1.0, chat=1e-3, a_rad=1.0, opacity=op,
+                           wavespeed_correction=true).wavespeed_correction
 end
 
 @testset "the flux is not clipped before the coupling solve" begin

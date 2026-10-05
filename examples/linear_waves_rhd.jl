@@ -68,7 +68,7 @@ function background_phi(lim, rad, dt, tau, k)
     chi = tau * k
     dx = 1 / NCELL
     hrat = 4 * rad.a_rad / (1 / (GAMMA - 1))      # 4 a T^3 / (rho c_v)
-    w = Hydro3D.LocalCell(rad.c * dt, sqrt(1 / 3) / dx, sqrt(1 / 3) / dx, chi, chi, hrat, dx)
+    w = Hydro3D.LocalCell(rad.c * dt, sqrt(1 / 3) / dx, chi, chi, hrat, dx)
     return Hydro3D.chat_factor(lim, rad.chat / rad.c, w)
 end
 

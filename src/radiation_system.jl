@@ -68,10 +68,14 @@ Parameters of the two-moment (M1) radiation module, grey or multigroup.
     mean of the two cells' flux-mean optical depths across the face (Skinner et
     al. 2019; optional in Quokka). In optically thick cells the HLL
     dissipation `sigma chat (E_R - E_L)/2` is a numerical diffusion far faster
-    than the physical one, `c/(3 tau)`; the correction removes it. It is also
-    what lets [`StabilityBound`](@ref) reach `phi = 1` in thick cells where
-    radiation holds much of the heat capacity: the checkerboard that caps `phi`
-    there is driven by exactly this dissipation.
+    than the physical one, `c/(3 tau)`; the correction removes it. Allowed
+    with the standard RSLA only: with a local `chat_limiter` the stability bound
+    no longer holds. A face's correction is set by both cells beside it, so a
+    thick cell bounded with its own correction can run at `phi = 1` behind an
+    almost undamped face beside a thin one, and in a uniform medium the lowered
+    dissipation lets modes near a quarter of the grid frequency grow wherever
+    the radiation's inertia matters, which the checkerboard bound does not see
+    (paper Sec. 3.2; `analysis/v2/check_wavespeed.py`).
 """
 struct RadiationPhysics{NG,M,T<:AbstractFloat,O<:AbstractOpacity,C<:AbstractClosure,
                         S<:AbstractCoupling,L<:AbstractChatLimiter,D<:AbstractDustModel}
@@ -107,6 +111,9 @@ function RadiationPhysics(; c, chat=c, a_rad, opacity,
     0 <= beta_order <= 1 || throw(ArgumentError("beta_order must be 0 or 1, got $beta_order"))
     chat <= c || throw(ArgumentError("the reduced speed of light must satisfy chat <= c"))
     k_B > 0 || throw(ArgumentError("k_B must be positive, got $k_B"))
+    wavespeed_correction && !(chat_limiter isa ConstantChat) &&
+        throw(ArgumentError("the wave-speed correction cannot be combined with a local " *
+                            "chat_limiter: the stability bound does not hold for it"))
     dust isa NoDust || coupling isa BracketedCoupling ||
         throw(ArgumentError("a dust model is supported by BracketedCoupling only, " *
                             "got coupling = $(nameof(typeof(coupling)))"))
@@ -244,9 +251,10 @@ local CFL number far above one -- which is what a local reduced speed of light
 does at `phi = 1` -- the transport stage leaves `|F| >> cE`, and the implicit
 solve that follows divides the flux by `1 + chat rho kappa_F dt >> 1`, which is
 exactly what turns it into the diffusion flux `-c grad E / (3 rho kappa_F)`.
-Clipping `|F|` to `cE` before that solve throws the diffusion flux away: on a
-thick, gas-dominated hot spot at `phi = 1` it raised the error from 0.002% to
-4.8%. The full repair, [`amend_rad_state!`](@ref), runs after the solve instead.
+Clipping `|F|` to `cE` before that solve throws the diffusion flux away: on the
+thick, gas-dominated hot spot of the paper's test at `phi = 1` it raised the
+error from 0.0003% to 0.80%, twice that of the standard RSLA. The full repair,
+[`amend_rad_state!`](@ref), runs after the solve instead.
 """
 function floor_rad_energy!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
                            g::CartesianGrid{T}, floors::Floors{T}) where {NG,M,T}
@@ -522,15 +530,10 @@ cell with no source damping to spare; using them *per direction* rather than
 the largest of them keeps a beamed cell in two or three dimensions from being
 bounded as if it beamed along every axis at once.
 """
-@inline _signal_sum(cl::AbstractClosure, R::AbstractArray{T,4}, i, j, k, gr::Integer,
-                    c::T, inv3::NTuple{3,T}) where {T} =
-    _signal_sum(cl, R, i, j, k, gr, c, inv3, (one(T), one(T), one(T)))
-
 @inline function _signal_sum(cl::AbstractClosure, R::AbstractArray{T,4}, i, j, k,
-                             gr::Integer, c::T, inv3::NTuple{3,T},
-                             eps3::NTuple{3,T}) where {T}
+                             gr::Integer, c::T, inv3::NTuple{3,T}) where {T}
     b = gbase(gr)
-    iso = sqrt(one(T) / 3) * (eps3[1] * inv3[1] + eps3[2] * inv3[2] + eps3[3] * inv3[3])
+    iso = sqrt(one(T) / 3) * (inv3[1] + inv3[2] + inv3[3])
     @inbounds er = R[b+IERAD, i, j, k]
     er > 0 || return iso
     ce = c * er
@@ -541,20 +544,14 @@ bounded as if it beamed along every axis at once.
     # cells filled by a user boundary condition, which nothing has repaired: an
     # inadmissible state gets the fastest speed the closure can produce.
     fx * fx + fy * fy + fz * fz < 1 ||
-        return eps3[1] * inv3[1] + eps3[2] * inv3[2] + eps3[3] * inv3[3]
+        return inv3[1] + inv3[2] + inv3[3]
     t = eddington_tensor(cl, fx, fy, fz)
     s = zero(T)
     for d in 1:3
-        s += max(T(0.1), sqrt(t[d, d])) * eps3[d] * inv3[d]
+        s += max(T(0.1), sqrt(t[d, d])) * inv3[d]
     end
     return s
 end
-
-# The wave-speed correction of the energy dissipation along each direction, for
-# a cell of flux absorption coefficient `chiF` -- the cell's own value of what
-# `rad_fluxes!` forms from the two cells beside a face.
-@inline _cell_epsilon(chiF::T, inv3::NTuple{3,T}) where {T} =
-    ntuple(d -> inv3[d] > 0 ? min(one(T), inv3[d] / chiF) : one(T), 3)
 
 """
     update_chiF!(chiF, U, eos, phys, grid, floors)
@@ -648,8 +645,6 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
     # hydro-limited step may undershoot or overshoot.
     dxmin, _, inv3 = _grid_scales(g)
     cdt = c * dt
-    corr = phys.wavespeed_correction
-    one3 = (one(T), one(T), one(T))
     rhomin = floors.rho
     pmin = floors.pressure
 
@@ -663,9 +658,7 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
             if NG == 1 || per_group(lim)
                 for gr in 1:NG
                     kP, kE, kF = _limiter_opacities(op, groups, kappa, rho, Tgas, gr)
-                    eps3 = corr ? _cell_epsilon(rho * kF, inv3) : one3
                     w = LocalCell(cdt, _signal_sum(cl, R, i, j, k, gr, c, inv3),
-                                  _signal_sum(cl, R, i, j, k, gr, c, inv3, eps3),
                                   rho * kE, rho * kF, kE > 0 ? hcap * kP / kE : zero(T),
                                   dxmin)
                     chat[gr, i, j, k] = c * chat_factor(lim, phi0, w)
@@ -676,9 +669,7 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
                 phi = one(T)
                 for gr in 1:NG
                     kP, kE, kF = _limiter_opacities(op, groups, kappa, rho, Tgas, gr)
-                    eps3 = corr ? _cell_epsilon(rho * kF, inv3) : one3
                     w = LocalCell(cdt, _signal_sum(cl, R, i, j, k, gr, c, inv3),
-                                  _signal_sum(cl, R, i, j, k, gr, c, inv3, eps3),
                                   rho * kE, rho * kF, kE > 0 ? hcap * kP / kE : zero(T),
                                   dxmin)
                     phi = min(phi, chat_factor(lim, phi0, w))

@@ -504,8 +504,6 @@ function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
     # boundary sweep and keeps the ordering here independent of what it does.
     fill_ghosts!(U, sim.boundaries, g, t)
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
-    sim.radiation.wavespeed_correction &&
-        update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, g, sim.floors)
     update_chat!(sim.rw.chat, U, R, sim.eos, sim.radiation, g, sim.floors, dt)
     return nothing
 end
@@ -527,8 +525,9 @@ and it keeps `e + sum_g E_g/phi_g` exactly conserved over the substep: each stag
 conserves it for its own `phi`, so a `phi` that changed between the stages would
 leave a residual `(E(2) - E^n)(1/phi_b - 1/phi_a)`. With the default
 [`ConstantChat`](@ref) limiter the [`update_chat!`](@ref) call is a no-op. The
-flux absorption coefficient of the optional wave-speed correction is a property
-of the flux, not of `phi`, and is still refreshed for each stage.
+flux absorption coefficient of the optional wave-speed correction, which only
+the standard RSLA may use, is a property of the flux and is refreshed for each
+stage.
 """
 function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     g = sim.grid

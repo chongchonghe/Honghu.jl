@@ -5,7 +5,9 @@
 #     julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]
 #
 # Sections (all by default): checkerboard shock_super shock_sub vaytet pulse
-# diffusion2d diffusion_thick timing. Each writes CSV files into DIR and prints a summary.
+# diffusion2d diffusion_thick timing diffusion_thick_clipped. Each writes CSV files
+# into DIR and prints a summary. `phi` in every table is the time average over the
+# run, weighted by the step, of the reduction factor of the first group.
 #
 # Every error is a relative L1 error in the gas temperature against a
 # reference run at chat = c at the same resolution, and every IRSLA run takes
@@ -19,7 +21,7 @@ using Random: Xoshiro, rand
 
 const SECTIONS = isempty(OPTS) ?
     ["checkerboard", "shock_super", "shock_sub", "vaytet", "pulse", "diffusion2d",
-     "diffusion_thick", "timing"] : OPTS
+     "diffusion_thick", "timing", "diffusion_thick_clipped"] : OPTS
 
 l1(T, ref) = sum(abs, T .- ref) / sum(abs, ref)
 
@@ -42,12 +44,17 @@ function writecsv(name, header, rows)
     println("  wrote ", outpath(name))
 end
 
-"Run to `tmax`; return the gas temperature, the local phi and the cost."
+"""Run to `tmax`; return the gas temperature, the local phi averaged over the run
+and the cost. The average is weighted by the step: the value at the end belongs
+to the last step alone, which `run!` cuts short to land on `tmax`."""
 function score(sim, tmax)
-    t = @elapsed run!(sim; tmax, verbose=false)
     g = sim.grid
     I = (g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3])
-    phi = sim.rw.chat[1, I...] ./ sim.radiation.c
+    phisum = zeros(size(sim.rw.chat[1, I...]))
+    cb = s -> (phisum .+= s.dt .* view(s.rw.chat, 1, I...); true)
+    t0 = sim.t
+    t = @elapsed run!(sim; tmax, verbose=false, callback=cb)
+    phi = phisum ./ ((sim.t - t0) * sim.radiation.c)
     (T=vec(gas_temperature(sim)), Tr=vec(radiation_temperature(sim)), phi=vec(phi),
      steps=sim.diag.steps, sub=sim.diag.rad_substeps, wall=t, sim=sim)
 end
@@ -240,28 +247,21 @@ if "pulse" in SECTIONS
     rows = []
     prof = Dict{String,Any}()
     for phi0 in (0.1, 0.01)
-        for (name, lim, wc) in (("rsla", ConstantChat(), false), ("irsla", StabilityBound(), false),
-                                ("irsla_wc", StabilityBound(), true),
-                                ("irsla_estep", StabilityBound(energy_step=true), false))
+        for (name, lim) in (("rsla", ConstantChat()), ("irsla", StabilityBound()),
+                            ("irsla_estep", StabilityBound(energy_step=true)))
             r = score(radhydro_pulse_dyn(chat_over_c=phi0, chat_limiter=lim,
-                                         wavespeed_correction=wc, cfl_radiation=CR_P1)...)
+                                         cfl_radiation=CR_P1)...)
             push!(rows, (phi0, name, lp(r.T, ref.T), minimum(r.phi), maximum(r.phi), r.sub))
             @printf("  phi0 = %.2f %-12s L1 = %8.3f%%  phi in [%.3f, %.3f]  %d substeps\n",
                     phi0, name, 100lp(r.T, ref.T), extrema(r.phi)..., r.sub)
             phi0 == 0.1 && (prof[name] = r)
         end
     end
-    # chat = c at the RSLA steps of phi0 = 0.1 and 0.01
-    for cfl in (CR_P1 / 0.1, CR_P1 / 0.01)
-        r = score(radhydro_pulse_dyn(cfl_radiation=cfl, wavespeed_correction=true)...)
-        push!(rows, (1.0, "exact_wc_cfl$(cfl)", lp(r.T, ref.T), 1.0, 1.0, r.sub))
-        @printf("  chat = c, correction on, cfl = %4.1f   L1 = %.3f%%\n", cfl, 100lp(r.T, ref.T))
-    end
     push!(rows, (1.0, "reference", 0.0, 1.0, 1.0, ref.sub))
     writecsv("pulse_scores.csv", ("phi0", "run", "L1", "phi_min", "phi_max", "substeps"), rows)
     xs = collect(range(-512 + 4, 512 - 4, length=128))
-    writecsv("pulse_profiles.csv", ("x", "T_ref", "T_rsla", "T_irsla", "T_irsla_wc", "phi_irsla"),
-             [(xs[i], ref.T[i], prof["rsla"].T[i], prof["irsla"].T[i], prof["irsla_wc"].T[i],
+    writecsv("pulse_profiles.csv", ("x", "T_ref", "T_rsla", "T_irsla", "T_irsla_estep", "phi_irsla"),
+             [(xs[i], ref.T[i], prof["rsla"].T[i], prof["irsla"].T[i], prof["irsla_estep"].T[i],
                prof["irsla"].phi[i]) for i in eachindex(xs)])
 end
 
@@ -303,6 +303,23 @@ if "diffusion2d" in SECTIONS
     writecsv("diffusion2d.csv", ("run", "L1", "phi_min", "phi_max", "substeps"), rows)
 end
 
+# A thick (tau_cell = 20), gas-dominated hot spot diffusing in a periodic box, for
+# `diffusion_thick` and `diffusion_thick_clipped`.
+function thick(; n=128, phi0=0.01, lim=ConstantChat(), tmax=1000.0, cfl=cr_m1(1))
+    dx = 1 / n
+    chi = 20 / dx
+    rad = RadiationPhysics(; c=1.0, chat=phi0, a_rad=1.0, beta_order=0,
+                           opacity=ConstantOpacity(chi), chat_limiter=lim)
+    sim = Simulation(; n=(n, 1, 1), eos=IdealGas(; gamma=5 / 3, cv=4000.0), radiation=rad,
+                     hydro=false, boundaries=Boundaries(Periodic()), cfl_radiation=cfl)
+    rng = Xoshiro(42)
+    set_initial_conditions!(sim) do x, y, z
+        T = (1 + exp(-(x - 0.5)^2 / (2 * 0.08^2))) * (1 + 1e-3 * (2 * rand(rng) - 1))
+        (rho=1.0, T=T, Erad=T^4)
+    end
+    score(sim, tmax)
+end
+
 # ---------------------------------------------------------------------------
 if "diffusion_thick" in SECTIONS
     println("\n== thermal diffusion in optically thick, gas-dominated cells (tau_cell = 20) ==")
@@ -310,20 +327,6 @@ if "diffusion_thick" in SECTIONS
     # (4 a T^3/(rho c_v) <= 0.008 < phi0/(nu0 sigma - phi0) = 0.011 for M1 in 1D at
     # nu0 = 0.9), so phi = 1 everywhere, while the RSLA raises the radiation's
     # heat capacity by 1/phi0 and slows the diffusion of the hot spot.
-    function thick(; n=128, phi0=0.01, lim=ConstantChat(), tmax=1000.0, cfl=cr_m1(1))
-        dx = 1 / n
-        chi = 20 / dx
-        rad = RadiationPhysics(; c=1.0, chat=phi0, a_rad=1.0, beta_order=0,
-                               opacity=ConstantOpacity(chi), chat_limiter=lim)
-        sim = Simulation(; n=(n, 1, 1), eos=IdealGas(; gamma=5 / 3, cv=4000.0), radiation=rad,
-                         hydro=false, boundaries=Boundaries(Periodic()), cfl_radiation=cfl)
-        rng = Xoshiro(42)
-        set_initial_conditions!(sim) do x, y, z
-            T = (1 + exp(-(x - 0.5)^2 / (2 * 0.08^2))) * (1 + 1e-3 * (2 * rand(rng) - 1))
-            (rho=1.0, T=T, Erad=T^4)
-        end
-        score(sim, tmax)
-    end
     ref = thick(phi0=1.0, cfl=0.4)
     rows = []
     prof = Dict{String,Any}()
@@ -365,4 +368,27 @@ if "timing" in SECTIONS
         @printf("  %-20s RSLA %.3g s/substep   IRSLA %.3g s/substep   ratio %.3f\n", label, ts..., ts[2] / ts[1])
     end
     writecsv("timing.csv", ("problem", "s_per_substep_rsla", "s_per_substep_irsla", "ratio"), rows)
+end
+
+# ---------------------------------------------------------------------------
+if "diffusion_thick_clipped" in SECTIONS
+    println("\n== the thick hot spot with |F| clipped to cE before the coupling solve ==")
+    # What codes commonly do: the full realizability repair between the transport
+    # stage and the implicit solve, instead of flooring E only. This redefines a
+    # Hydro3D method for the rest of the process, so the section runs last; the
+    # reference runs first, unclipped, and the clipped run goes through
+    # `invokelatest` because this block was compiled before the redefinition.
+    ref = thick(phi0=1.0, cfl=0.4)
+    @eval Hydro3D function floor_rad_energy!(R::AbstractArray{T,4},
+                                             phys::RadiationPhysics{NG,M,T},
+                                             g::CartesianGrid{T},
+                                             floors::Floors{T}) where {NG,M,T}
+        amend_rad_state!(R, phys, g, floors)
+    end
+    r = Base.invokelatest(thick; lim=StabilityBound())
+    e = l1(r.T, ref.T)
+    @printf("  irsla, clipped  L1 = %9.4f%%  phi in [%.4f, %.4f]  %d substeps\n", 100e,
+            extrema(r.phi)..., r.sub)
+    writecsv("diffusion_thick_clipped.csv", ("run", "L1", "phi_min", "phi_max", "substeps"),
+             [("irsla_clipped", e, minimum(r.phi), maximum(r.phi), r.sub)])
 end
