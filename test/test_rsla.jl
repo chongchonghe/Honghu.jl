@@ -481,3 +481,32 @@ end
         @test checkerboard_growth(StabilityBound(); kw...) < 1
     end
 end
+
+@testset "the flux is not clipped before the coupling solve" begin
+    # A thick (tau_cell = 20), gas-dominated hot spot at phi0 = 0.01: the limiter
+    # sets phi = 1, so the radiation runs at a local CFL number of ~90, and the
+    # transport stage leaves |F| >> cE. The implicit solve turns that flux into the
+    # diffusion flux; clipping it to cE first slowed the diffusion and made the
+    # IRSLA twice as wrong as the RSLA (4.8% against 2.2%) instead of 1000 times
+    # better.
+    function hotspot(; phi0, lim=ConstantChat(), cfl=0.9, tmax=300.0)
+        n = 128
+        rad = RadiationPhysics(; c=1.0, chat=phi0, a_rad=1.0, beta_order=0,
+                               opacity=ConstantOpacity(20.0 * n), chat_limiter=lim)
+        sim = Simulation(; n=(n, 1, 1), eos=IdealGas(; gamma=5 / 3, cv=4000.0),
+                         radiation=rad, hydro=false, boundaries=Boundaries(Periodic()),
+                         cfl_radiation=cfl)
+        set_initial_conditions!(sim) do x, y, z
+            T = 1 + exp(-(x - 0.5)^2 / (2 * 0.08^2))
+            (rho=1.0, T=T, Erad=T^4)
+        end
+        run!(sim; tmax, verbose=false)
+        return vec(gas_temperature(sim)) .- 1, sim
+    end
+    ref, _ = hotspot(phi0=1.0, cfl=0.4)
+    err(d) = sum(abs, d .- ref) / sum(abs, ref)
+    rsla, _ = hotspot(phi0=0.01)
+    irsla, sim = hotspot(phi0=0.01, lim=StabilityBound())
+    @test all(==(1.0), sim.rw.chat[1, sim.grid.lo[1]:sim.grid.hi[1], 1, 1])
+    @test err(irsla) < err(rsla) / 100
+end

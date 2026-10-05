@@ -5,7 +5,7 @@
 #     julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]
 #
 # Sections (all by default): checkerboard shock_super shock_sub vaytet pulse
-# diffusion2d timing. Each writes CSV files into DIR and prints a summary.
+# diffusion2d diffusion_thick timing. Each writes CSV files into DIR and prints a summary.
 #
 # Every error is a relative L1 error in the gas temperature against a
 # reference run at chat = c at the same resolution, and every IRSLA run takes
@@ -18,7 +18,8 @@ using Printf
 using Random: Xoshiro, rand
 
 const SECTIONS = isempty(OPTS) ?
-    ["checkerboard", "shock_super", "shock_sub", "vaytet", "pulse", "diffusion2d", "timing"] : OPTS
+    ["checkerboard", "shock_super", "shock_sub", "vaytet", "pulse", "diffusion2d",
+     "diffusion_thick", "timing"] : OPTS
 
 l1(T, ref) = sum(abs, T .- ref) / sum(abs, ref)
 
@@ -303,6 +304,46 @@ if "diffusion2d" in SECTIONS
     end
     push!(rows, ("reference", 0.0, 1.0, 1.0, ref.sub))
     writecsv("diffusion2d.csv", ("run", "L1", "phi_min", "phi_max", "substeps"), rows)
+end
+
+# ---------------------------------------------------------------------------
+if "diffusion_thick" in SECTIONS
+    println("\n== thermal diffusion in optically thick, gas-dominated cells (tau_cell = 20) ==")
+    # The regime the IRSLA is for: every cell is thick and eq:rich holds
+    # (4 a T^3/(rho c_v) <= 0.008 < phi0/(nu0 sigma - phi0) = 0.011 for M1 in 1D at
+    # nu0 = 0.9), so phi = 1 everywhere, while the RSLA raises the radiation's
+    # heat capacity by 1/phi0 and slows the diffusion of the hot spot.
+    function thick(; n=128, phi0=0.01, lim=ConstantChat(), tmax=1000.0, cfl=cr_m1(1))
+        dx = 1 / n
+        chi = 20 / dx
+        rad = RadiationPhysics(; c=1.0, chat=phi0, a_rad=1.0, beta_order=0,
+                               opacity=ConstantOpacity(chi), chat_limiter=lim)
+        sim = Simulation(; n=(n, 1, 1), eos=IdealGas(; gamma=5 / 3, cv=4000.0), radiation=rad,
+                         hydro=false, boundaries=Boundaries(Periodic()), cfl_radiation=cfl)
+        rng = Xoshiro(42)
+        set_initial_conditions!(sim) do x, y, z
+            T = (1 + exp(-(x - 0.5)^2 / (2 * 0.08^2))) * (1 + 1e-3 * (2 * rand(rng) - 1))
+            (rho=1.0, T=T, Erad=T^4)
+        end
+        score(sim, tmax)
+    end
+    ref = thick(phi0=1.0, cfl=0.4)
+    rows = []
+    prof = Dict{String,Any}()
+    for (name, lim) in (("rsla", ConstantChat()), ("irsla", StabilityBound()))
+        r = thick(lim=lim)
+        e = l1(r.T, ref.T)
+        prof[name] = r
+        push!(rows, (name, e, minimum(r.phi), maximum(r.phi), r.sub))
+        @printf("  %-8s L1 = %9.4f%%  phi in [%.4f, %.4f]  %d substeps\n", name, 100e,
+                extrema(r.phi)..., r.sub)
+    end
+    push!(rows, ("reference", 0.0, 1.0, 1.0, ref.sub))
+    writecsv("diffusion_thick.csv", ("run", "L1", "phi_min", "phi_max", "substeps"), rows)
+    xs = collect(range(0.5 / 128, 1 - 0.5 / 128, length=128))
+    T0 = [1 + exp(-(x - 0.5)^2 / (2 * 0.08^2)) for x in xs]
+    writecsv("diffusion_thick_profiles.csv", ("x", "T_initial", "T_ref", "T_rsla", "T_irsla"),
+             [(xs[i], T0[i], ref.T[i], prof["rsla"].T[i], prof["irsla"].T[i]) for i in eachindex(xs)])
 end
 
 # ---------------------------------------------------------------------------

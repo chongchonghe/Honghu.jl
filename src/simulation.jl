@@ -543,10 +543,14 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     combine!(rw.Rtmp, one(T), sim.R, zero(T), sim.R, T(IMEX_AEX_21) * dt, rw.dR, g,
              nradvars(sim.radiation))
     copyto!(rw.Utmp, sim.U)
-    amend_rad_state!(rw.Rtmp, phys, g, fl)
+    # Only the energy is floored before the solve; the flux of a thick cell at a
+    # large local CFL number is turned into the diffusion flux by the solve
+    # itself, and limiting it first would destroy that (see floor_rad_energy!).
+    floor_rad_energy!(rw.Rtmp, phys, g, fl)
     s1 = radiation_source_step!(rw.Utmp, rw.Rtmp, rw.chat, sim.eos, phys, g,
                                 T(IMEX_AIM_22) * dt,
                                 sim.source, t + dt, fl; update_momentum=upd)
+    amend_rad_state!(rw.Rtmp, phys, g, fl)
 
     # --- stage 3: Shu-Osher combination + implicit coupling ------------------
     # Same `chat` as stage 2; only the wave-speed correction's `chiF` follows
@@ -556,10 +560,11 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     combine!(sim.R, T(1 - IMEX_ALPHA), sim.R, T(IMEX_ALPHA), rw.Rtmp,
              T(IMEX_AEX_32) * dt, rw.dR, g, nradvars(sim.radiation))
     combine_gas!(sim.U, T(IMEX_ALPHA), rw.Utmp, g)
-    amend_rad_state!(sim.R, phys, g, fl)
+    floor_rad_energy!(sim.R, phys, g, fl)
     s2 = radiation_source_step!(sim.U, sim.R, rw.chat, sim.eos, phys, g,
                                 T(IMEX_AIM_33) * dt,
                                 sim.source, t + dt, fl; update_momentum=upd)
+    amend_rad_state!(sim.R, phys, g, fl)
     return s1 + s2
 end
 

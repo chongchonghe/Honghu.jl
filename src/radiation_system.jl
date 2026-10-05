@@ -220,15 +220,50 @@ end
 """
     amend_rad_state!(R, phys, grid, floors) -> Int
 
-Repair the radiation state of the *interior* cells in place. Used after the
-explicit transport stages of the IMEX scheme, whose output must be admissible
-before the implicit coupling solve runs; the ghost cells are refilled from the
-boundary conditions before they are next read, so there is no point touching
-them here.
+Repair the radiation state of the *interior* cells in place. Used after each
+implicit coupling solve of the IMEX scheme, so that every stage hands the next
+transport step an admissible state -- not between the transport stage and the
+solve, where the flux must be left alone (see [`floor_rad_energy!`](@ref)). The
+ghost cells are refilled from the boundary conditions before they are next read,
+so there is no point touching them here.
 """
 function amend_rad_state!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
                           g::CartesianGrid{T}, floors::Floors{T}) where {NG,M,T}
     _amend_range!(R, phys, floors, g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3])
+end
+
+"""
+    floor_rad_energy!(R, phys, grid, floors) -> Int
+
+Raise the radiation energy density of the *interior* cells to the floor where it
+has fallen below it, and leave the flux alone. Used after the explicit transport
+stages of the IMEX scheme, before the implicit coupling solve.
+
+The flux is deliberately not limited there. In an optically thick cell run at a
+local CFL number far above one -- which is what a local reduced speed of light
+does at `phi = 1` -- the transport stage leaves `|F| >> cE`, and the implicit
+solve that follows divides the flux by `1 + chat rho kappa_F dt >> 1`, which is
+exactly what turns it into the diffusion flux `-c grad E / (3 rho kappa_F)`.
+Clipping `|F|` to `cE` before that solve throws the diffusion flux away: on a
+thick, gas-dominated hot spot at `phi = 1` it raised the error from 0.002% to
+4.8%. The full repair, [`amend_rad_state!`](@ref), runs after the solve instead.
+"""
+function floor_rad_energy!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
+                           g::CartesianGrid{T}, floors::Floors{T}) where {NG,M,T}
+    ef = floors.erad / NG
+    nbad = Threads.Atomic{Int}(0)
+    threaded_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]) do j, k
+        local bad = 0
+        @inbounds for i in g.lo[1]:g.hi[1], gr in 1:NG
+            b = gbase(gr)
+            if !(R[b+IERAD, i, j, k] > ef)
+                R[b+IERAD, i, j, k] = ef
+                bad += 1
+            end
+        end
+        bad > 0 && Threads.atomic_add!(nbad, bad)
+    end
+    return nbad[]
 end
 
 function _amend_range!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
