@@ -5,7 +5,7 @@
 #     julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]
 #
 # Sections (all by default): checkerboard shock_super shock_sub vaytet pulse
-# diffusion2d diffusion_thick timing equal_accuracy diffusion_thick_clipped. Each writes CSV files
+# diffusion2d diffusion_thick timing equal_accuracy ensman diffusion_thick_clipped. Each writes CSV files
 # into DIR and prints a summary. `phi` in every table is the time average over the
 # run, weighted by the step, of the reduction factor of the first group.
 #
@@ -21,7 +21,7 @@ using Random: Xoshiro, rand
 
 const SECTIONS = isempty(OPTS) ?
     ["checkerboard", "shock_super", "shock_sub", "vaytet", "pulse", "diffusion2d",
-     "diffusion_thick", "timing", "equal_accuracy", "diffusion_thick_clipped"] : OPTS
+     "diffusion_thick", "timing", "equal_accuracy", "ensman", "diffusion_thick_clipped"] : OPTS
 
 l1(T, ref) = sum(abs, T .- ref) / sum(abs, ref)
 
@@ -428,6 +428,74 @@ if "equal_accuracy" in SECTIONS
     end
     writecsv("equal_accuracy.csv", ("problem", "phi0", "L1_irsla", "sub_irsla", "phi0_rsla",
                                     "sub_rsla", "L1_rsla", "speedup"), rows)
+end
+
+# ---------------------------------------------------------------------------
+if "ensman" in SECTIONS
+    println("\n== Ensman supercritical radiative shock (Melon Fuksman et al. 2021, Sec. 4.1), M1, 512 cells ==")
+    # Constant mass opacity kappa = 3.1e-10/7.78e-10 cm^2/g (Melon Fuksman et al. fix
+    # kappa rho instead, which keeps every cell at tau_cell = 0.04 however compressed;
+    # with kappa fixed the shocked gas is thicker), no scattering, gas at
+    # 10 K and radiation in LTE, mu = 1, gamma = 7/5, inflow at u onto a reflecting
+    # wall. The reference is the RSLA at phi0 = 0.1, which Melon Fuksman et al. find
+    # close to chat = c for both shocks; chat = c itself is not affordable here.
+    # For each RSLA phi0 the IRSLA phi0 of equal accuracy is found by bisection in
+    # log(phi0): their ratio is the speedup in nominal steps, and the substep ratio
+    # the one realized with whole substeps per hydrodynamic step.
+    function ensman(; u, phi0, lim=ConstantChat(), n=512)
+        rho0, T0, mu, gamma, alpha = 7.78e-10, 10.0, 1.0, 1.4, 3.1e-10
+        cv = Hydro3D.CGS.k_B / (mu * Hydro3D.CGS.m_u * (gamma - 1))
+        rad = RadiationPhysics(; c=Hydro3D.CGS.c_light, chat=phi0 * Hydro3D.CGS.c_light,
+                               a_rad=Hydro3D.CGS.a_rad, k_B=Hydro3D.CGS.k_B,
+                               opacity=ConstantOpacity(alpha / rho0), chat_limiter=lim)
+        sim = Simulation(; n=(n, 1, 1), xlo=(0.0, 0.0, 0.0), xhi=(7e10, 1.0, 1.0),
+                         eos=IdealGas(; gamma, cv), radiation=rad,
+                         boundaries=Boundaries((Reflecting(), Outflow()), (Periodic(), Periodic()),
+                                               (Periodic(), Periodic())),
+                         floors=Floors(erad=Hydro3D.CGS.a_rad * 1e-4), cfl=0.4,
+                         cfl_radiation=cr_m1(1))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=rho0, vx=u, T=T0, Erad=Hydro3D.CGS.a_rad * T0^4, Fx=0.0)
+        end
+        return sim
+    end
+    rows = []
+    for (label, u, tmax) in (("supercritical", -20e5, 7.5e3),)
+        ref = score(ensman(; u, phi0=0.1), tmax)
+        run(phi0, lim) = (r = score(ensman(; u, phi0, lim), tmax);
+                          (e=l1(r.T, ref.T), sub=r.sub, phi=r.phi, T=r.T, Tr=r.Tr))
+        for phi0 in (0.01, 0.001)
+            a = run(phi0, ConstantChat())
+            b = run(phi0, StabilityBound())
+            push!(rows, (label, "rsla", phi0, a.e, a.sub, minimum(a.phi), maximum(a.phi)))
+            push!(rows, (label, "irsla", phi0, b.e, b.sub, minimum(b.phi), maximum(b.phi)))
+            @printf("  %-13s phi0 = %.3f  RSLA %.4f%% (%d substeps)  IRSLA %.4f%%  phi in [%.4f, %.4f]\n",
+                    label, phi0, 100a.e, a.sub, 100b.e, extrema(b.phi)...)
+            if phi0 == 0.01
+                xs = collect(range(7e10 / 1024, 7e10 - 7e10 / 1024, length=512))
+                writecsv("ensman_profiles.csv", ("x", "T_ref", "Tr_ref", "T_rsla", "Tr_rsla",
+                                                 "T_irsla", "Tr_irsla", "phi_irsla"),
+                         [(xs[i], ref.T[i], ref.Tr[i], a.T[i], a.Tr[i], b.T[i], b.Tr[i], b.phi[i])
+                          for i in eachindex(xs)])
+            end
+            # the IRSLA phi0 at which the IRSLA error equals the RSLA's at phi0
+            lo, hi = phi0 / 100, phi0
+            if run(lo, StabilityBound()).e > a.e
+                for _ in 1:12
+                    mid = sqrt(lo * hi)
+                    run(mid, StabilityBound()).e > a.e ? (lo = mid) : (hi = mid)
+                end
+                m = run(hi, StabilityBound())
+                push!(rows, (label, "irsla_matched_to_rsla_$(phi0)", hi, m.e, m.sub,
+                             minimum(m.phi), maximum(m.phi)))
+                @printf("  %-13s IRSLA matches it at phi0 = %.5f (%.4f%%, %d substeps): speedup %.2f in phi0, %.2f in substeps\n",
+                        label, hi, 100m.e, m.sub, phi0 / hi, a.sub / m.sub)
+            else
+                @printf("  %-13s IRSLA at phi0/100 is still as accurate as the RSLA\n", label)
+            end
+        end
+    end
+    writecsv("ensman.csv", ("shock", "run", "phi0", "L1", "substeps", "phi_min", "phi_max"), rows)
 end
 
 # ---------------------------------------------------------------------------
