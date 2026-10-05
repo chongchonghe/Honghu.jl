@@ -461,15 +461,6 @@ if "ensman" in SECTIONS
         end
         return sim
     end
-    # The stability bound with every cell counted at the largest signal sum of the
-    # closure, sum_d sigma_d = 1 in 1D: no thin-cell gain from a radiation field
-    # that is not streaming, which 1D M1 grants and 3D isotropic radiation does not;
-    # what is left is the gain from the damping of thick cells.
-    struct DampingOnly <: Hydro3D.AbstractChatLimiter end
-    Hydro3D._convert_limiter(l::DampingOnly, ::Type) = l
-    Hydro3D.chat_factor(::DampingOnly, phi0, w::Hydro3D.LocalCell) =
-        Hydro3D.chat_factor(StabilityBound(), phi0,
-                            Hydro3D.LocalCell(w.cdt, 1 / w.dxmin, w.chiE, w.chiF, w.hrat, w.dxmin))
     tmax = 7.5e3
     rows = []
     for (n, kfac, phis) in ((128, 10.0, (0.01, 0.001)), (64, 10.0, (0.01,)))
@@ -477,18 +468,20 @@ if "ensman" in SECTIONS
         run(phi0, lim) = (r = score(ensman(; phi0, lim, n, kfac), tmax);
                           (e=l1(r.T, ref.T), sub=r.sub, phi=r.phi, T=r.T, Tr=r.Tr,
                            pre=r.sim.diag.floors_presolve, post=r.sim.diag.repairs_postsolve))
+        # A run that fails (a non-finite error) counts as less accurate than the target.
+        worse(e, target) = !(e <= target)
         function matched(lim, phi0, target)
             lo, hi = 1e-4, phi0
-            run(lo, lim).e > target || return (lo, missing)     # better still at 1e-4
+            worse(run(lo, lim).e, target) || return (lo, missing)   # better still at 1e-4
             for _ in 1:12
                 mid = sqrt(lo * hi)
-                run(mid, lim).e > target ? (lo = mid) : (hi = mid)
+                worse(run(mid, lim).e, target) ? (lo = mid) : (hi = mid)
             end
             return (hi, run(hi, lim).sub)
         end
         for phi0 in phis
             a = run(phi0, ConstantChat())
-            for (name, lim) in (("irsla", StabilityBound()), ("damping_only", DampingOnly()))
+            for (name, lim) in (("irsla", StabilityBound()),)
                 b = run(phi0, lim)
                 pm, subm = matched(lim, phi0, a.e)
                 sp = phi0 / pm
