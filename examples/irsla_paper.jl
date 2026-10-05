@@ -7,8 +7,8 @@
 # Sections (all by default): checkerboard shock_super shock_sub vaytet pulse
 # diffusion2d diffusion_thick timing equal_accuracy ensman ensman_floored
 # diffusion_thick_clipped. Each writes CSV files
-# into DIR and prints a summary. `phi` in every table is the time average over the
-# run, weighted by the step, of the reduction factor of the first group.
+# into DIR and prints a summary. `phi` in every table is the reduction factor of
+# the first group at the end of the run, from the last full step.
 #
 # Every error is a relative L1 error in the gas temperature against a
 # reference run at chat = c at the same resolution, and every IRSLA run takes
@@ -46,17 +46,18 @@ function writecsv(name, header, rows)
     println("  wrote ", outpath(name))
 end
 
-"""Run to `tmax`; return the gas temperature, the local phi averaged over the run
-and the cost. The average is weighted by the step: the value at the end belongs
-to the last step alone, which `run!` cuts short to land on `tmax`."""
+"""Run to `tmax`; return the gas temperature, the local phi at the end of the run
+and the cost. `run!` cuts the last step short to land on `tmax`, and the limiter
+sets phi from the step actually taken, so phi is taken from the last full step
+(whichever of the last two steps is longer)."""
 function score(sim, tmax)
     g = sim.grid
     I = (g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3])
-    phisum = zeros(size(sim.rw.chat[1, I...]))
-    cb = s -> (phisum .+= s.dt .* view(s.rw.chat, 1, I...); true)
-    t0 = sim.t
+    cur = zeros(size(sim.rw.chat[1, I...])); prev = copy(cur)
+    dts = [0.0, 0.0]                                   # dt of prev, cur
+    cb = s -> (prev .= cur; cur .= view(s.rw.chat, 1, I...); dts .= (dts[2], s.dt); true)
     t = @elapsed run!(sim; tmax, verbose=false, callback=cb)
-    phi = phisum ./ ((sim.t - t0) * sim.radiation.c)
+    phi = (dts[2] >= dts[1] ? cur : prev) ./ sim.radiation.c
     (T=vec(gas_temperature(sim)), Tr=vec(radiation_temperature(sim)), phi=vec(phi),
      steps=sim.diag.steps, sub=sim.diag.rad_substeps, wall=t, sim=sim)
 end
@@ -469,8 +470,6 @@ if "ensman" in SECTIONS
         local ref = score(ensman(; phi0=1.0, n, kfac, cfl=0.4), tmax)
         run(phi0, lim) = (r = score(ensman(; phi0, lim, n, kfac), tmax);
                           (e=l1(r.T, ref.T), sub=r.sub, steps=r.steps, phi=r.phi, T=r.T, Tr=r.Tr,
-                           phiend=vec(r.sim.rw.chat[1, r.sim.grid.lo[1]:r.sim.grid.hi[1], 1, 1]) ./
-                                  r.sim.radiation.c,
                            pre=r.sim.diag.floors_presolve, post=r.sim.diag.repairs_postsolve))
         # A run that fails (a non-finite error) counts as less accurate than the target.
         worse(e, target) = !(e <= target)
@@ -504,11 +503,9 @@ if "ensman" in SECTIONS
                     local xs = collect(range(7e10 / 128, 7e10 - 7e10 / 128, length=64))
                     writecsv("ensman_profiles.csv", ("x", "T_ref", "Tr_ref", "T_rsla", "Tr_rsla",
                                                      "T_irsla", "Tr_irsla", "T_match", "Tr_match",
-                                                     "phi_irsla", "phi_match", "phiend_irsla",
-                                                     "phiend_match", "phi0_match"),
+                                                     "phi_irsla", "phi_match", "phi0_match"),
                              [(xs[i], ref.T[i], ref.Tr[i], a.T[i], a.Tr[i], b.T[i], b.Tr[i],
-                               m.T[i], m.Tr[i], b.phi[i], m.phi[i], b.phiend[i], m.phiend[i], pm)
-                              for i in eachindex(xs)])
+                               m.T[i], m.Tr[i], b.phi[i], m.phi[i], pm) for i in eachindex(xs)])
                 end
             end
         end
