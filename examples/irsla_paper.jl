@@ -5,7 +5,8 @@
 #     julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]
 #
 # Sections (all by default): checkerboard shock_super shock_sub vaytet pulse
-# diffusion2d diffusion_thick timing equal_accuracy ensman diffusion_thick_clipped. Each writes CSV files
+# diffusion2d diffusion_thick timing equal_accuracy ensman ensman_floored
+# diffusion_thick_clipped. Each writes CSV files
 # into DIR and prints a summary. `phi` in every table is the time average over the
 # run, weighted by the step, of the reduction factor of the first group.
 #
@@ -21,7 +22,8 @@ using Random: Xoshiro, rand
 
 const SECTIONS = isempty(OPTS) ?
     ["checkerboard", "shock_super", "shock_sub", "vaytet", "pulse", "diffusion2d",
-     "diffusion_thick", "timing", "equal_accuracy", "ensman", "diffusion_thick_clipped"] : OPTS
+     "diffusion_thick", "timing", "equal_accuracy", "ensman", "ensman_floored",
+     "diffusion_thick_clipped"] : OPTS
 
 l1(T, ref) = sum(abs, T .- ref) / sum(abs, ref)
 
@@ -510,6 +512,38 @@ if "ensman" in SECTIONS
     writecsv("ensman.csv", ("n", "kappa_factor", "phi0", "limiter", "L1_rsla", "L1", "max_phi_over_phi0",
                             "phi0_matched", "speedup_phi0", "speedup_substeps",
                             "floors_presolve", "repairs_postsolve"), rows)
+end
+
+# ---------------------------------------------------------------------------
+if "ensman_floored" in SECTIONS
+    println("\n== the Ensman shock on 64 cells with E floored before the coupling solve ==")
+    # The earlier algorithm: raise E to the floor after every transport stage, even
+    # where the solve could absorb a negative E. Redefines a Hydro3D method for the
+    # rest of the process, so it runs after every section but the clipped one,
+    # which redefines it again; the reference and the RSLA run first.
+    "ensman" in SECTIONS || error("ensman_floored needs the ensman section's set-up")
+    ref = score(ensman(; phi0=1.0, n=64, kfac=1.0, cfl=0.4), 7.5e3)
+    a = score(ensman(; phi0=0.01, n=64, kfac=1.0), 7.5e3)
+    b = score(ensman(; phi0=0.01, n=64, kfac=1.0, lim=StabilityBound()), 7.5e3)
+    @eval Hydro3D function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
+                                             chat::AbstractArray{T,4},
+                                             phys::RadiationPhysics{NG,M,T},
+                                             g::CartesianGrid{T},
+                                             floors::Floors{T}) where {NG,M,T}
+        ef = floors.erad / NG
+        n = 0
+        for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1], gr in 1:NG
+            ib = gbase(gr) + IERAD
+            R[ib, i, j, k] > ef || (R[ib, i, j, k] = ef; n += 1)
+        end
+        return n
+    end
+    f = Base.invokelatest(score, ensman(; phi0=0.01, n=64, kfac=1.0, lim=StabilityBound()), 7.5e3)
+    rows = [("rsla", l1(a.T, ref.T)), ("irsla", l1(b.T, ref.T)), ("irsla_floored", l1(f.T, ref.T))]
+    for (name, e) in rows
+        @printf("  %-14s L1 = %7.2f%%\n", name, 100e)
+    end
+    writecsv("ensman_floored.csv", ("run", "L1"), rows)
 end
 
 # ---------------------------------------------------------------------------
