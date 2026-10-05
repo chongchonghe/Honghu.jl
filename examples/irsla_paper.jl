@@ -442,8 +442,10 @@ if "ensman" in SECTIONS
     # every cell as thin as the upstream ones), and on the few cells a production
     # run gives a shock. The reference is chat = c at the same resolution.
     # For each RSLA phi0 the IRSLA phi0 of equal accuracy is found by bisection in
-    # log(phi0), down to 1e-4: their ratio is the speedup in nominal steps, and the
-    # substep ratio the one realized with whole substeps per hydrodynamic step.
+    # log(phi0), down to the phi0 at which the radiation takes one step per
+    # hydrodynamic step (below it phi0 no longer changes the step): their ratio is
+    # the speedup in nominal steps, and the substep ratio the one realized with
+    # whole substeps per hydrodynamic step.
     function ensman(; phi0, lim=ConstantChat(), n, kfac, cfl=cr_m1(1))
         rho0, T0, mu, gamma, alpha = 7.78e-10, 10.0, 1.0, 1.4, 3.1e-10
         cv = Hydro3D.CGS.k_B / (mu * Hydro3D.CGS.m_u * (gamma - 1))
@@ -463,16 +465,16 @@ if "ensman" in SECTIONS
     end
     tmax = 7.5e3
     rows = []
-    for (n, kfac, phis) in ((128, 10.0, (0.01, 0.001)), (64, 10.0, (0.01,)))
+    for (n, kfac, phis) in ((128, 10.0, (0.03, 0.01, 0.001)), (64, 10.0, (0.03, 0.01)))
         local ref = score(ensman(; phi0=1.0, n, kfac, cfl=0.4), tmax)
         run(phi0, lim) = (r = score(ensman(; phi0, lim, n, kfac), tmax);
-                          (e=l1(r.T, ref.T), sub=r.sub, phi=r.phi, T=r.T, Tr=r.Tr,
+                          (e=l1(r.T, ref.T), sub=r.sub, steps=r.steps, phi=r.phi, T=r.T, Tr=r.Tr,
                            pre=r.sim.diag.floors_presolve, post=r.sim.diag.repairs_postsolve))
         # A run that fails (a non-finite error) counts as less accurate than the target.
         worse(e, target) = !(e <= target)
-        function matched(lim, phi0, target)
-            lo, hi = 1e-4, phi0
-            worse(run(lo, lim).e, target) || return (lo, missing)   # better still at 1e-4
+        function matched(lim, phi0, target, phimin)
+            lo, hi = phimin, phi0
+            worse(run(lo, lim).e, target) || return (lo, missing)   # better still at phimin
             for _ in 1:12
                 mid = sqrt(lo * hi)
                 worse(run(mid, lim).e, target) ? (lo = mid) : (hi = mid)
@@ -481,9 +483,11 @@ if "ensman" in SECTIONS
         end
         for phi0 in phis
             a = run(phi0, ConstantChat())
+            # one radiation step per hydrodynamic step below this phi0
+            phimin = phi0 * a.steps / a.sub
             for (name, lim) in (("irsla", StabilityBound()),)
                 b = run(phi0, lim)
-                pm, subm = matched(lim, phi0, a.e)
+                pm, subm = matched(lim, phi0, a.e, phimin)
                 sp = phi0 / pm
                 ss = subm === missing ? missing : a.sub / subm
                 push!(rows, (n, kfac, phi0, name, a.e, b.e, maximum(b.phi) / phi0, pm, sp,
@@ -492,12 +496,15 @@ if "ensman" in SECTIONS
                         n, kfac, phi0, 100a.e, name, 100b.e, maximum(b.phi) / phi0, pm,
                         subm === missing ? ">= $(round(sp; digits=1))" : string(round(sp; digits=2)),
                         ss === missing ? "-" : string(round(ss; digits=2)), b.pre, b.post)
-                if n == 128 && phi0 == 0.01 && name == "irsla"
-                    local xs = collect(range(7e10 / 256, 7e10 - 7e10 / 256, length=128))
+                if n == 64 && phi0 == 0.03 && name == "irsla"
+                    # the IRSLA at the phi0 that matches the RSLA's accuracy
+                    m = run(pm, lim)
+                    local xs = collect(range(7e10 / 128, 7e10 - 7e10 / 128, length=64))
                     writecsv("ensman_profiles.csv", ("x", "T_ref", "Tr_ref", "T_rsla", "Tr_rsla",
-                                                     "T_irsla", "Tr_irsla", "phi_irsla"),
+                                                     "T_irsla", "Tr_irsla", "T_match", "Tr_match",
+                                                     "phi_irsla", "phi0_match"),
                              [(xs[i], ref.T[i], ref.Tr[i], a.T[i], a.Tr[i], b.T[i], b.Tr[i],
-                               b.phi[i]) for i in eachindex(xs)])
+                               m.T[i], m.Tr[i], b.phi[i], pm) for i in eachindex(xs)])
                 end
             end
         end
