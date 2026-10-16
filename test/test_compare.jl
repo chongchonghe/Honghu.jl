@@ -43,6 +43,25 @@
         end
     end
 
+    @testset "tables written as Hydro3D still read" begin
+        # The package was called Hydro3D, and headed its tables
+        # `# hydro3d comparison`.
+        t = compare(P.sod_shock_tube, (base=(;),); sizes=(32,), path=nothing, verbose=false)
+        mktempdir() do dir
+            p = write_comparison(t, joinpath(dir, "t.txt"))
+            lines = readlines(p)
+            @test first(lines) == "# honghu comparison"
+            q = joinpath(dir, "old.txt")
+            write(q, join(["# hydro3d comparison"; lines[2:end]], "\n") * "\n")
+            u = read_comparison(q)
+            @test u.values == t.values
+            @test u.variant == t.variant
+            @test u.columns == t.columns
+            @test u.problem == t.problem
+            @test u.meta == t.meta
+        end
+    end
+
     @testset "provenance travels with the numbers" begin
         t = compare(P.sod_shock_tube, (a=(;), b=(reconstruction=PCM(),));
                     sizes=(32,), path=nothing, verbose=false)

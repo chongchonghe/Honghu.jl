@@ -4,7 +4,8 @@
         run!(sim; tmax=0.05, verbose=false)
         f = save_checkpoint(sim, joinpath(dir, "chk"))
         @test isfile(f)
-        @test endswith(f, ".h3d")
+        @test endswith(f, ".honghu")
+        @test read(f)[1:8] == b"HONGHU\x00\x01"
 
         sim2, _ = P.sod_shock_tube(nx=64)
         load_checkpoint!(sim2, f)
@@ -28,6 +29,29 @@
         rsim2, _ = P.radiation_diffusion(nx=32)
         load_checkpoint!(rsim2, fr)
         @test rsim2.R == rsim.R
+    end
+end
+
+@testset "checkpoints written as Hydro3D still load" begin
+    # The package was called Hydro3D, and wrote `.h3d` files that began with the
+    # magic `HYDRO3D\x01`; the bytes after it are laid out as they are now.
+    mktempdir() do dir
+        sim, _ = P.sod_shock_tube(nx=32)
+        run!(sim; tmax=0.02, verbose=false)
+        raw = read(save_checkpoint(sim, joinpath(dir, "chk")))
+        old = joinpath(dir, "chk.h3d")
+        write(old, vcat(b"HYDRO3D\x01", raw[9:end]))
+
+        sim2, _ = P.sod_shock_tube(nx=32)
+        load_checkpoint!(sim2, old)
+        @test sim2.U == sim.U
+        @test sim2.t == sim.t
+        @test sim2.step == sim.step
+
+        # anything else is still refused
+        bad = joinpath(dir, "bad.h3d")
+        write(bad, vcat(b"NOTMAGIC", raw[9:end]))
+        @test_throws ErrorException load_checkpoint!(sim2, bad)
     end
 end
 

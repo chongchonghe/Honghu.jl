@@ -175,17 +175,20 @@ end
 
 # --- checkpoints -------------------------------------------------------------
 
-const _CHECKPOINT_MAGIC = b"HYDRO3D\x01"
+const _CHECKPOINT_MAGIC = b"HONGHU\x00\x01"
+# What the package wrote under its old name, Hydro3D, as `.h3d` files. Same
+# length and the same layout after it, so those files still load.
+const _CHECKPOINT_MAGIC_HYDRO3D = b"HYDRO3D\x01"
 
 """
     save_checkpoint(sim, path) -> String
 
 Write a raw binary checkpoint (grid metadata plus the full conserved state,
 ghost cells included) that [`load_checkpoint!`](@ref) can restore. The file
-extension `.h3d` is added if absent.
+extension `.honghu` is added if absent.
 """
 function save_checkpoint(sim::Simulation{T}, path::AbstractString) where {T}
-    fn = endswith(path, ".h3d") ? String(path) : path * ".h3d"
+    fn = endswith(path, ".honghu") ? String(path) : path * ".honghu"
     g = sim.grid
     open(fn, "w") do f
         write(f, _CHECKPOINT_MAGIC)
@@ -209,13 +212,15 @@ end
 
 Restore a simulation from a checkpoint written by [`save_checkpoint`](@ref).
 The grid, floating-point precision, and presence of radiation must match those
-of `sim`.
+of `sim`. A `.h3d` checkpoint, written when the package was called Hydro3D,
+loads too.
 """
 function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
     g = sim.grid
     open(path, "r") do f
         magic = read(f, length(_CHECKPOINT_MAGIC))
-        magic == _CHECKPOINT_MAGIC || error("$path is not a Honghu checkpoint")
+        magic == _CHECKPOINT_MAGIC || magic == _CHECKPOINT_MAGIC_HYDRO3D ||
+            error("$path is not a Honghu checkpoint")
         read(f, Int64) == sizeof(T) || error("checkpoint precision does not match the simulation")
         for d in 1:3
             read(f, Int64) == g.n[d] || error("checkpoint grid size does not match the simulation")

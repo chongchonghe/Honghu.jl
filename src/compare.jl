@@ -508,7 +508,7 @@ comment header carrying the provenance. Readable by hand, by
 """
 function write_comparison(t::ComparisonTable, path::AbstractString)
     open(path, "w") do f
-        println(f, "# hydro3d comparison")
+        println(f, "# honghu comparison")
         println(f, "# problem = ", t.problem)
         for (k, v) in t.meta
             println(f, "# ", k, " = ", v)
@@ -547,7 +547,8 @@ function read_comparison(path::AbstractString)
         isempty(strip(ln)) && continue
         if startswith(ln, '#')
             body = strip(ln[2:end])
-            body == "hydro3d comparison" && continue
+            # the second is what the package wrote under its old name, Hydro3D
+            body in ("honghu comparison", "hydro3d comparison") && continue
             i = findfirst('=', body)
             i === nothing && continue
             k, v = strip(body[1:i-1]), strip(body[i+1:end])

@@ -2,6 +2,7 @@ Manifest.toml
 /output/
 *.vti
 *.pvd
+*.honghu
 *.h3d
 .DS_Store
 .claude/
