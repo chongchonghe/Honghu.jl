@@ -1,0 +1,53 @@
+# The documentation site. Build it with `julia --project=. docs/make.jl`, which
+# writes the pages this file lists under reference/ and index.qmd before
+# rendering; `quarto render docs` alone would find them missing.
+project:
+  type: website
+  output-dir: _site
+  # Only these: docs/ also holds scripts and internal notes that are not pages.
+  render:
+    - index.qmd
+    - reference/*.qmd
+    - coupling-new-method.md
+    - coupling-new-method-dust.md
+    - coupling-findings.md
+    - rsla-findings.md
+
+website:
+  title: "Hydro3D.jl"
+  site-url: https://chongchonghe.github.io/hydro3d.jl/
+  repo-url: https://github.com/chongchonghe/hydro3d.jl
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+      - text: Reference
+        menu:
+          - reference/index.qmd
+          - reference/simulation.qmd
+          - reference/hydro.qmd
+          - reference/radiation.qmd
+          - reference/rsla.qmd
+          - reference/coupling.qmd
+          - reference/output.qmd
+          - reference/problems.qmd
+          - reference/utilities.qmd
+      - text: Notes
+        menu:
+          - coupling-new-method.md
+          - coupling-new-method-dust.md
+          - coupling-findings.md
+          - rsla-findings.md
+    right:
+      - icon: github
+        href: https://github.com/chongchonghe/hydro3d.jl
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+
+# Links every page to its Markdown twin, which make.jl writes beside it.
+filters:
+  - source-links.lua

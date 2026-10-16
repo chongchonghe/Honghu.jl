@@ -8,3 +8,8 @@ Manifest.toml
 
 /examples/*.png
 /examples/*.txt
+
+# docs/make.jl writes these
+/docs/_site/
+/docs/reference/
+/docs/index.qmd

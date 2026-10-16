@@ -15,6 +15,7 @@ julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a f
 julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]  # every number of the ARSA paper's Sec. 5
 julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
 julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
+julia --project=. docs/make.jl                      # build the docs site into docs/_site (needs quarto)
 julia --project=. -t 8 test/benchmarks.jl           # timing table (BenchmarkTools)
 julia --project=. -e 'include("src/Hydro3D.jl")'    # syntax check without precompiling
 ```
@@ -26,6 +27,10 @@ Examples share `examples/common.jl`, which handles the flags (`--no-plot`, `--ou
 Figures are **on by default** in examples: an example you have to post-process by hand is not much of an example. They are **off by default** in the test suite, because re-running every problem at production resolution costs a couple of minutes and writes files into the repo; `--figures` (or `HYDRO3D_FIGURES=1`) turns them on, and runs `docs/make_figures.jl` in a subprocess so its globals cannot collide with the test session.
 
 Prefer building example figures out of `plotstate` / `plotpanels` rather than raw Plots calls. It keeps the examples short and doubles as documentation for the plotting API.
+
+## Documentation site
+
+`docs/make.jl` writes one reference page per group of source files (its `PAGES` table) from the docstrings, uses the README as the front page and four notes in `docs/` as further pages, renders them with Quarto, and publishes every page twice: as HTML and as its own source, `<page>.md`, with `hydro3d-docs.md` bundling them all. CI deploys it to GitHub Pages from `main`. The build is strict, and three things fail it: a `[`name`](@ref)` whose target has no docstring, a file in `src/` with a docstring but no entry in `PAGES`, and any relative link or anchor in the output that does not resolve. So a new source file needs a line in `PAGES`, and a cross-reference to an undocumented name needs the docstring, not the brackets removed.
 
 ## Dependencies
 

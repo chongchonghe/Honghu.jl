@@ -4,6 +4,8 @@ A three-dimensional radiation-hydrodynamics code in pure Julia. Three standard l
 
 Hydro3D solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — on a uniform Cartesian grid. It is a rewrite of [Hydro.jl](../Hydro.jl) following the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
 
+Documentation: <https://chongchonghe.github.io/hydro3d.jl/> holds this README, a reference built from every docstring, and the technical notes in `docs/`. Each page is also published as Markdown, and `hydro3d-docs.md` holds all of them in one file.
+
 | Kelvin-Helmholtz instability | M1 radiation shadow |
 |:---:|:---:|
 | ![Kelvin-Helmholtz](docs/figures/kh.gif) | ![shadow](docs/figures/shadow.gif) |
@@ -292,7 +294,8 @@ hydro3d.jl/
     problems/    built-in problems, exact solutions, per-problem metrics
   ext/           plotting methods, loaded only when Plots is present
   test/          the test suite, plus benchmarks.jl
-  docs/          make_figures.jl, make_animations.jl, and the generated figures/
+  docs/          make.jl (the documentation site), make_figures.jl,
+                 make_animations.jl, the generated figures/, technical notes
   examples/      sod_1d, kelvin_helmholtz_2d, sedov_3d, compare_schemes,
                  marshak_wave, radiation_shadow, radiating_blast_3d
 ```
