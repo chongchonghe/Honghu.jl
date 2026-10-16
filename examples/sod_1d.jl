@@ -7,10 +7,10 @@
 # Writes sod.png (four panels against the exact solution) plus sod.txt and
 # sod_exact.txt as plain-text tables for gnuplot, numpy.loadtxt or Plots.jl.
 
-using Hydro3D
+using Honghu
 using Printf
 include(joinpath(@__DIR__, "common.jl"))
-const P = Hydro3D.Problems
+const P = Honghu.Problems
 
 nx = isempty(OPTS) ? 512 : parse(Int, OPTS[1])
 
@@ -51,7 +51,7 @@ if PLOTTING
          "specific internal energy")))
         pl = plot(xe, exact; lw=2, c=:black, label=i == 1 ? "exact" : "",
                   xlabel="x", ylabel=lbl)
-        scatter!(pl, x, num; ms=2, msw=0, c=1, label=i == 1 ? "Hydro3D ($nx cells)" : "")
+        scatter!(pl, x, num; ms=2, msw=0, c=1, label=i == 1 ? "Honghu ($nx cells)" : "")
         push!(panels, pl)
     end
     saveplot(plot(panels...; layout=(2, 2), size=(900, 620),

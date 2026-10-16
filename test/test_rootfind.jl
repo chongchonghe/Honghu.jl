@@ -4,7 +4,7 @@
 # each has an assertion here that fails without it: it evaluates each point once,
 # and it has the minimum step of Brent (1973) / Numerical Recipes' `zbrent`.
 
-using Hydro3D: ZBrent, IntervalNonlinearProblem, solve
+using Honghu: ZBrent, IntervalNonlinearProblem, solve
 using .BracketingNonlinearSolve: Brent
 
 "Solve `f(x) = 0` on `(lo, hi)`, recording every point `f` was evaluated at."
@@ -19,7 +19,7 @@ end
     @testset "finds the root, evaluating each point once" begin
         for (lo, hi, nmax) in ((1.0, 2.0, 9), (0.0, 2.0, 10), (0.0, 10.0, 14))
             sol, xs = traced_solve(x -> x^2 - 2, lo, hi, ZBrent())
-            @test sol.retcode == Hydro3D.ReturnCode.Success
+            @test sol.retcode == Honghu.ReturnCode.Success
             @test abs(sol.u - sqrt(2)) <= 2 * eps(sqrt(2))
             @test sol.left <= sqrt(2) <= sol.right       # the returned bracket brackets
             # No point is evaluated twice. BracketingNonlinearSolve's `Brent`
@@ -49,9 +49,9 @@ end
 
     @testset "edge cases" begin
         @test solve(IntervalNonlinearProblem{false}((x, p) -> x - 1, (1.0, 2.0), nothing),
-                    ZBrent()).retcode == Hydro3D.ReturnCode.ExactSolutionLeft
+                    ZBrent()).retcode == Honghu.ReturnCode.ExactSolutionLeft
         @test solve(IntervalNonlinearProblem{false}((x, p) -> x^2 - 2, (2.0, 3.0), nothing),
-                    ZBrent()).retcode == Hydro3D.ReturnCode.InitialFailure
+                    ZBrent()).retcode == Honghu.ReturnCode.InitialFailure
         # generic in the number type
         s = solve(IntervalNonlinearProblem{false}((x, p) -> x^2 - p, (big"1.0", big"2.0"), big"2.0"),
                   ZBrent(); abstol=big"1e-60")

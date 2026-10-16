@@ -12,10 +12,10 @@
 # Writes shadow.png (a log map plus a cut along the beam), a VTK series under
 # shadow/, and an ASCII map for terminals without a plotting stack.
 
-using Hydro3D
+using Honghu
 using Printf
 include(joinpath(@__DIR__, "common.jl"))
-const P = Hydro3D.Problems
+const P = Honghu.Problems
 
 sim, tmax = P.radiation_shadow()
 println(sim)

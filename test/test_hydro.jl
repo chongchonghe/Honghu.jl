@@ -194,7 +194,7 @@ end
         run!(sim; tmax, verbose=false)
         pr = primitives(sim)
         @test all(pr[IRHO, :, 1, 1] .> 0)
-        @test Hydro3D.nstages(integ) == length(Hydro3D.tableau(integ))
+        @test Honghu.nstages(integ) == length(Honghu.tableau(integ))
         e = maximum(abs.(pr[IRHO, :, 1, 1] .-
                          [1 + 0.5 * sinpi(2 * (i - 0.5) / 64) for i in 1:64]))
         @test e < 0.2
@@ -205,7 +205,7 @@ end
     # The operator-split source hook, transliterated from Quokka's
     # `addStrangSplitSources`: called at dt/2 before the advance and dt/2 after.
     # Nothing is built on it yet, so these tests define what it promises.
-    using Hydro3D: IMY, IEGAS
+    using Honghu: IMY, IEGAS
 
     "Uniform acceleration -a(t) along y, applied as a momentum and energy kick."
     function kick(a)

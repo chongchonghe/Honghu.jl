@@ -1,5 +1,5 @@
 """
-    Hydro3D
+    Honghu
 
 A three-dimensional radiation-hydrodynamics code in pure Julia.
 
@@ -21,7 +21,7 @@ The algorithms follow Quokka (Wibking & Krumholz 2022; He, Wibking & Krumholz
 # Getting started
 
 ```julia
-using Hydro3D
+using Honghu
 
 sim = Simulation(n = (256, 1, 1), boundaries = Boundaries(Outflow()),
                  eos = IdealGas(gamma = 1.4))
@@ -34,11 +34,11 @@ run!(sim, tmax = 0.2)
 or start from one of the built-in problems:
 
 ```julia
-sim = Hydro3D.Problems.kelvin_helmholtz(n = 256)
+sim = Honghu.Problems.kelvin_helmholtz(n = 256)
 run!(sim, tmax = 2.0, outdir = "kh", dtout = 0.02)
 ```
 """
-module Hydro3D
+module Honghu
 
 using Printf
 using Dates          # provenance timestamps only; a stdlib, not a package
@@ -51,7 +51,7 @@ using LinearAlgebra: lu!, ldiv!
 # Five names, not the package, and for the same reason: OrdinaryDiffEq exports
 # `step!`, which this package also exports, so a blanket `using` would leave that
 # one name ambiguous for anyone with both in scope -- `step!(sim)` would have to
-# be spelled `Hydro3D.step!`. Naming what is used keeps `step!` this package's.
+# be spelled `Honghu.step!`. Naming what is used keeps `step!` this package's.
 #
 # `AdaptiveCoupling` in `coupling_ode.jl` is the only thing that needs them:
 # `Rosenbrock23` is its default algorithm and the rest state the problem and read
@@ -140,4 +140,4 @@ export plotcompare
 export field, available_fields, coordinates
 export plotstate, plotpanels, animate_run
 
-end # module Hydro3D
+end # module Honghu

@@ -15,11 +15,11 @@
 #     spectrum at its own temperature, group by group. That is the one thing a
 #     multigroup solver can get wrong while every total still looks right.
 
-using Hydro3D: gbase, multigroup_source_step!, group_opacities, group_centers,
-               enforce_state!, radiation_source_step!, IMX, IEGAS, IFRZ,
-               CouplingState, coupling_rhs, coupling_jacobian, solve_coupling, sumvec,
-               solve_jacobian, maxabs
-using LinearAlgebra: cond          # only, so Hydro3D's own `dot`/`norm` still win
+using Honghu: gbase, multigroup_source_step!, group_opacities, group_centers,
+              enforce_state!, radiation_source_step!, IMX, IEGAS, IFRZ,
+              CouplingState, coupling_rhs, coupling_jacobian, solve_coupling, sumvec,
+              solve_jacobian, maxabs
+using LinearAlgebra: cond          # only, so Honghu's own `dot`/`norm` still win
 using .BracketingNonlinearSolve: Bisection, ITP, ModAB, Brent   # alternatives to the default ZBrent
 
 """
@@ -30,7 +30,7 @@ The reduced speed of light is a per-cell, per-group field now (see
 through `step!`, so they have to supply one. Filling it with `phys.chat` is
 exactly what the default `ConstantChat` limiter does.
 """
-const_chat(phys, grid) = fill!(Hydro3D.allocate(grid, ngroups(phys)), phys.chat)
+const_chat(phys, grid) = fill!(Honghu.allocate(grid, ngroups(phys)), phys.chat)
 
 "Group energies of a Planck spectrum at `Trad`, written into every interior cell."
 function set_planck!(sim, Trad)
@@ -210,7 +210,7 @@ end
         run!(s; tmax=0.05, verbose=false)
         (copy(s.U), copy(s.R))
     end
-    default = grey_run(Hydro3D.GREY)
+    default = grey_run(Honghu.GREY)
     @test grey_run(RadiationGroups([0.0, Inf])) == default
     @test grey_run(RadiationGroups([1e-4, 1e4])) == default
 end
@@ -218,7 +218,7 @@ end
 "One cell's `CouplingState`, out of equilibrium, in code units."
 function cell_state(; NG=4, opacity, Tgas=1.3, Trad=0.5, rho=1.0, cv=1.0, dt=1e-3,
                     c=1.0, chat=1.0, arad=1.0, kB=1.0)
-    grp = NG == 1 ? Hydro3D.GREY : RadiationGroups(0.1, 20.0, NG)
+    grp = NG == 1 ? Honghu.GREY : RadiationGroups(0.1, 20.0, NG)
     Erad = (arad * Trad^4) * planck_fractions(grp, Trad, kB)
     z = zero(SVec{NG,Float64})
     # `chat` is per group now; a scalar argument means the same speed for all of
@@ -485,7 +485,7 @@ end
         s = cell_state(; NG, opacity=law(k0), Tgas=Tg, Trad=Tr)
         Etot = s.Egas + sumvec(s.Erad)
         results = [solve_coupling(BracketedCoupling(root_finder=rf), s)
-                   for rf in (Hydro3D.ZBrent(), Brent(), ModAB(), ITP(), Bisection())]
+                   for rf in (Honghu.ZBrent(), Brent(), ModAB(), ITP(), Bisection())]
         @test all(r.converged for r in results)
         for r in results[2:end]
             @test abs(r.Egas - results[1].Egas) <= 2e-9 * Etot
@@ -498,7 +498,7 @@ end
     #    conservation error thousands of times the promised one -- measured
     #    3e-6 of the cell's energy with `Bisection`. This is the assertion the
     #    tolerance conversion exists for.
-    for rf in (Hydro3D.ZBrent(), Brent(), ModAB(), Bisection()), k0 in (1.0, 1e3, 1e9)
+    for rf in (Honghu.ZBrent(), Brent(), ModAB(), Bisection()), k0 in (1.0, 1e3, 1e9)
         s = cell_state(; NG=4, opacity=ConstantOpacity(k0), Tgas=10.0, Trad=1.0)
         r = solve_coupling(BracketedCoupling(root_finder=rf), s)
         Etot = s.Egas + sumvec(s.Erad)
@@ -515,7 +515,7 @@ end
     #    what makes the answer independent of the method.
     s = cell_state(; NG=4, opacity=PowerLawOpacity(kappa0=10.0, n=2.0), Tgas=0.1, Trad=3.0)
     ode = solve_coupling(AdaptiveCoupling(reltol=1e-8, abstol=1e-14), s).Egas
-    for rf in (Hydro3D.ZBrent(), Brent(), ModAB(), ITP(), Bisection())
+    for rf in (Honghu.ZBrent(), Brent(), ModAB(), ITP(), Bisection())
         r = solve_coupling(BracketedCoupling(root_finder=rf), s)
         @test r.converged
         @test r.Egas < 0.2
@@ -619,7 +619,7 @@ end
     # would then leak through a mirror in every group but the first.
     NG = 3
     g = CartesianGrid(n=(6, 5, 4), nghost=2)
-    R = allocate(g, Hydro3D.NRAD * NG)
+    R = allocate(g, Honghu.NRAD * NG)
     for k in 1:g.dims[3], j in 1:g.dims[2], i in 1:g.dims[1], gr in 1:NG
         b = gbase(gr)
         R[b+IERAD, i, j, k] = 10.0 * gr + i
@@ -637,7 +637,7 @@ end
         # the normal flux of *this* group is mirrored ...
         @test R[b+dir+1, ghost...] == -R[b+dir+1, inner...]
         # ... and nothing else in the group is
-        for comp in 1:Hydro3D.NRAD
+        for comp in 1:Honghu.NRAD
             comp == dir + 1 && continue
             @test R[b+comp, ghost...] == R[b+comp, inner...]
         end

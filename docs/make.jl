@@ -7,7 +7,7 @@
 # Every page exists twice, built from one source in one run: the HTML Quarto
 # renders, and the source itself, published beside it as `<page>.md` -- `.md`
 # rather than `.qmd` because GitHub Pages serves `.qmd` as a download and `.md`
-# as text. `hydro3d-docs.md` concatenates all of them and `llms.txt` indexes
+# as text. `honghu-docs.md` concatenates all of them and `llms.txt` indexes
 # them. Quarto's own `llms-txt` is not used: in 1.9 it garbles math.
 #
 # The build fails on anything a reader would trip over: a `[`name`](@ref)` with
@@ -16,14 +16,14 @@
 # Quarto has no strict mode of its own -- it only warns about missing `.qmd`
 # targets -- so the check is done here, on the rendered site.
 
-using Hydro3D
+using Honghu
 
 const ROOT = dirname(@__DIR__)
 const DOCS = @__DIR__
 const SRC = joinpath(ROOT, "src")
 const SITE = joinpath(DOCS, "_site")
-const REPO = "https://github.com/chongchonghe/hydro3d.jl"
-const BUNDLE = "hydro3d-docs.md"
+const REPO = "https://github.com/chongchonghe/Honghu.jl"
+const BUNDLE = "honghu-docs.md"
 
 # Reference page => (title, the files under src/ whose docstrings it holds). A
 # trailing "/" takes a whole directory. A file with a docstring and no page fails
@@ -49,7 +49,7 @@ const PAGES = [
 const NOTES = ["coupling-new-method.md", "coupling-new-method-dust.md",
                "coupling-findings.md", "rsla-findings.md", "documentation.md"]
 
-const MODULES = (Hydro3D, Hydro3D.Problems, Hydro3D.CGS)
+const MODULES = (Honghu, Honghu.Problems, Honghu.CGS)
 
 # --- collecting the docstrings ------------------------------------------------
 
@@ -65,7 +65,7 @@ slug(name) = replace(name, "!" => "-bang", r"[^A-Za-z0-9_-]" => "-")
 
 function page_of(path)
     rel = relpath(path, SRC)
-    rel == "Hydro3D.jl" && return "index"
+    rel == "Honghu.jl" && return "index"
     for (page, (_, files)) in PAGES, f in files
         (rel == f || (endswith(f, "/") && startswith(rel, f))) && return page
     end
@@ -95,15 +95,15 @@ function collect_entries()
         page = page_of(joinpath(ROOT, docs[1][2]))
         page === nothing && (push!(unmapped, docs[1][2]); continue)
         if b.mod === mod && b.var === nameof(mod)     # the module's own docstring
-            mod === Hydro3D && (moddocs[mod] = docs[1][1]; continue)
-            name, public = "Hydro3D." * string(nameof(mod)), true
+            mod === Honghu && (moddocs[mod] = docs[1][1]; continue)
+            name, public = "Honghu." * string(nameof(mod)), true
         elseif b.mod !== mod                           # a method on a Base function
             name, public = string(b.mod) * "." * string(b.var), false
         else
             # `CGS` exports nothing by design: its constants are reached as
             # `CGS.name`, and are the module's whole point.
-            name = mod === Hydro3D.CGS ? "CGS." * string(b.var) : string(b.var)
-            public = Base.isexported(mod, b.var) || mod === Hydro3D.CGS
+            name = mod === Honghu.CGS ? "CGS." * string(b.var) : string(b.var)
+            public = Base.isexported(mod, b.var) || mod === Honghu.CGS
         end
         push!(entries, Entry(name, slug(name), page, public, docs))
     end
@@ -114,12 +114,12 @@ function collect_entries()
     dup = unique(filter(i -> count(==(i), ids) > 1, ids))
     isempty(dup) || error("duplicate anchors: $dup")
     # Module docstrings first, then file and line order.
-    sort!(entries; by=e -> (!startswith(e.name, "Hydro3D."), file_rank(joinpath(ROOT, e.docs[1][2])),
+    sort!(entries; by=e -> (!startswith(e.name, "Honghu."), file_rank(joinpath(ROOT, e.docs[1][2])),
                             e.docs[1][3]))
     return entries, moddocs
 end
 
-# A `[`X`](@ref)` may name `X` as `Hydro3D.X`, `CGS.X` or `X(args)`; all mean
+# A `[`X`](@ref)` may name `X` as `Honghu.X`, `CGS.X` or `X(args)`; all mean
 # the entry `X`.
 function build_refmap(entries)
     map = Dict{String,Entry}(e.name => e for e in entries)
@@ -132,7 +132,7 @@ end
 
 function resolve(refmap, target)
     t = replace(strip(target), r"\(.*\)$" => "")
-    for k in (t, replace(t, r"^Hydro3D\." => ""), last(split(t, '.')))
+    for k in (t, replace(t, r"^Honghu\." => ""), last(split(t, '.')))
         haskey(refmap, k) && return refmap[k]
     end
     return nothing
@@ -225,7 +225,7 @@ function write_reference(entries, moddocs, refmap, sha)
     end
     open(joinpath(dir, "index.qmd"), "w") do io
         println(io, "---\ntitle: \"Reference\"\n---\n")
-        println(io, convert_doc(moddocs[Hydro3D], "index", refmap, unresolved; demote=1), "\n")
+        println(io, convert_doc(moddocs[Honghu], "index", refmap, unresolved; demote=1), "\n")
         println(io, "## Pages\n")
         for (page, (title, _)) in PAGES
             pub = [e for e in entries if e.page == page && e.public]
@@ -242,11 +242,11 @@ end
 # repository root and are rewritten for the site's view from docs/.
 function write_index()
     s = read(joinpath(ROOT, "README.md"), String)
-    s = replace(s, r"\A# Hydro3D\.jl\s*\n" => "")
+    s = replace(s, r"\A# Honghu\.jl\s*\n" => "")
     s = replace(s, "](docs/figures/" => "](figures/",
                 "](../Hydro.jl)" => "](https://github.com/chongchonghe/Hydro.jl)",
                 "](future.md)" => "]($REPO/blob/main/future.md)")
-    write(joinpath(DOCS, "index.qmd"), "---\ntitle: \"Hydro3D.jl\"\n---\n\n" * s)
+    write(joinpath(DOCS, "index.qmd"), "---\ntitle: \"Honghu.jl\"\n---\n\n" * s)
 end
 
 # --- render, twins, bundle ----------------------------------------------------
@@ -288,7 +288,7 @@ end
 
 function write_twins_and_bundle(sha)
     bundle = IOBuffer()
-    println(bundle, "# Hydro3D.jl documentation, all pages\n")
+    println(bundle, "# Honghu.jl documentation, all pages\n")
     println(bundle, "Every page of the documentation site in one file, generated from ",
             "[the repository]($REPO) at commit `$sha`. Each page below is also published ",
             "on its own, as HTML and as Markdown.\n")
@@ -307,7 +307,7 @@ function write_twins_and_bundle(sha)
     write(joinpath(SITE, BUNDLE), String(take!(bundle)))
 
     open(joinpath(SITE, "llms.txt"), "w") do io
-        println(io, "# Hydro3D.jl\n")
+        println(io, "# Honghu.jl\n")
         println(io, "> A three-dimensional radiation-hydrodynamics code in pure Julia: the Euler ",
                 "equations and two-moment (M1) radiation, grey or multigroup, with an IMEX ",
                 "PD-ARS integrator. The documentation, page by page, in Markdown.\n")
@@ -395,7 +395,7 @@ function check_config()
 end
 
 function coverage(entries)
-    for mod in (Hydro3D, Hydro3D.Problems)
+    for mod in (Honghu, Honghu.Problems)
         ex = filter(n -> n !== nameof(mod), names(mod))
         und = filter(n -> !Docs.hasdoc(mod, n), ex)
         println("coverage: $mod exports $(length(ex)) names, $(length(ex) - length(und)) documented",

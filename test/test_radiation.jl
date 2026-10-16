@@ -204,14 +204,14 @@ end
     # The Eddington closure is isotropic at every reduced flux; Levermore is
     # not, and that difference is the whole point of using M1.
     for f in (0.0, 0.3, 0.7, 0.999)
-        @test Hydro3D.eddington_factor(EddingtonClosure(), f) ≈ 1 / 3
+        @test Honghu.eddington_factor(EddingtonClosure(), f) ≈ 1 / 3
     end
-    @test Hydro3D.eddington_factor(LevermoreClosure(), 0.0) ≈ 1 / 3
-    @test Hydro3D.eddington_factor(LevermoreClosure(), 1.0) ≈ 1.0
+    @test Honghu.eddington_factor(LevermoreClosure(), 0.0) ≈ 1 / 3
+    @test Honghu.eddington_factor(LevermoreClosure(), 1.0) ≈ 1.0
     # the one-argument form must keep meaning Levermore
-    @test Hydro3D.eddington_factor(0.6) == Hydro3D.eddington_factor(LevermoreClosure(), 0.6)
+    @test Honghu.eddington_factor(0.6) == Honghu.eddington_factor(LevermoreClosure(), 0.6)
 
-    T = Hydro3D.eddington_tensor(EddingtonClosure(), 1.0, 0.0, 0.0)
+    T = Honghu.eddington_tensor(EddingtonClosure(), 1.0, 0.0, 0.0)
     @test T[1, 1] ≈ 1 / 3
     @test T[2, 2] ≈ 1 / 3
     @test T[1, 2] ≈ 0.0 atol = 1e-14

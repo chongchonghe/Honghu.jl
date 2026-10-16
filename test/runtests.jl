@@ -1,11 +1,11 @@
 using Test
-using Hydro3D
-using Hydro3D: SVec, dot, norm, minmod, limit, ppm_edges, eddington_factor,
-               eddington_tensor, hll_radiation, cell_ranges, face_ranges,
-               NHYDRO, NRAD, IRHO, IVX, IPRE, IERAD, IFRX, IFRY, cons2prim, prim2cons,
-               reconstruct!, required_ghosts, allocate, cellcenter, fill_ghosts!,
-               variants, rows
-const P = Hydro3D.Problems
+using Honghu
+using Honghu: SVec, dot, norm, minmod, limit, ppm_edges, eddington_factor,
+              eddington_tensor, hll_radiation, cell_ranges, face_ranges,
+              NHYDRO, NRAD, IRHO, IVX, IPRE, IERAD, IFRX, IFRY, cons2prim, prim2cons,
+              reconstruct!, required_ghosts, allocate, cellcenter, fill_ghosts!,
+              variants, rows
+const P = Honghu.Problems
 
 # BracketingNonlinearSolve is test-only: its methods plug into the same interface
 # as `ZBrent` and the suite checks the default against them, but the package does
@@ -16,7 +16,7 @@ const P = Hydro3D.Problems
 const BracketingNonlinearSolve = Base.require(Base.PkgId(
     Base.UUID("70df07ce-3d50-431d-a3e7-ca6ddb60ac1e"), "BracketingNonlinearSolve"))
 
-@testset "Hydro3D" begin
+@testset "Honghu" begin
     include("test_utils.jl")
     include("test_grid.jl")
     include("test_reconstruction.jl")
@@ -41,7 +41,7 @@ end
 #
 #   * the subprocess was there because `using OrdinaryDiffEq` in this session
 #     would have shadowed `step!`, which every other file here calls unqualified.
-#     `Hydro3D.jl` imports six names rather than the package, so there is nothing
+#     `Honghu.jl` imports six names rather than the package, so there is nothing
 #     left to collide with.
 #   * the skip was there because the package was a weak dependency. It is a hard
 #     one now, and a test that quietly skips itself when a *required* dependency
@@ -57,8 +57,8 @@ end
 # of minutes) and write files, neither of which belongs in a default test run.
 #
 #   julia --project=. test/runtests.jl --figures
-#   HYDRO3D_FIGURES=1 julia --project=. -e 'using Pkg; Pkg.test()'
-if "--figures" in ARGS || get(ENV, "HYDRO3D_FIGURES", "0") != "0"
+#   HONGHU_FIGURES=1 julia --project=. -e 'using Pkg; Pkg.test()'
+if "--figures" in ARGS || get(ENV, "HONGHU_FIGURES", "0") != "0"
     script = normpath(joinpath(@__DIR__, "..", "docs", "make_figures.jl"))
     println("\ngenerating verification figures ...")
     try

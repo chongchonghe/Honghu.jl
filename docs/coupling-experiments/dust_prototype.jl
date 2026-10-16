@@ -9,15 +9,15 @@
 # `_eliminate_groups`, `energy_balance`) so the plan can be checked before it is
 # implemented.
 
-using Hydro3D
-using Hydro3D: CouplingState, SVec, gas_scale, gas_temperature_of, energy_balance,
-               coupling_coefficients, _eliminate_groups, dot, ZBrent, IntervalNonlinearProblem, solve
+using Honghu
+using Honghu: CouplingState, SVec, gas_scale, gas_temperature_of, energy_balance,
+              coupling_coefficients, _eliminate_groups, dot, ZBrent, IntervalNonlinearProblem, solve
 using Printf
 
 function cell(; NG=1, opacity, Tgas=1.0, Trad=0.0, rho=1.0, cv=1.5, dt=1e-8, c=1e8, chat=1e7,
               arad=1.0, kB=1.0)
     T = Float64
-    grp = NG == 1 ? Hydro3D.GREY : RadiationGroups(0.1, 20.0, NG)
+    grp = NG == 1 ? Honghu.GREY : RadiationGroups(0.1, 20.0, NG)
     Erad = (arad * Trad^4) * planck_fractions(grp, max(Trad, 1e-10), kB) + SVec{NG,T}(ntuple(_ -> 1e-20, NG)...)
     z = zero(SVec{NG,T})
     chatv = SVec{NG,T}(ntuple(_ -> chat, NG)...)
@@ -121,7 +121,7 @@ for dt in (1e-7, 1e-8, 1e-9)
     n = round(Int, 3e-5 / dt)
     for _ in 1:n
         s = cell(; NG=1, opacity=ConstantOpacity(chi), Tgas=Eg / cv, rho=1.0, cv, dt, c, chat, arad)
-        s = Hydro3D.CouplingState{1,2,Float64,typeof(s.opacity)}(Eg, SVec(E), s.src, s.work, s.rho, s.cv, s.opacity, dt, c, s.chat, arad, 1.0, s.groups, 1e-10, 1e-30)
+        s = Honghu.CouplingState{1,2,Float64,typeof(s.opacity)}(Eg, SVec(E), s.src, s.work, s.rho, s.cv, s.opacity, dt, c, s.chat, arad, 1.0, s.groups, 1e-10, 1e-30)
         Td, r, nb, ok = solve_dust(s, K); ok || error("fail")
         Eg, Erad = dust_state(Td, s); E = Erad[1]
     end
@@ -134,7 +134,7 @@ end
 if "limits" in SECTIONS
 for NG in (1, 4), op in (ConstantOpacity(1.0), PowerLawOpacity(kappa0=1.0, rho0=1.0, T0=1.0, m=0.0, n=-1.5)), (Tg, Tr) in ((1.0, 0.1), (0.3, 2.0))
     s = cell(; NG, opacity=op, Tgas=Tg, Trad=Tr, dt=1.0, c=1.0, chat=1.0, cv=1.0, rho=10.0)
-    plain = Hydro3D.solve_coupling(BracketedCoupling(tolerance=1e-12), s)
+    plain = Honghu.solve_coupling(BracketedCoupling(tolerance=1e-12), s)
     Td, _, _, _ = solve_dust(s, 1e12; tol=1e-12); Eg, _ = dust_state(Td, s)
     Td0, _, _, _ = solve_dust(s, 0.0; tol=1e-12); Eg0, Er0 = dust_state(Td0, s)
     @printf("NG=%d %-16s Tg=%.1f Tr=%.1f  K->inf: Egas rel diff %.1e (Td/Tgas-1 = %.1e) | K=0: Egas-Egas0 = %.1e, sum Erad change %.1e\n",

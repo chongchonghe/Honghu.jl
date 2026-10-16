@@ -1,10 +1,10 @@
-# Hydro3D.jl
+# Honghu.jl
 
 A three-dimensional radiation-hydrodynamics code in pure Julia. Three standard libraries, OrdinaryDiffEq and SciMLBase: OrdinaryDiffEq for the matter-radiation coupling's error-controlled reference solver, SciMLBase for the interface its default root-finder is written against. Plotting is a weak dependency that activates only if you load Plots.
 
-Hydro3D solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — on a uniform Cartesian grid. It is a rewrite of [Hydro.jl](../Hydro.jl) following the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
+Honghu solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — on a uniform Cartesian grid. It is a rewrite of [Hydro.jl](../Hydro.jl) following the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
 
-Documentation: <https://chongchonghe.github.io/hydro3d.jl/> holds this README, a reference built from every docstring, and the technical notes in `docs/`. Each page is also published as Markdown, and `hydro3d-docs.md` holds all of them in one file.
+Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
 | Kelvin-Helmholtz instability | M1 radiation shadow |
 |:---:|:---:|
@@ -47,13 +47,13 @@ Radiation subcycles inside each hydro step at the reduced speed of light $\hat{c
 
 Requires Julia 1.9 or newer. The dependencies are three standard libraries — `Printf`, `Dates` and `LinearAlgebra` — plus `OrdinaryDiffEq` and `SciMLBase`. `OrdinaryDiffEq` supplies `AdaptiveCoupling`, the error-controlled reference solver of the matter-radiation coupling. `SciMLBase` supplies the `IntervalNonlinearProblem` interface through which `BracketedCoupling`, the default coupling solver, hands its one scalar equation to a root-finder; the default root-finder, `ZBrent`, is written in `src/rootfind.jl`. `SciMLBase` already sits inside OrdinaryDiffEq's dependency closure, so naming it adds nothing to the manifest or the load time.
 
-That is a real cost and it is worth stating plainly: `using Hydro3D` takes 1.5 s rather than 0.035 s, and a first install precompiles around 190 packages instead of none. What it does not cost is run time — no integrator is on the path of the default coupling solver, which allocates nothing per cell — and what it buys is an error-controlled solution of the coupling to check the one-step solvers against.
+That is a real cost and it is worth stating plainly: `using Honghu` takes 1.5 s rather than 0.035 s, and a first install precompiles around 190 packages instead of none. What it does not cost is run time — no integrator is on the path of the default coupling solver, which allocates nothing per cell — and what it buys is an error-controlled solution of the coupling to check the one-step solvers against.
 
 `Plots` is optional: load it and the plotting methods appear (see [Plotting](#plotting)); leave it out and the ~100-package plotting stack never enters the picture, which matters on a compute node.
 
 ```julia
-using Pkg; Pkg.develop(path = "hydro3d.jl")
-using Hydro3D
+using Pkg; Pkg.develop(url = "https://github.com/chongchonghe/Honghu.jl")
+using Honghu
 ```
 
 A shock tube in five lines:
@@ -88,7 +88,7 @@ Run with threads: `julia -t auto script.jl`.
 Each returns `(sim, tmax)`, ready to `run!`:
 
 ```julia
-sim, tmax = Hydro3D.Problems.kelvin_helmholtz(n = 512)
+sim, tmax = Honghu.Problems.kelvin_helmholtz(n = 512)
 run!(sim; tmax, outdir = "kh", dtout = 0.02)
 ```
 
@@ -122,8 +122,8 @@ Without Plots installed the examples still run and still write their data, and s
 The question this code exists to answer is *does variant B beat variant A, and does the answer survive refinement*. `compare` runs a problem once per (scheme, resolution), scores each run with the problem's own metrics, prints a table and writes it to disk.
 
 ```julia
-using Hydro3D
-const P = Hydro3D.Problems
+using Honghu
+const P = Honghu.Problems
 
 compare(P.sod_shock_tube, :riemann, (HLLC(), LLF()); sizes = (64, 128, 256, 512))
 ```
@@ -261,9 +261,9 @@ available_fields(sim)   # :density, :vx, :speed, :pressure, :temperature, :mach,
 Loading Plots activates a package extension that adds the plotting methods. They pick the representation from the dimensionality: a line in 1D, a heat map in 2D, a mid-plane slice in 3D.
 
 ```julia
-using Plots, Hydro3D
+using Plots, Honghu
 
-sim, tmax = Hydro3D.Problems.kelvin_helmholtz(n = 256)
+sim, tmax = Honghu.Problems.kelvin_helmholtz(n = 256)
 run!(sim; tmax)
 
 plot(sim)                                  # a recipe, so plot/plot! work directly
@@ -279,7 +279,7 @@ Call any of them without Plots loaded and you get an error telling you to load i
 ## Layout
 
 ```
-hydro3d.jl/
+Honghu.jl/
   Project.toml   deps: Printf, Dates, LinearAlgebra (stdlibs), OrdinaryDiffEq
                  and SciMLBase; Plots is a weak dependency
   README.md      this file
@@ -300,17 +300,17 @@ hydro3d.jl/
                  marshak_wave, radiation_shadow, radiating_blast_3d
 ```
 
-The include order in `src/Hydro3D.jl` is significant, because later files use types defined earlier. `CLAUDE.md` has the file-by-file table and the invariants each layer relies on.
+The include order in `src/Honghu.jl` is significant, because later files use types defined earlier. `CLAUDE.md` has the file-by-file table and the invariants each layer relies on.
 
 ## Extending
 
 The code is built around small, dispatch-based interfaces. To add your own piece of physics, define a type and a few methods:
 
 ```julia
-struct KramersOpacity <: Hydro3D.AbstractOpacity end
-Hydro3D.planck_opacity(::KramersOpacity, rho, T) = 4e25 * rho * T^-3.5
-Hydro3D.flux_mean_opacity(op::KramersOpacity, rho, T) = Hydro3D.planck_opacity(op, rho, T)
-Hydro3D.energy_mean_opacity(op::KramersOpacity, rho, T) = Hydro3D.planck_opacity(op, rho, T)
+struct KramersOpacity <: Honghu.AbstractOpacity end
+Honghu.planck_opacity(::KramersOpacity, rho, T) = 4e25 * rho * T^-3.5
+Honghu.flux_mean_opacity(op::KramersOpacity, rho, T) = Honghu.planck_opacity(op, rho, T)
+Honghu.energy_mean_opacity(op::KramersOpacity, rho, T) = Honghu.planck_opacity(op, rho, T)
 ```
 
 The same pattern works for `AbstractEOS`, `AbstractOpacity`, `AbstractLimiter`, `AbstractReconstruction`, `AbstractIntegrator`, `AbstractRiemannSolver`, `AbstractClosure` and `BoundaryCondition`. `test/test_extensions.jl` defines a toy subtype of every one of them and runs a simulation with it, so it doubles as copy-paste documentation of exactly which methods each interface needs.
@@ -329,7 +329,7 @@ where $f_g(T)$ is the fraction of a Planck spectrum at $T$ that falls in group $
 
 ```julia
 RadiationGroups([0.1, 1.0, 5.0, 20.0])                                # three groups, edges in units of k_B T
-RadiationGroups(6e10, 6e14, 4; energy_unit = Hydro3D.CGS.h_planck)    # four log-spaced groups, edges in Hz
+RadiationGroups(6e10, 6e14, 4; energy_unit = Honghu.CGS.h_planck)     # four log-spaced groups, edges in Hz
 RadiationGroups(6e10, 6e14, 4; spacing = :linear)                     # :log is the default, since a Planck spectrum spans decades
 ```
 
@@ -340,8 +340,8 @@ The outermost edges are integration limits rather than cuts: the first group col
 **A run.** Pass `groups`, and `k_B` in whatever units the rest of the problem uses:
 
 ```julia
-using Hydro3D
-const CGS = Hydro3D.CGS
+using Honghu
+const CGS = Honghu.CGS
 
 groups = RadiationGroups(6e10, 6e14, 4; energy_unit = CGS.h_planck)
 rad = RadiationPhysics(c = CGS.c_light, a_rad = CGS.a_rad, k_B = CGS.k_B,
@@ -357,7 +357,7 @@ end
 run!(sim, tmax = 1e-8)
 ```
 
-A scalar `Erad` in an initial condition is a **total**, split over the groups by the Planck spectrum at the radiation temperature it implies — the only spectrum a single number carries — so a multigroup run starts in equilibrium rather than with everything piled into group 1. A `Fixed` radiation boundary is the one place a group structure has to be written out by hand: its state is the whole radiation vector, `4 * ngroups` long. `Hydro3D.Problems.marshak_vaytet` builds one from `planck_fractions` and is the worked example.
+A scalar `Erad` in an initial condition is a **total**, split over the groups by the Planck spectrum at the radiation temperature it implies — the only spectrum a single number carries — so a multigroup run starts in equilibrium rather than with everything piled into group 1. A `Fixed` radiation boundary is the one place a group structure has to be written out by hand: its state is the whole radiation vector, `4 * ngroups` long. `Honghu.Problems.marshak_vaytet` builds one from `planck_fractions` and is the worked example.
 
 Diagnostics stay grey-shaped by default. `field(sim, :Erad)`, `:Fx`, `:reduced_flux` and `radiation_temperature` are summed over the groups, so they mean the same thing in a grey run and a multigroup one; a trailing number picks one group out, as in `field(sim, :Erad_2)`, and `available_fields` lists the per-group names only when there is more than one group.
 
@@ -396,10 +396,10 @@ Two hooks, for two different jobs.
 function gravity!(sim, t, dt, order)
     g = sim.grid
     for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
-        rho = sim.U[Hydro3D.IRHO, i, j, k]
+        rho = sim.U[Honghu.IRHO, i, j, k]
         dp = -9.8 * rho * dt
-        sim.U[Hydro3D.IEGAS, i, j, k] += dp * (sim.U[Hydro3D.IMY, i, j, k] + dp / 2) / rho
-        sim.U[Hydro3D.IMY, i, j, k] += dp
+        sim.U[Honghu.IEGAS, i, j, k] += dp * (sim.U[Honghu.IMY, i, j, k] + dp / 2) / rho
+        sim.U[Honghu.IMY, i, j, k] += dp
     end
 end
 
@@ -410,7 +410,7 @@ Nothing is built on this hook — no gravity, no cooling, no driving are shipped
 
 ## Units
 
-Hydro3D is unit-agnostic: `c`, `a_rad`, `cv` and the opacities are all supplied by you. Use `Hydro3D.CGS` for CGS constants, or set `c = a_rad = cv = 1` and work in code units, as the built-in radiation problems do.
+Honghu is unit-agnostic: `c`, `a_rad`, `cv` and the opacities are all supplied by you. Use `Honghu.CGS` for CGS constants, or set `c = a_rad = cv = 1` and work in code units, as the built-in radiation problems do.
 
 ## Choosing radiation parameters
 

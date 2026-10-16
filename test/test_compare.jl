@@ -175,12 +175,12 @@
     @testset "scores are told apart from bookkeeping" begin
         t = compare(P.radhydro_shock, (P1=(;),); sizes=(32, 64), path=nothing,
                     verbose=false)
-        @test Hydro3D.metric_columns(t) == ["l1_Trad", "spike"]
-        @test !any(in(Hydro3D.BOOKKEEPING), Hydro3D.metric_columns(t))
+        @test Honghu.metric_columns(t) == ["l1_Trad", "spike"]
+        @test !any(in(Honghu.BOOKKEEPING), Honghu.metric_columns(t))
         # `l1_Trad` falls under refinement; `spike` converges to 4.26, so a
         # log-log slope through it would be meaningless
-        @test Hydro3D.is_error_metric(t, "l1_Trad")
-        @test !Hydro3D.is_error_metric(t, "spike")
+        @test Honghu.is_error_metric(t, "l1_Trad")
+        @test !Honghu.is_error_metric(t, "spike")
 
         # the rate table prints for the error and not for the spike
         s = sprint(show, MIME("text/plain"), t)

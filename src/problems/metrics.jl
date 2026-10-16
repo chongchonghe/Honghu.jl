@@ -8,14 +8,14 @@
 # shadow -- deliberately have no method. `compare` then asks for explicit
 # metrics rather than inventing a number that looks authoritative.
 
-using ..Hydro3D: relative_l1, line, coordinates, gas_temperature, radiation_temperature
+using ..Honghu: relative_l1, line, coordinates, gas_temperature, radiation_temperature
 
 """
     default_metrics(sod_shock_tube)
 
 `l1_density` against the exact Riemann solution at the final time.
 """
-Hydro3D.default_metrics(::typeof(sod_shock_tube)) = (;
+Honghu.default_metrics(::typeof(sod_shock_tube)) = (;
     l1_density = function (sim)
         x = coordinates(sim.grid, 1)
         gam = sim.eos.gamma
@@ -31,7 +31,7 @@ Hydro3D.default_metrics(::typeof(sod_shock_tube)) = (;
 after a whole number of periods. This is the problem the order-of-accuracy
 measurements use, so the metric is the one whose slope is the convergence rate.
 """
-Hydro3D.default_metrics(::typeof(smooth_advection)) = (;
+Honghu.default_metrics(::typeof(smooth_advection)) = (;
     l1_density = function (sim)
         x = coordinates(sim.grid, 1)
         relative_l1(line(sim, :density), 1 .+ 0.5 .* sinpi.(2 .* x))
@@ -43,11 +43,11 @@ Hydro3D.default_metrics(::typeof(smooth_advection)) = (;
 
 `l1_Erad` against the analytic Gaussian `sigma² = sigma0² + 2Dt`.
 """
-Hydro3D.default_metrics(::typeof(radiation_diffusion)) = (;
+Honghu.default_metrics(::typeof(radiation_diffusion)) = (;
     l1_Erad = function (sim)
         x = coordinates(sim.grid, 1)
         # D = c/(3 rho kappa_F); rho = 1 and kappa_F is the flux mean
-        kap = Hydro3D.flux_mean_opacity(sim.radiation.opacity, 1.0, 1.0)
+        kap = Honghu.flux_mean_opacity(sim.radiation.opacity, 1.0, 1.0)
         D = sim.radiation.c / (3 * kap)
         relative_l1(line(sim, :Erad), [diffusion_exact(xi, sim.t; D=D) for xi in x])
     end,
@@ -59,7 +59,7 @@ Hydro3D.default_metrics(::typeof(radiation_diffusion)) = (;
 `front_error`, the relative error in the position of the radiation front, which
 must travel at exactly `chat`.
 """
-Hydro3D.default_metrics(::typeof(radiation_streaming)) = (;
+Honghu.default_metrics(::typeof(radiation_streaming)) = (;
     front_error = function (sim)
         x = coordinates(sim.grid, 1)
         er = line(sim, :Erad)
@@ -81,7 +81,7 @@ Quokka's own pair for this test:
     the test exists for and an error norm alone would pass a solution with no
     spike at all; the reference value is 4.2618.
 """
-Hydro3D.default_metrics(::typeof(radhydro_shock)) = (;
+Honghu.default_metrics(::typeof(radhydro_shock)) = (;
     l1_Trad = function (sim)
         xe, _, _, _, Tre = radhydro_shock_exact()
         Tr = radiation_temperature(sim)[:, 1, 1]
@@ -97,7 +97,7 @@ Hydro3D.default_metrics(::typeof(radhydro_shock)) = (;
 Sedov-Taylor similarity radius `xi (E t²/rho)^(1/5)` with `xi = 1.15` for
 `gamma = 5/3`.
 """
-Hydro3D.default_metrics(::typeof(sedov_blast)) = (;
+Honghu.default_metrics(::typeof(sedov_blast)) = (;
     radius_error = function (sim)
         g = sim.grid
         rho, _ = field(sim, :density)
@@ -121,7 +121,7 @@ solution -- the same shape as `radhydro_shock`'s `spike`:
     over the groups. It must sit just below `T_L = 1000 K`; if it does not, the
     Dirichlet boundary is not driving the wave.
 """
-Hydro3D.default_metrics(::typeof(marshak_vaytet)) = (;
+Honghu.default_metrics(::typeof(marshak_vaytet)) = (;
     front = function (sim)
         x = coordinates(sim.grid, 1)
         Tg = gas_temperature(sim)[:, 1, 1]

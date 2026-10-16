@@ -7,10 +7,10 @@
 # Writes kh.png (density at three times) and a VTK series under kh/. Open
 # kh/kh_00000.vti in ParaView; the numbered files are read as one time series.
 
-using Hydro3D
+using Honghu
 using Printf
 include(joinpath(@__DIR__, "common.jl"))
-const P = Hydro3D.Problems
+const P = Honghu.Problems
 
 n = isempty(OPTS) ? 256 : parse(Int, OPTS[1])
 

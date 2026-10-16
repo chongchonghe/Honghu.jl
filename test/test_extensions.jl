@@ -14,51 +14,51 @@
 # Fix the docstring or restore the contract; do not weaken the test.
 #
 # These toy types double as copy-paste documentation, so every method below is
-# written with its `Hydro3D.` prefix, exactly as a user outside the package
+# written with its `Honghu.` prefix, exactly as a user outside the package
 # would have to write it.
 
-using Hydro3D
-using Hydro3D: SVec
+using Honghu
+using Honghu: SVec
 
 # --- the interfaces, implemented from their docstrings alone -----------------
 
 # AbstractEOS: seven methods (see src/eos.jl). A gamma-law gas, written out
 # independently of `IdealGas`.
-struct ToyGamma <: Hydro3D.AbstractEOS
+struct ToyGamma <: Honghu.AbstractEOS
     gamma::Float64
     cv::Float64
 end
-Hydro3D.pressure(e::ToyGamma, rho, eint) = (e.gamma - 1) * eint
-Hydro3D.internal_energy(e::ToyGamma, rho, p) = p / (e.gamma - 1)
-Hydro3D.soundspeed(e::ToyGamma, rho, p) = sqrt(e.gamma * p / rho)
-Hydro3D.adiabatic_index(e::ToyGamma) = e.gamma
-Hydro3D.temperature(e::ToyGamma, rho, eint) = eint / (rho * e.cv)
-Hydro3D.eint_from_temperature(e::ToyGamma, rho, T) = rho * e.cv * T
-Hydro3D.heat_capacity(e::ToyGamma, rho, T) = rho * e.cv
+Honghu.pressure(e::ToyGamma, rho, eint) = (e.gamma - 1) * eint
+Honghu.internal_energy(e::ToyGamma, rho, p) = p / (e.gamma - 1)
+Honghu.soundspeed(e::ToyGamma, rho, p) = sqrt(e.gamma * p / rho)
+Honghu.adiabatic_index(e::ToyGamma) = e.gamma
+Honghu.temperature(e::ToyGamma, rho, eint) = eint / (rho * e.cv)
+Honghu.eint_from_temperature(e::ToyGamma, rho, T) = rho * e.cv * T
+Honghu.heat_capacity(e::ToyGamma, rho, T) = rho * e.cv
 
 # AbstractOpacity: three methods.
-struct ToyOpacity <: Hydro3D.AbstractOpacity
+struct ToyOpacity <: Honghu.AbstractOpacity
     kappa::Float64
 end
-Hydro3D.planck_opacity(o::ToyOpacity, rho, T) = o.kappa
-Hydro3D.energy_mean_opacity(o::ToyOpacity, rho, T) = o.kappa
-Hydro3D.flux_mean_opacity(o::ToyOpacity, rho, T) = o.kappa
+Honghu.planck_opacity(o::ToyOpacity, rho, T) = o.kappa
+Honghu.energy_mean_opacity(o::ToyOpacity, rho, T) = o.kappa
+Honghu.flux_mean_opacity(o::ToyOpacity, rho, T) = o.kappa
 
 # AbstractLimiter: one method. This is minmod.
-struct ToyLimiter <: Hydro3D.AbstractLimiter end
-function Hydro3D.limit(::ToyLimiter, dL, dR)
+struct ToyLimiter <: Honghu.AbstractLimiter end
+function Honghu.limit(::ToyLimiter, dL, dR)
     dL * dR <= 0 ? zero(dL) : (abs(dL) < abs(dR) ? dL : dR)
 end
 
 # AbstractReconstruction: two methods. This is PCM. Note that a custom
 # reconstruction is the one extension point that needs package internals --
 # `_shift`, `cell_ranges` and `threaded_jk` -- because it owns its own sweep.
-struct ToyRecon <: Hydro3D.AbstractReconstruction end
-Hydro3D.required_ghosts(::ToyRecon) = 2
-function Hydro3D.reconstruct!(qL, qR, q, ::ToyRecon, ::Val{D}, g, nvar) where {D}
-    d1, d2, d3 = Hydro3D._shift(Val(D))
-    ir, jr, kr = Hydro3D.cell_ranges(g, Val(D))
-    Hydro3D.threaded_jk(jr, kr) do j, k
+struct ToyRecon <: Honghu.AbstractReconstruction end
+Honghu.required_ghosts(::ToyRecon) = 2
+function Honghu.reconstruct!(qL, qR, q, ::ToyRecon, ::Val{D}, g, nvar) where {D}
+    d1, d2, d3 = Honghu._shift(Val(D))
+    ir, jr, kr = Honghu.cell_ranges(g, Val(D))
+    Honghu.threaded_jk(jr, kr) do j, k
         @inbounds for i in ir, n in 1:nvar
             v = q[n, i, j, k]
             qR[n, i, j, k] = v
@@ -69,35 +69,35 @@ function Hydro3D.reconstruct!(qL, qR, q, ::ToyRecon, ::Val{D}, g, nvar) where {D
 end
 
 # AbstractIntegrator: one method. This is SSPRK2 (Heun).
-struct ToyIntegrator <: Hydro3D.AbstractIntegrator end
-Hydro3D.tableau(::ToyIntegrator) = ((1.0, 0.0, 1.0), (0.5, 0.5, 0.5))
+struct ToyIntegrator <: Honghu.AbstractIntegrator end
+Honghu.tableau(::ToyIntegrator) = ((1.0, 0.0, 1.0), (0.5, 0.5, 0.5))
 
 # BoundaryCondition: one method. This is Outflow.
-struct ToyBC <: Hydro3D.BoundaryCondition end
-function Hydro3D.fill_face!(A::AbstractArray{T,4}, ::ToyBC, g, dir::Int,
-                            side::Int, t) where {T}
+struct ToyBC <: Honghu.BoundaryCondition end
+function Honghu.fill_face!(A::AbstractArray{T,4}, ::ToyBC, g, dir::Int,
+                           side::Int, t) where {T}
     src = side == 1 ? g.lo[dir] : g.hi[dir]
     for m in 1:g.ng[dir]
         dst = side == 1 ? g.lo[dir] - m : g.hi[dir] + m
-        copyto!(Hydro3D._slab(A, dir, dst), Hydro3D._slab(A, dir, src))
+        copyto!(Honghu._slab(A, dir, dst), Honghu._slab(A, dir, src))
     end
     return nothing
 end
 
 # AbstractClosure: one method. Kershaw (1976), a genuine third closure, so
 # there is no built-in to compare against -- only invariants.
-struct ToyClosure <: Hydro3D.AbstractClosure end
-Hydro3D.eddington_factor(::ToyClosure, f) = (1 + 2 * f^2) / 3
+struct ToyClosure <: Honghu.AbstractClosure end
+Honghu.eddington_factor(::ToyClosure, f) = (1 + 2 * f^2) / 3
 
 # AbstractRiemannSolver: one method. This is LLF.
-struct ToySolver <: Hydro3D.AbstractRiemannSolver end
-function Hydro3D.riemann_flux(::ToySolver, sL::HydroState, sR::HydroState, gamma, du, dw)
+struct ToySolver <: Honghu.AbstractRiemannSolver end
+function Honghu.riemann_flux(::ToySolver, sL::HydroState, sR::HydroState, gamma, du, dw)
     Sp = max(abs(sL.u) + sL.cs, abs(sR.u) + sR.cs)
     z, o = zero(Sp), one(Sp)
-    U_L = Hydro3D.SVec(sL.rho, sL.rho * sL.u, sL.rho * sL.v, sL.rho * sL.w, sL.E)
-    U_R = Hydro3D.SVec(sR.rho, sR.rho * sR.u, sR.rho * sR.v, sR.rho * sR.w, sR.E)
-    F_L = sL.u * U_L + sL.P * Hydro3D.SVec(z, o, z, z, sL.u)
-    F_R = sR.u * U_R + sR.P * Hydro3D.SVec(z, o, z, z, sR.u)
+    U_L = Honghu.SVec(sL.rho, sL.rho * sL.u, sL.rho * sL.v, sL.rho * sL.w, sL.E)
+    U_R = Honghu.SVec(sR.rho, sR.rho * sR.u, sR.rho * sR.v, sR.rho * sR.w, sR.E)
+    F_L = sL.u * U_L + sL.P * Honghu.SVec(z, o, z, z, sL.u)
+    F_R = sR.u * U_R + sR.P * Honghu.SVec(z, o, z, z, sR.u)
     (F_L + F_R) / 2 - (Sp / 2) * (U_R - U_L)
 end
 
@@ -190,7 +190,7 @@ end
     end
 
     @testset "AbstractClosure" begin
-        chi = f -> Hydro3D.eddington_factor(ToyClosure(), f)
+        chi = f -> Honghu.eddington_factor(ToyClosure(), f)
         @test chi(0.0) ≈ 1 / 3
         @test chi(1.0) ≈ 1.0
         @test all(chi(f) >= chi(f - 0.05) for f in 0.05:0.05:1.0)

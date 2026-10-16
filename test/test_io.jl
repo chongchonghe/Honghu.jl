@@ -90,5 +90,5 @@ end
     @test dt == 1e-3
     @test sim2.t ≈ 1e-3
     @test sim2.step == 1
-    @test Hydro3D.timestep(sim2) > 0
+    @test Honghu.timestep(sim2) > 0
 end

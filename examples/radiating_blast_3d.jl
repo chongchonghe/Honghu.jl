@@ -24,10 +24,10 @@
 #   chat / max(|v| + c_s)     the reduced speed of light must still outrun every
 #                             other signal. A factor of ~20 is comfortable.
 
-using Hydro3D
+using Honghu
 using Printf
 include(joinpath(@__DIR__, "common.jl"))
-const CGS = Hydro3D.CGS
+const CGS = Honghu.CGS
 
 n = isempty(OPTS) ? 64 : parse(Int, OPTS[1])
 

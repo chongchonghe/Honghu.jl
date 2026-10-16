@@ -16,7 +16,7 @@
 # measured and predicted Omega = omega/k.
 
 include("common.jl")
-using Hydro3D
+using Honghu
 using Printf
 using LinearAlgebra: eigen
 
@@ -68,8 +68,8 @@ function background_phi(lim, rad, dt, tau, k)
     chi = tau * k
     dx = 1 / NCELL
     hrat = 4 * rad.a_rad / (1 / (GAMMA - 1))      # 4 a T^3 / (rho c_v)
-    w = Hydro3D.LocalCell(rad.c * dt, sqrt(1 / 3) / dx, chi, chi, hrat, dx)
-    return Hydro3D.chat_factor(lim, rad.chat / rad.c, w)
+    w = Honghu.LocalCell(rad.c * dt, sqrt(1 / 3) / dx, chi, chi, hrat, dx)
+    return Honghu.chat_factor(lim, rad.chat / rad.c, w)
 end
 
 "Run one wave and return the measured and predicted Omega."
@@ -90,7 +90,7 @@ function measure(tau, scheme, mode; amp=1e-5)
     cfl = scheme === :exact ? 0.4 : 0.9 * sqrt(3)
     sim = Simulation(; n=(NCELL, 1, 1), eos=IdealGas(; gamma=GAMMA, cv=1 / (GAMMA - 1)),
                      radiation=rad, boundaries=Boundaries(Periodic()), cfl_radiation=cfl)
-    dt = Hydro3D.radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
+    dt = Honghu.radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
     phi = scheme === :irsla ? background_phi(lim, rad, dt, tau, k) : phi0
     Om, v = eigenmode(tau, phi, mode)
     v = v / v[1]                                   # normalise to the density

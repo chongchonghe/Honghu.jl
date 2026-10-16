@@ -9,10 +9,10 @@
 
 ENV["GKSwstype"] = "100"          # headless GR
 
-using Hydro3D
+using Honghu
 using Plots
 using Printf
-const P = Hydro3D.Problems
+const P = Honghu.Problems
 
 const OUT = joinpath(@__DIR__, "figures")
 mkpath(OUT)

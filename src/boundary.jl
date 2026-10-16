@@ -14,8 +14,8 @@ Supertype for boundary conditions. Built-in conditions are [`Periodic`](@ref),
 To add your own, define
 
 ```julia
-struct MyBC <: Hydro3D.BoundaryCondition end
-Hydro3D.fill_face!(A, ::MyBC, grid, dir::Int, side::Int, t) = ...
+struct MyBC <: Honghu.BoundaryCondition end
+Honghu.fill_face!(A, ::MyBC, grid, dir::Int, side::Int, t) = ...
 ```
 
 where `side` is `1` for the low face and `2` for the high face, and `A` is the
@@ -59,7 +59,7 @@ This is the one place a multigroup problem has to write its group structure out
 by hand -- nothing splits a boundary state the way `set_initial_conditions!`
 splits a scalar `Erad` -- and a state of the wrong length is a
 `DimensionMismatch` at the first ghost fill, not a silent grey boundary.
-`Hydro3D.Problems.marshak_vaytet` builds one from [`planck_fractions`](@ref) and
+`Honghu.Problems.marshak_vaytet` builds one from [`planck_fractions`](@ref) and
 is the worked example.
 
 Used e.g. to drive a Marshak wave by imposing an incident radiation energy

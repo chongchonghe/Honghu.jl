@@ -34,23 +34,23 @@ end
     end
     hw = sim.hw
     g = sim.grid
-    Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g)
+    Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g)
 
-    @test bytes_per_cell(() -> Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g),
+    @test bytes_per_cell(() -> Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g),
                          sim) < LIMIT
-    @test bytes_per_cell(() -> Hydro3D.enforce_floors!(sim.U, sim.eos, g, sim.floors),
+    @test bytes_per_cell(() -> Honghu.enforce_floors!(sim.U, sim.eos, g, sim.floors),
                          sim) < LIMIT
     for recon in (PCM(), PLM(), PPM())
-        @test bytes_per_cell(() -> Hydro3D.reconstruct!(hw.qL, hw.qR, hw.prim, recon,
-                                                        Val(1), g, Hydro3D.NHYDRO), sim) < LIMIT
+        @test bytes_per_cell(() -> Honghu.reconstruct!(hw.qL, hw.qR, hw.prim, recon,
+                                                       Val(1), g, Honghu.NHYDRO), sim) < LIMIT
     end
-    @test bytes_per_cell(() -> Hydro3D.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim,
-                                                     sim.eos, sim.riemann, Val(1), g), sim) < LIMIT
-    @test bytes_per_cell(() -> Hydro3D.flux_divergence!(hw.dU, hw.flux, Val(1), g,
-                                                        Hydro3D.NHYDRO), sim) < LIMIT
-    @test bytes_per_cell(() -> Hydro3D.combine!(sim.U, 0.5, hw.U0, 0.5, sim.U, 0.1,
-                                                hw.dU, g, Hydro3D.NHYDRO), sim) < LIMIT
-    @test bytes_per_cell(() -> Hydro3D.hydro_timestep(hw.prim, sim.eos, g, 0.4), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim,
+                                                    sim.eos, sim.riemann, Val(1), g), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.flux_divergence!(hw.dU, hw.flux, Val(1), g,
+                                                       Honghu.NHYDRO), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.combine!(sim.U, 0.5, hw.U0, 0.5, sim.U, 0.1,
+                                               hw.dU, g, Honghu.NHYDRO), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.hydro_timestep(hw.prim, sim.eos, g, 0.4), sim) < LIMIT
 end
 
 @testset "radiation kernels do not allocate per cell" begin
@@ -64,42 +64,42 @@ end
     end
     rw = sim.rw
     g = sim.grid
-    Hydro3D.rad_cons2prim!(rw.prim, sim.R, rad, g)
+    Honghu.rad_cons2prim!(rw.prim, sim.R, rad, g)
 
-    @test bytes_per_cell(() -> Hydro3D.rad_cons2prim!(rw.prim, sim.R, rad, g),
+    @test bytes_per_cell(() -> Honghu.rad_cons2prim!(rw.prim, sim.R, rad, g),
                          sim) < LIMIT
-    @test bytes_per_cell(() -> Hydro3D.enforce_rad_floors!(sim.R, rad, g, sim.floors),
+    @test bytes_per_cell(() -> Honghu.enforce_rad_floors!(sim.R, rad, g, sim.floors),
                          sim) < LIMIT
-    @test bytes_per_cell(() -> Hydro3D.reconstruct!(rw.qL, rw.qR, rw.prim, PPM(), Val(1),
-                                                    g, Hydro3D.NRAD), sim) < LIMIT
-    @test bytes_per_cell(() -> Hydro3D.rad_fluxes!(rw.flux, rw.qL, rw.qR, sim.R,
-                                                   rw.chat, rad, Val(1), g), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.reconstruct!(rw.qL, rw.qR, rw.prim, PPM(), Val(1),
+                                                   g, Honghu.NRAD), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.rad_fluxes!(rw.flux, rw.qL, rw.qR, sim.R,
+                                                  rw.chat, rad, Val(1), g), sim) < LIMIT
     # The `chat` limiter runs once per IMEX substep over the whole array, ghost
     # cells included. `group_opacities` and `_signal_sum` (through
     # `eddington_tensor`) both build `SVec`s inside the cell loop, which is
     # exactly the shape that boxed and allocated before.
     lrad = RadiationPhysics(c=10.0, chat=1.0, a_rad=1.0, opacity=ConstantOpacity(1.0),
                             chat_limiter=StabilityBound())
-    @test bytes_per_cell(() -> Hydro3D.update_chat!(rw.chat, sim.U, sim.R, sim.eos, lrad,
-                                                    g, sim.floors, 1e-3), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.update_chat!(rw.chat, sim.U, sim.R, sim.eos, lrad,
+                                                   g, sim.floors, 1e-3), sim) < LIMIT
 
     # the one that regressed
-    @test bytes_per_cell(() -> Hydro3D.radiation_source_step!(sim.U, sim.R, rw.chat,
-                                                              sim.eos, rad, g, 1e-3,
-                                                              nothing, 0.0, sim.floors), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.radiation_source_step!(sim.U, sim.R, rw.chat,
+                                                             sim.eos, rad, g, 1e-3,
+                                                             nothing, 0.0, sim.floors), sim) < LIMIT
     # and with beta_order = 0, which takes the other branch
     rad0 = RadiationPhysics(c=10.0, chat=1.0, a_rad=1.0, opacity=ConstantOpacity(1.0),
                             beta_order=0)
-    @test bytes_per_cell(() -> Hydro3D.radiation_source_step!(sim.U, sim.R, rw.chat,
-                                                              sim.eos, rad0, g, 1e-3,
-                                                              nothing, 0.0, sim.floors), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.radiation_source_step!(sim.U, sim.R, rw.chat,
+                                                             sim.eos, rad0, g, 1e-3,
+                                                             nothing, 0.0, sim.floors), sim) < LIMIT
     # and with dust, which sends even a grey run through the multigroup driver
     # and the dust-temperature solve
     radd = RadiationPhysics(c=10.0, chat=1.0, a_rad=1.0, opacity=ConstantOpacity(1.0),
                             beta_order=1, dust=BateKetoDust(coefficient=1.0))
-    @test bytes_per_cell(() -> Hydro3D.radiation_source_step!(sim.U, sim.R, rw.chat,
-                                                              sim.eos, radd, g, 1e-3,
-                                                              nothing, 0.0, sim.floors), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.radiation_source_step!(sim.U, sim.R, rw.chat,
+                                                             sim.eos, radd, g, 1e-3,
+                                                             nothing, 0.0, sim.floors), sim) < LIMIT
 end
 
 @testset "a full step scales linearly in cells" begin

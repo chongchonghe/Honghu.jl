@@ -215,7 +215,7 @@ function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
     g = sim.grid
     open(path, "r") do f
         magic = read(f, length(_CHECKPOINT_MAGIC))
-        magic == _CHECKPOINT_MAGIC || error("$path is not a Hydro3D checkpoint")
+        magic == _CHECKPOINT_MAGIC || error("$path is not a Honghu checkpoint")
         read(f, Int64) == sizeof(T) || error("checkpoint precision does not match the simulation")
         for d in 1:3
             read(f, Int64) == g.n[d] || error("checkpoint grid size does not match the simulation")

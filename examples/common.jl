@@ -60,7 +60,7 @@ function plotting_note()
     else
         println("  (no figure: Plots is not available. Install it with")
         println("     julia -e 'using Pkg; Pkg.add(\"Plots\")'")
-        println("   and rerun; Hydro3D's plotting methods load automatically.)")
+        println("   and rerun; Honghu's plotting methods load automatically.)")
     end
     return nothing
 end

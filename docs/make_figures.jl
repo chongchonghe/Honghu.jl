@@ -10,10 +10,10 @@
 
 ENV["GKSwstype"] = "100"          # headless GR
 
-using Hydro3D
+using Honghu
 using Plots
 using Printf
-const P = Hydro3D.Problems
+const P = Honghu.Problems
 
 const OUT = joinpath(@__DIR__, "figures")
 mkpath(OUT)
@@ -42,7 +42,7 @@ function figure_sod(nx=256)
          "specific internal energy")))
         pl = plot(xe, exact; lw=2, c=:black, label=idx == 1 ? "exact" : "",
                   xlabel="x", ylabel=lbl)
-        scatter!(pl, x, num; ms=2, msw=0, c=1, label=idx == 1 ? "Hydro3D (PPM, $nx cells)" : "")
+        scatter!(pl, x, num; ms=2, msw=0, c=1, label=idx == 1 ? "Honghu (PPM, $nx cells)" : "")
         push!(panels, pl)
     end
     save(plot(panels...; layout=(2, 2), size=(900, 620),
@@ -126,8 +126,8 @@ function figure_radshock(nx=256)
     full = plot(xe, Tme; lw=2, c=:black, label="T_matter, semi-analytic",
                 xlabel="x", ylabel="temperature", legend=:topleft)
     plot!(full, xe, Tre; lw=2, c=:gray, ls=:dash, label="T_radiation, semi-analytic")
-    scatter!(full, x, Tg; ms=2.2, msw=0, c=1, label="T_matter, Hydro3D")
-    scatter!(full, x, Tr; ms=2.2, msw=0, c=2, label="T_radiation, Hydro3D")
+    scatter!(full, x, Tg; ms=2.2, msw=0, c=1, label="T_matter, Honghu")
+    scatter!(full, x, Tr; ms=2.2, msw=0, c=2, label="T_radiation, Honghu")
 
     # the Zel'dovich spike is the reason this test is hard: zoom in on it
     zoom = plot(xe, Tme; lw=2, c=:black, label="", xlabel="x", ylabel="temperature",

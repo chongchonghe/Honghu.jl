@@ -1,6 +1,6 @@
 # How this documentation is built
 
-This page explains how the documentation site of Hydro3D.jl is made, where each page comes from, and what to edit to change it. It is written for anyone who changes the code or the documentation, coding agents included.
+This page explains how the documentation site of Honghu.jl is made, where each page comes from, and what to edit to change it. It is written for anyone who changes the code or the documentation, coding agents included.
 
 ## What the site contains
 
@@ -11,7 +11,7 @@ This page explains how the documentation site of Hydro3D.jl is made, where each 
 | Notes | `docs/*.md`: the four technical notes and this page | rendered as they are |
 | Figures | `docs/figures/` | made by `docs/make_figures.jl` and `docs/make_animations.jl` |
 
-Every page is published twice, from the same source and in the same build: as HTML, and as Markdown. The Markdown copy of `x.html` is `x.md` in the same folder, and the line "Markdown: this page" at the top of each HTML page links to it. The copy is the page's source itself. The only change is that links to other pages point at their `.md` copies instead of their `.qmd` sources. Two more files sit at the site root: `hydro3d-docs.md`, which holds all pages in one file in navigation order, and `llms.txt`, an index of the Markdown pages in the llms.txt format. Both exist so that a person or a coding agent can read the whole documentation as plain text.
+Every page is published twice, from the same source and in the same build: as HTML, and as Markdown. The Markdown copy of `x.html` is `x.md` in the same folder, and the line "Markdown: this page" at the top of each HTML page links to it. The copy is the page's source itself. The only change is that links to other pages point at their `.md` copies instead of their `.qmd` sources. Two more files sit at the site root: `honghu-docs.md`, which holds all pages in one file in navigation order, and `llms.txt`, an index of the Markdown pages in the llms.txt format. Both exist so that a person or a coding agent can read the whole documentation as plain text.
 
 `docs/index.qmd` and everything in `docs/reference/` are build products. They are not in git, and the next build overwrites them, so edit the README and the docstrings instead.
 
@@ -19,13 +19,13 @@ Every page is published twice, from the same source and in the same build: as HT
 
 `julia --project=. docs/make.jl` does five things, in this order.
 
-1. **Collect the docstrings.** It loads Hydro3D and reads every docstring in `Hydro3D`, `Hydro3D.Problems` and `Hydro3D.CGS` through `Docs.meta`. Each documented name becomes one entry, on the reference page its source file belongs to; the `PAGES` table at the top of `docs/make.jl` assigns files to pages. On each page, exported names come first, under "Exported", and documented names that are not exported come after, under "Internals". The constants in `CGS` count as public, because that module exports nothing by design. A name without a docstring does not appear at all.
-2. **Write the pages.** Each docstring is copied as written, with five small changes (see [A docstring](#a-docstring) below). The script also writes `docs/reference/index.qmd`, which holds the `Hydro3D` module docstring and a list of all pages with their exported names, and `docs/index.qmd` from the README.
+1. **Collect the docstrings.** It loads Honghu and reads every docstring in `Honghu`, `Honghu.Problems` and `Honghu.CGS` through `Docs.meta`. Each documented name becomes one entry, on the reference page its source file belongs to; the `PAGES` table at the top of `docs/make.jl` assigns files to pages. On each page, exported names come first, under "Exported", and documented names that are not exported come after, under "Internals". The constants in `CGS` count as public, because that module exports nothing by design. A name without a docstring does not appear at all.
+2. **Write the pages.** Each docstring is copied as written, with five small changes (see [A docstring](#a-docstring) below). The script also writes `docs/reference/index.qmd`, which holds the `Honghu` module docstring and a list of all pages with their exported names, and `docs/index.qmd` from the README.
 3. **Render.** `quarto render docs` turns the pages into HTML in `docs/_site/`. The Quarto project is `docs/_quarto.yml`. Its `render:` list says which files are pages, so the scripts and the internal notes elsewhere in `docs/` stay off the site. The Lua filter `docs/source-links.lua` adds the Markdown links to the top of every page, and makes the leading `# Title` of a note its page title.
-4. **Write the Markdown copies,** the bundle `hydro3d-docs.md` and `llms.txt` into `docs/_site/`.
+4. **Write the Markdown copies,** the bundle `honghu-docs.md` and `llms.txt` into `docs/_site/`.
 5. **Check,** and fail on any problem listed in [What fails the build](#what-fails-the-build).
 
-After Hydro3D is precompiled, a full build takes about 15 seconds. It runs no simulation, and no code block in a docstring or a page is ever executed.
+After Honghu is precompiled, a full build takes about 15 seconds. It runs no simulation, and no code block in a docstring or a page is ever executed.
 
 ## Building and previewing locally
 
@@ -47,7 +47,7 @@ python3 -m http.server -d docs/_site            # serve a full build at http://l
 Edit it in `src/`. The next build picks it up and nothing else needs to change. Write docstrings as you would for Documenter:
 
 - Start with the signature, indented by four spaces. It becomes a highlighted Julia code block.
-- Link to another documented name with `` [`name`](@ref) ``. The forms `` [`Hydro3D.name`](@ref) `` and `` [`name(args)`](@ref) `` link to the same entry. The target must have a docstring: a link to an undocumented name fails the build. Fix that by writing the missing docstring, not by removing the brackets. The form `[text](@ref name)` is not supported and also fails.
+- Link to another documented name with `` [`name`](@ref) ``. The forms `` [`Honghu.name`](@ref) `` and `` [`name(args)`](@ref) `` link to the same entry. The target must have a docstring: a link to an undocumented name fails the build. Fix that by writing the missing docstring, not by removing the brackets. The form `[text](@ref name)` is not supported and also fails.
 - Headers such as `# Example` are moved down three levels, so that they sit below the entry's own heading.
 - An admonition, `!!! warning "Title"` followed by a body indented by four spaces, becomes a Quarto callout. `note`, `tip`, `warning` and `danger` are recognised.
 - A `jldoctest` block is shown as a plain `julia` block.
@@ -63,7 +63,7 @@ Add an entry `"name" => ("Title", ["file.jl", ...])` to `PAGES`, and add `refere
 
 ### The front page
 
-Edit `README.md`. The build copies it to `docs/index.qmd`. It drops the first line, `# Hydro3D.jl`, which becomes the page title, and it rewrites the links that are written for GitHub's view of the repository: `docs/figures/...` becomes `figures/...`, and the links to `future.md` and `../Hydro.jl` become GitHub URLs (`write_index` in `docs/make.jl`). Any other relative link in the README must point at something on the site, or the link check fails. To link to another file in the repository, use its full GitHub URL.
+Edit `README.md`. The build copies it to `docs/index.qmd`. It drops the first line, `# Honghu.jl`, which becomes the page title, and it rewrites the links that are written for GitHub's view of the repository: `docs/figures/...` becomes `figures/...`, and the links to `future.md` and `../Hydro.jl` become GitHub URLs (`write_index` in `docs/make.jl`). Any other relative link in the README must point at something on the site, or the link check fails. To link to another file in the repository, use its full GitHub URL.
 
 ### A note
 
@@ -99,7 +99,7 @@ The anchor of an entry is its name, with `!` written as `-bang` and every other 
 
 ## Deployment
 
-`.github/workflows/docs.yml` builds the site on every push and every pull request, and deploys it to GitHub Pages from `main`, at <https://chongchonghe.github.io/hydro3d.jl/>. A pull request that breaks the build fails its check before it is merged. Deployment needs one setting in the repository: Settings, Pages, Build and deployment, Source "GitHub Actions". The workflow pins Quarto to 1.9.38, the version the site was built and checked with. Raise it on purpose, after a local build with the new version, because Quarto's link handling has changed between releases.
+`.github/workflows/docs.yml` builds the site on every push and every pull request, and deploys it to GitHub Pages from `main`, at <https://chongchonghe.github.io/Honghu.jl/>. A pull request that breaks the build fails its check before it is merged. Deployment needs one setting in the repository: Settings, Pages, Build and deployment, Source "GitHub Actions". The workflow pins Quarto to 1.9.38, the version the site was built and checked with. Raise it on purpose, after a local build with the new version, because Quarto's link handling has changed between releases.
 
 ## Why it is built this way
 

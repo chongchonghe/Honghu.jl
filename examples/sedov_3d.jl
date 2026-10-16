@@ -9,10 +9,10 @@
 # one radial profile) plus a VTK series under sedov/. In ParaView, a Contour
 # filter on "density" shows the spherical shell.
 
-using Hydro3D
+using Honghu
 using Printf
 include(joinpath(@__DIR__, "common.jl"))
-const P = Hydro3D.Problems
+const P = Honghu.Problems
 
 n = isempty(OPTS) ? 96 : parse(Int, OPTS[1])
 

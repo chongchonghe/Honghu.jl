@@ -46,7 +46,7 @@ callables `metric(sim) -> Real` evaluated on the finished simulation.
 [`compare`](@ref) uses these when you do not pass `metrics` yourself, so
 
 ```julia
-compare(Hydro3D.Problems.radhydro_shock, variants; nx = (64, 128, 256))
+compare(Honghu.Problems.radhydro_shock, variants; nx = (64, 128, 256))
 ```
 
 needs no configuration at all.

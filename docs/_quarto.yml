@@ -15,9 +15,9 @@ project:
     - documentation.md
 
 website:
-  title: "Hydro3D.jl"
-  site-url: https://chongchonghe.github.io/hydro3d.jl/
-  repo-url: https://github.com/chongchonghe/hydro3d.jl
+  title: "Honghu.jl"
+  site-url: https://chongchonghe.github.io/Honghu.jl/
+  repo-url: https://github.com/chongchonghe/Honghu.jl
   navbar:
     left:
       - href: index.qmd
@@ -43,7 +43,7 @@ website:
           - documentation.md
     right:
       - icon: github
-        href: https://github.com/chongchonghe/hydro3d.jl
+        href: https://github.com/chongchonghe/Honghu.jl
 
 format:
   html:

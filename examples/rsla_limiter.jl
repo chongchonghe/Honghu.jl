@@ -19,8 +19,8 @@
 #   4. resolution: tau_cell scales with dx, so the advantage should move
 
 include("common.jl")
-using Hydro3D
-using Hydro3D.Problems
+using Honghu
+using Honghu.Problems
 using Printf
 
 l1(T, ref) = sum(abs, T .- ref) / sum(abs, ref)

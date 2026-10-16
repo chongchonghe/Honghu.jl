@@ -131,7 +131,7 @@ ODE instead.
 `1e-3, 0.1, 1, 10, 1e3`); with a constant opacity the answer does not depend on
 the grouping, which is the point of that test.
 """
-function rad_dust(; n::Integer=8, groups::Hydro3D.RadiationGroups=Hydro3D.GREY, chat_over_c=0.1,
+function rad_dust(; n::Integer=8, groups::Honghu.RadiationGroups=Honghu.GREY, chat_over_c=0.1,
                   coefficient=1e6, kappa=1e4, kwargs...)
     c = 1e8
     rad = RadiationPhysics(; c, chat=chat_over_c * c, a_rad=1.0, groups, beta_order=0,
@@ -157,7 +157,7 @@ and the `E_g` evolved, `T_d` solved at every evaluation from the dust balance --
 integrated with `Rodas5P` at `reltol = 1e-10`. With a constant opacity the dust
 balance is monotone in `T_d`, so that inner solve has one root and a bracket.
 """
-function rad_dust_reference(ts; groups::Hydro3D.RadiationGroups{NG}=Hydro3D.GREY, chat_over_c=0.1,
+function rad_dust_reference(ts; groups::Honghu.RadiationGroups{NG}=Honghu.GREY, chat_over_c=0.1,
                             coefficient=1e6, kappa=1e4) where {NG}
     c, chat, cv, rho, arad, kB = 1e8, chat_over_c * 1e8, 1.5, 1.0, 1.0, 1.0
     K = coefficient * rho^2
@@ -168,8 +168,8 @@ function rad_dust_reference(ts; groups::Hydro3D.RadiationGroups{NG}=Hydro3D.GREY
         # at fixed T and E the balance increases with T_d: bracket from zero to
         # above both the gas and the radiation temperature
         hi = 2 * max(T, (max(sum(E), 0.0) / arad)^0.25) + 1
-        Hydro3D.solve(Hydro3D.IntervalNonlinearProblem{false}(h, (1e-12, hi), nothing),
-                      Hydro3D.ZBrent(); abstol=0.0).u
+        Honghu.solve(Honghu.IntervalNonlinearProblem{false}(h, (1e-12, hi), nothing),
+                     Honghu.ZBrent(); abstol=0.0).u
     end
     function rhs(u, _, _)
         T = max(u[1] / cv, 1e-12)
@@ -181,8 +181,8 @@ function rad_dust_reference(ts; groups::Hydro3D.RadiationGroups{NG}=Hydro3D.GREY
     end
     u0 = vcat(cv * 1.0, fill(1e-20 / NG, NG))
     prob = ODEProblem(rhs, u0, (0.0, maximum(ts)))
-    sol = Hydro3D.solve(prob, Rodas5P(autodiff=AutoFiniteDiff()); reltol=1e-10,
-                        abstol=1e-14, saveat=ts)
+    sol = Honghu.solve(prob, Rodas5P(autodiff=AutoFiniteDiff()); reltol=1e-10,
+                       abstol=1e-14, saveat=ts)
     return ([u[1] / cv for u in sol.u], [sum(u[2:end]) for u in sol.u])
 end
 
@@ -264,7 +264,7 @@ times.
 function radhydro_shock(; n::Integer=256, nx::Integer=n,
                         closure::AbstractClosure=EddingtonClosure(),
                         beta_order::Integer=1, chat_factor=10.0,
-                        chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
+                        chat_limiter::Honghu.AbstractChatLimiter=ConstantChat(),
                         kwargs...)
     # upstream (left) and downstream (right) Rankine-Hugoniot states at Mach 3
     Lx = 0.01578396467532876                      # 9.11 mean free paths
@@ -295,7 +295,7 @@ a limiter should be scored against; `tmax` is three shock-crossing times.
 function radhydro_shock_super(; n::Integer=128, nx::Integer=n, chat_over_c=0.025,
                               closure::AbstractClosure=EddingtonClosure(),
                               beta_order::Integer=1,
-                              chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
+                              chat_limiter::Honghu.AbstractChatLimiter=ConstantChat(),
                               kwargs...)
     c = sqrt(3 * 1.0e6)
     sim = _lowrie_edwards_shock(; nx, closure, beta_order, chat_limiter,
@@ -444,8 +444,8 @@ radiation temperature.
 """
 function marshak_vaytet(; n::Integer=64, nx::Integer=n, ngroups::Integer=4, Lx=20.0,
                         chat_over_c=1.0,
-                        chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
-                        coupling::Hydro3D.AbstractCoupling=QuokkaCoupling(),
+                        chat_limiter::Honghu.AbstractChatLimiter=ConstantChat(),
+                        coupling::Honghu.AbstractCoupling=QuokkaCoupling(),
                         closure::AbstractClosure=LevermoreClosure(), kwargs...)
     rho0 = 1.0e-3               # g cm^-3
     T_initial = 300.0           # K
@@ -456,12 +456,12 @@ function marshak_vaytet(; n::Integer=64, nx::Integer=n, ngroups::Integer=4, Lx=2
     kappa0 = 2000.0             # cm^2 g^-1 at the pivot frequency
     nu_pivot = 4.0e13           # Hz
 
-    c = Hydro3D.CGS.c_light
-    a_rad = Hydro3D.CGS.a_rad
-    k_B = Hydro3D.CGS.k_B
+    c = Honghu.CGS.c_light
+    a_rad = Honghu.CGS.a_rad
+    k_B = Honghu.CGS.k_B
 
     groups = RadiationGroups(6.0e10, 6.0e14, ngroups;
-                             energy_unit=Hydro3D.CGS.h_planck, spacing=:log)
+                             energy_unit=Honghu.CGS.h_planck, spacing=:log)
     # No grey value: kappa really does depend on frequency here, and letting a
     # single-group run silently pick one would be the bug FrequencyOpacity exists
     # to prevent.
@@ -476,8 +476,8 @@ function marshak_vaytet(; n::Integer=64, nx::Integer=n, ngroups::Integer=4, Lx=2
     # the grey Marshak wave.
     fracL = planck_fractions(groups, T_L, k_B)
     EL = a_rad * T_L^4
-    wall = Fixed(ntuple(Hydro3D.NRAD * ngroups) do m
-        gr, comp = divrem(m - 1, Hydro3D.NRAD)
+    wall = Fixed(ntuple(Honghu.NRAD * ngroups) do m
+        gr, comp = divrem(m - 1, Honghu.NRAD)
         comp == 0 ? EL * fracL[gr+1] : 0.0
     end)
     outflow = (Outflow(), Outflow())
@@ -516,7 +516,7 @@ function total_erad(sim)
     ir, jr, kr = g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]
     out = zeros(eltype(sim.R), length(ir), length(jr), length(kr))
     for gr in 1:NG
-        out .+= @view sim.R[Hydro3D.gbase(gr)+Hydro3D.IERAD, ir, jr, kr]
+        out .+= @view sim.R[Honghu.gbase(gr)+Honghu.IERAD, ir, jr, kr]
     end
     return out
 end
@@ -542,13 +542,13 @@ stability bound caps `phi` at the RSLA step (see [`StabilityBound`](@ref)).
 """
 function radhydro_pulse_dyn(; n::Integer=128, nx::Integer=n, chat_over_c=1.0, v0=3e7,
                             kappa0=500.0,
-                            chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
+                            chat_limiter::Honghu.AbstractChatLimiter=ConstantChat(),
                             beta_order::Integer=1, wavespeed_correction::Bool=false,
                             kwargs...)
-    c = Hydro3D.CGS.c_light
-    a_rad = Hydro3D.CGS.a_rad
-    k_B = Hydro3D.CGS.k_B
-    mu = 2.33 * Hydro3D.CGS.m_u
+    c = Honghu.CGS.c_light
+    a_rad = Honghu.CGS.a_rad
+    k_B = Honghu.CGS.k_B
+    mu = 2.33 * Honghu.CGS.m_u
     gamma = 5 / 3
     cv = k_B / (mu * (gamma - 1))
     T_lo, T_hi, rho0, width = 1.0e7, 2.0e7, 1.2, 24.0

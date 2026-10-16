@@ -2,7 +2,7 @@
 #
 # `field` is useful on its own and needs nothing external. The three plotting
 # functions are declared here but left without methods: those live in
-# `ext/Hydro3DPlotsExt.jl` and appear as soon as the user loads Plots. Keeping
+# `ext/HonghuPlotsExt.jl` and appear as soon as the user loads Plots. Keeping
 # them out of the package proper means solving does not drag in a plotting
 # stack.
 
@@ -152,7 +152,7 @@ function _require_radiation(sim::Simulation, name::Symbol)
         throw(ArgumentError("field $name needs the radiation module, which is disabled"))
 end
 
-const _PLOTS_HINT = "run `using Plots` first; Hydro3D's plotting methods live in a package extension"
+const _PLOTS_HINT = "run `using Plots` first; Honghu's plotting methods live in a package extension"
 
 """
     plotstate(sim; var = :density, slice = nothing, kwargs...)
@@ -167,8 +167,8 @@ index in 3D. Remaining keyword arguments pass through to Plots.
 **Requires `using Plots`.**
 
 ```julia
-using Plots, Hydro3D
-sim, tmax = Hydro3D.Problems.kelvin_helmholtz(n = 256)
+using Plots, Honghu
+sim, tmax = Honghu.Problems.kelvin_helmholtz(n = 256)
 run!(sim; tmax)
 plotstate(sim, var = :density)
 ```
@@ -188,7 +188,7 @@ function plotpanels end
 
 """
     animate_run(sim; tmax, nframes = 100, var = :density, fps = 20,
-                filename = "hydro3d.gif", kwargs...)
+                filename = "honghu.gif", kwargs...)
 
 Integrate `sim` to `tmax` while capturing `nframes` evenly spaced frames of
 `var`, and write an animated GIF. Returns the file name.
@@ -199,8 +199,8 @@ Named `animate_run` rather than `animate` so that it does not collide with
 **Requires `using Plots`.**
 
 ```julia
-using Plots, Hydro3D
-sim, tmax = Hydro3D.Problems.kelvin_helmholtz(n = 256)
+using Plots, Honghu
+sim, tmax = Honghu.Problems.kelvin_helmholtz(n = 256)
 animate_run(sim; tmax, var = :density, filename = "kh.gif")
 ```
 """
@@ -217,7 +217,7 @@ Accepts tables or the paths to tables written by [`compare`](@ref), so a figure
 can be redrawn from stored numbers without re-running any simulation:
 
 ```julia
-using Plots, Hydro3D
+using Plots, Honghu
 plotcompare("radhydro_shock_compare.txt")
 ```
 

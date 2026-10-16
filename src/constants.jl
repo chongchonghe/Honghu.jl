@@ -1,9 +1,9 @@
 """
-    Hydro3D.CGS
+    Honghu.CGS
 
 Physical constants in CGS units (2018 CODATA where applicable).
 
-Hydro3D is unit-agnostic: every physical parameter (`RadiationPhysics.c`,
+Honghu is unit-agnostic: every physical parameter (`RadiationPhysics.c`,
 `IdealGas.cv`, opacities, ...) is supplied by the user. Use these when you want
 to run in CGS; use your own numbers when you want code units.
 """

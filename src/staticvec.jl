@@ -1,6 +1,6 @@
 # Minimal stack-allocated fixed-size vector.
 #
-# Hydro3D deliberately has no external dependencies, so instead of StaticArrays
+# Honghu deliberately has no external dependencies, so instead of StaticArrays
 # we carry this ~50-line type. It exists so that the Riemann solvers can be
 # written in vector form (the way the papers write them) without allocating.
 
@@ -14,7 +14,7 @@ Supports the arithmetic used by the Riemann solvers: `+`, `-`, scalar `*` and
 stray broadcast cannot silently allocate a heap array in a hot loop.
 
 ```jldoctest
-julia> Hydro3D.SVec(1.0, 2.0) + Hydro3D.SVec(3.0, 4.0)
+julia> Honghu.SVec(1.0, 2.0) + Honghu.SVec(3.0, 4.0)
 SVec{2, Float64}(4.0, 6.0)
 ```
 """
@@ -71,7 +71,7 @@ Largest absolute component, for convergence tests on a group vector.
 """
     dot(a::SVec, b::SVec)
 
-Euclidean inner product. (Local to Hydro3D; not `LinearAlgebra.dot`.)
+Euclidean inner product. (Local to Honghu; not `LinearAlgebra.dot`.)
 """
 @inline dot(a::SVec{N}, b::SVec{N}) where {N} = sum(map(*, a.data, b.data))
 

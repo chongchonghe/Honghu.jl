@@ -1,6 +1,6 @@
 # The production matter-radiation coupling: `BracketedCoupling`
 
-This document describes the multigroup matter-radiation coupling solver Hydro3D uses in production, `BracketedCoupling`, and is complete on its own: the physics, the derivation, the algorithm, the choice of root-finder, and the measurements. It is the default for every run with $N_G \ge 2$ frequency groups; `RadiationPhysics(coupling = BracketedCoupling())` states it explicitly. The code is `solve_coupling(::BracketedCoupling, …)` in `src/coupling_solvers.jl` and the functions it calls in `src/coupling.jl`. Every number below is reproduced by `docs/coupling-experiments/coupling_study.jl` (§8).
+This document describes the multigroup matter-radiation coupling solver Honghu uses in production, `BracketedCoupling`, and is complete on its own: the physics, the derivation, the algorithm, the choice of root-finder, and the measurements. It is the default for every run with $N_G \ge 2$ frequency groups; `RadiationPhysics(coupling = BracketedCoupling())` states it explicitly. The code is `solve_coupling(::BracketedCoupling, …)` in `src/coupling_solvers.jl` and the functions it calls in `src/coupling.jl`. Every number below is reproduced by `docs/coupling-experiments/coupling_study.jl` (§8).
 
 In one paragraph: one backward-Euler step of the coupling is a system of $1 + N_G$ nonlinear equations, but its $N_G$ group equations are linear in the group energies, so they are solved in closed form and the whole step reduces to **one scalar equation in the gas energy** — the statement that the cell's total energy is unchanged. That equation always has a sign change on a known interval, so it is handed as a lambda to a **bracketing root-finder** — by default `ZBrent`, Brent's method as Brent wrote it. Nothing in the solve forms a matrix or allocates memory, and over a 240-cell sweep spanning three opacity laws and sixteen decades of optical depth it fails on none.
 
@@ -238,13 +238,13 @@ The three root-finders give the same temperature field on every problem, to the 
 
 The two defects of §5.1 are reported upstream with a fix, as [SciML/NonlinearSolve.jl#1340](https://github.com/SciML/NonlinearSolve.jl/pull/1340) (opened 2026-09-28, from the branch `brent-zbrent-minimum-step` of the fork `chongchonghe/NonlinearSolve.jl`). It replaces the library's loop with Brent's `zero` / `zbrent`, so the library's `Brent` evaluates $f$ once per iteration and takes the minimum step. On the functions of §5.1 it brings the library's counts down to `ZBrent`'s: 20 to 9 on $x^2 - 2$ and 62 to 12 on $x^4 - 2$.
 
-**If it is merged and released, Hydro3D can drop `ZBrent`** and make `BracketingNonlinearSolve.Brent()` the default `root_finder`. BracketingNonlinearSolve then moves back from `[extras]` to `[deps]`, because the package would call it, and `src/rootfind.jl` is deleted. Before switching, on the released version:
+**If it is merged and released, Honghu can drop `ZBrent`** and make `BracketingNonlinearSolve.Brent()` the default `root_finder`. BracketingNonlinearSolve then moves back from `[extras]` to `[deps]`, because the package would call it, and `src/rootfind.jl` is deleted. Before switching, on the released version:
 
 1. Run the `rootfind` section of `coupling_study.jl` and check that the library's `Brent` matches `ZBrent` in §5.2 and §5.3: about 12 evaluations and 1.9 μs per cell over the sweep, 0 bytes at every group count.
 2. Repoint the minimum-step test in `test/test_rootfind.jl` ($x^4 - 2$ in at most 14 evaluations) at the library's `Brent` rather than deleting it.
 3. Update §4.1, §5 and §8 of this document and CLAUDE.md to match.
 
-Until then `ZBrent` stays, and nothing in Hydro3D depends on the PR. The handoff for finishing the PR is `HANDOFF-PR1340.md` in the clone `NonlinearSolve.jl/`, next to this repository.
+Until then `ZBrent` stays, and nothing in Honghu depends on the PR. The handoff for finishing the PR is `HANDOFF-PR1340.md` in the clone `NonlinearSolve.jl/`, next to this repository.
 
 ## 6. Accuracy and cost
 
@@ -276,7 +276,7 @@ The peak, 6% at $\tau \sim 1$, is a property of the time discretisation, not of 
 | `src/coupling.jl` | `coupling_coefficients`, `group_energy_values`, `group_energies`, `energy_balance` (§2.3) |
 | `src/coupling_solvers.jl` | `BracketedCoupling`, its `solve_coupling`, `_energy_bracket` (§3.3, §4) |
 | `src/rootfind.jl` | `ZBrent`, and its method of SciMLBase's `solve` (§5.1) |
-| `src/Hydro3D.jl` | the selective import of `IntervalNonlinearProblem` and `ReturnCode` from SciMLBase |
+| `src/Honghu.jl` | the selective import of `IntervalNonlinearProblem` and `ReturnCode` from SciMLBase |
 | `test/test_rootfind.jl` | `ZBrent` alone: each point evaluated once, the minimum step on $x^4 - 2$ (fails without it: 50 evaluations against a limit of 14), edge cases, zero allocation |
 | `test/test_radiation_multigroup.jl` | zero-byte allocation of the coupling; the testset "BracketedCoupling: the root-finder chooses how, not what", which pins §3.3, §4.3 and agreement between `ZBrent`, the library's Brent, ModAB, ITP and Bisection |
 

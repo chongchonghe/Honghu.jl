@@ -9,7 +9,7 @@
 # hand-rolled loop so the numbers come from warmed-up, minimum-over-samples
 # statistics instead of whatever the first call happened to cost.
 
-using Hydro3D
+using Honghu
 using BenchmarkTools
 using Printf
 
@@ -33,7 +33,7 @@ function bench_steps(ns=(32, 64))
     for radiation in (false, true), n in ns
         sim = setup(n; radiation)
         # a fixed dt keeps every sample doing identical work
-        dt = Hydro3D.timestep(sim)
+        dt = Honghu.timestep(sim)
         b = @benchmark step!($sim, $dt) samples = 12 evals = 1 seconds = 20
         ms = minimum(b).time / 1e6
         @printf("%-8s %-6s %12.2f %14.2f %12.1f\n",
@@ -45,20 +45,20 @@ end
 function bench_kernels(n=64)
     sim = setup(n; radiation=true)
     hw, rw, g = sim.hw, sim.rw, sim.grid
-    Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g)
-    Hydro3D.rad_cons2prim!(rw.prim, sim.R, sim.radiation, g)
+    Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g)
+    Honghu.rad_cons2prim!(rw.prim, sim.R, sim.radiation, g)
     cells = prod(g.n)
 
     kernels = (
-        ("cons2prim", () -> Hydro3D.cons2prim!(hw.prim, sim.U, sim.eos, g)),
-        ("reconstruct PLM", () -> Hydro3D.reconstruct!(hw.qL, hw.qR, hw.prim, PLM(), Val(1), g, 5)),
-        ("reconstruct PPM", () -> Hydro3D.reconstruct!(hw.qL, hw.qR, hw.prim, PPM(), Val(1), g, 5)),
-        ("HLLC sweep", () -> Hydro3D.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(1), g)),
-        ("HLL rad sweep", () -> Hydro3D.rad_fluxes!(rw.flux, rw.qL, rw.qR, sim.R, rw.chat, sim.radiation, Val(1), g)),
-        ("implicit source", () -> Hydro3D.radiation_source_step!(sim.U, sim.R, rw.chat,
-                                                                 sim.eos, sim.radiation,
-                                                                 g, 1e-3, nothing, 0.0,
-                                                                 sim.floors)),
+        ("cons2prim", () -> Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g)),
+        ("reconstruct PLM", () -> Honghu.reconstruct!(hw.qL, hw.qR, hw.prim, PLM(), Val(1), g, 5)),
+        ("reconstruct PPM", () -> Honghu.reconstruct!(hw.qL, hw.qR, hw.prim, PPM(), Val(1), g, 5)),
+        ("HLLC sweep", () -> Honghu.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(1), g)),
+        ("HLL rad sweep", () -> Honghu.rad_fluxes!(rw.flux, rw.qL, rw.qR, sim.R, rw.chat, sim.radiation, Val(1), g)),
+        ("implicit source", () -> Honghu.radiation_source_step!(sim.U, sim.R, rw.chat,
+                                                                sim.eos, sim.radiation,
+                                                                g, 1e-3, nothing, 0.0,
+                                                                sim.floors)),
     )
     @printf("\n%-18s %12s %14s %12s\n", "kernel at $(n)^3", "ms", "ns/cell", "KiB")
     println("-"^60)
@@ -70,7 +70,7 @@ function bench_kernels(n=64)
     end
 end
 
-@printf("Hydro3D benchmarks -- Julia %s, %d thread(s)\n", VERSION, Threads.nthreads())
+@printf("Honghu benchmarks -- Julia %s, %d thread(s)\n", VERSION, Threads.nthreads())
 bench_steps()
 bench_kernels()
 println()

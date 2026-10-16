@@ -15,8 +15,8 @@ The blast radius is multigroup runs and anything calling `solve_coupling` direct
 **Reproduce.**
 
 ```julia
-using Hydro3D
-using Hydro3D: CouplingState, solve_coupling, sumvec, SVec
+using Honghu
+using Honghu: CouplingState, solve_coupling, sumvec, SVec
 
 groups = RadiationGroups(0.1, 20.0, 4)
 Trad, Tgas = 0.5, 1.3

@@ -6,14 +6,14 @@
     @test g.dims == (14, 10, 1)
     @test g.lo == (4, 4, 1)
     @test g.hi == (11, 7, 1)
-    @test Hydro3D.ndim(g) == 2
+    @test Honghu.ndim(g) == 2
     @test all(g.dx .≈ (0.25, 0.5, 1.0))
 
     # cell centres line up with the domain
     @test all(cellcenter(g, g.lo...) .≈ (0.125, -0.75, 0.5))
     @test all(cellcenter(g, g.hi...) .≈ (1.875, 0.75, 0.5))
-    @test Hydro3D.cellvolume(g) ≈ 0.25 * 0.5 * 1.0
-    @test length(Hydro3D.interior(g)) == 8 * 4 * 1
+    @test Honghu.cellvolume(g) ≈ 0.25 * 0.5 * 1.0
+    @test length(Honghu.interior(g)) == 8 * 4 * 1
 
     @test_throws ArgumentError CartesianGrid(n=(0, 1, 1))
     @test_throws ArgumentError CartesianGrid(n=(4, 1, 1), xlo=(1.0, 0.0, 0.0), xhi=(0.0, 1.0, 1.0))

@@ -18,7 +18,7 @@ them with, while shocks -- which are self-steepening -- survive comparatively
 well. Uses neither `gamma` nor the carbuncle correction.
 
 ```julia
-compare(Hydro3D.Problems.sod_shock_tube,
+compare(Honghu.Problems.sod_shock_tube,
         (HLLC = (riemann = HLLC(),), LLF = (riemann = LLF(),)); sizes = (64, 128, 256))
 ```
 """

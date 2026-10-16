@@ -10,10 +10,10 @@
 # point of solving the two-moment system rather than assuming local thermal
 # equilibrium.
 
-using Hydro3D
+using Honghu
 using Printf
 include(joinpath(@__DIR__, "common.jl"))
-const P = Hydro3D.Problems
+const P = Honghu.Problems
 
 nx = isempty(OPTS) ? 512 : parse(Int, OPTS[1])
 

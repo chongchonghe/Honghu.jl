@@ -692,11 +692,11 @@ is in the hot path, and the boxing trap described in CLAUDE.md applies there.
 function gravity!(sim, t, dt, order)
     g = sim.grid
     for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
-        rho = sim.U[Hydro3D.IRHO, i, j, k]
+        rho = sim.U[Honghu.IRHO, i, j, k]
         dp = -0.1 * rho * dt
-        sim.U[Hydro3D.IEGAS, i, j, k] +=
-            dp * (sim.U[Hydro3D.IMY, i, j, k] + dp / 2) / rho
-        sim.U[Hydro3D.IMY, i, j, k] += dp
+        sim.U[Honghu.IEGAS, i, j, k] +=
+            dp * (sim.U[Honghu.IMY, i, j, k] + dp / 2) / rho
+        sim.U[Honghu.IMY, i, j, k] += dp
     end
 end
 Simulation(n = (64, 64, 1), strang_sources = gravity!)
@@ -836,7 +836,7 @@ function _print_header(sim::Simulation, tend)
     g = sim.grid
     phys = has_radiation(sim) ? "radiation-hydrodynamics" :
            sim.hydro_enabled ? "hydrodynamics" : "radiation transport"
-    println("Hydro3D: 3D ", phys)
+    println("Honghu: 3D ", phys)
     @printf("  grid %d x %d x %d (%dD), %s + %s, %d thread(s)\n",
             g.n[1], g.n[2], g.n[3], ndim(g),
             nameof(typeof(sim.reconstruction)), nameof(typeof(sim.integrator)),

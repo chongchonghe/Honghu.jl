@@ -15,8 +15,8 @@
 # the same steps as the RSLA it is compared with unless a row says otherwise.
 
 include("common.jl")
-using Hydro3D
-using Hydro3D.Problems
+using Honghu
+using Honghu.Problems
 using Printf
 using Random: Xoshiro, rand
 
@@ -29,7 +29,7 @@ l1(T, ref) = sum(abs, T .- ref) / sum(abs, ref)
 
 # The RSLA and IRSLA runs take beta = 0.9 times the largest stable step of the
 # standard RSLA (paper, Proposition 2), so that the IRSLA is compared with the RSLA
-# at its best. In Hydro3D's CFL number, C_r = D nu0, with nu0 <= 1/max(sum_d sigma_d):
+# at its best. In Honghu's CFL number, C_r = D nu0, with nu0 <= 1/max(sum_d sigma_d):
 # max sum_d sigma_d = sqrt(D) for the M1 closure and D/sqrt(3) for P1 (Eddington).
 # The chat = c reference runs keep the problems' own, more conservative steps.
 const BETA = 0.9
@@ -66,15 +66,15 @@ end
 # source channel with tau = chi dx_min and the mean signal speed, plus the
 # radiation-force cap -- emulated from the local cell data, in the flux form. `D` is the number of
 # active dimensions of a square grid (it needs sum_d 1/dx_d = D/dx_min).
-struct EarlierBound <: Hydro3D.AbstractChatLimiter
+struct EarlierBound <: Honghu.AbstractChatLimiter
     beta::Float64
     D::Int
     flux::Bool
 end
 EarlierBound(; beta=0.9, D=1, flux=true) = EarlierBound(beta, D, flux)
-Hydro3D._convert_limiter(l::EarlierBound, ::Type{T}) where {T} = l
-Hydro3D.flux_form(l::EarlierBound) = l.flux
-function Hydro3D.chat_factor(l::EarlierBound, phi0, w::Hydro3D.LocalCell)
+Honghu._convert_limiter(l::EarlierBound, ::Type{T}) where {T} = l
+Honghu.flux_form(l::EarlierBound) = l.flux
+function Honghu.chat_factor(l::EarlierBound, phi0, w::Honghu.LocalCell)
     nu0 = phi0 * w.cdt * l.D / w.dxmin
     sig = w.sdx * w.dxmin / l.D                    # the mean of the directions' speeds
     den = 2sig - w.chiE * w.dxmin
@@ -89,11 +89,11 @@ end
 # ---------------------------------------------------------------------------
 if "checkerboard" in SECTIONS
     println("\n== checkerboard: the bound is exact in 1, 2 and 3 dimensions ==")
-    struct FixedPhi <: Hydro3D.AbstractChatLimiter
+    struct FixedPhi <: Honghu.AbstractChatLimiter
         phi::Float64
     end
-    Hydro3D.chat_factor(l::FixedPhi, phi0, w::Hydro3D.LocalCell) = l.phi
-    Hydro3D._convert_limiter(l::FixedPhi, ::Type{T}) where {T} = l
+    Honghu.chat_factor(l::FixedPhi, phi0, w::Honghu.LocalCell) = l.phi
+    Honghu._convert_limiter(l::FixedPhi, ::Type{T}) where {T} = l
 
     function cb_growth(lim; D, n=16, phi0=1e-3, tau, Pcal, nst=60, nmeas=20)
         cv, gamma = 1.0, 5 / 3
@@ -118,7 +118,7 @@ if "checkerboard" in SECTIONS
         sgn = [(-1.0)^((i - g.lo[1]) + (D > 1) * (j - g.lo[2]) + (D > 2) * (k - g.lo[3]))
                for i in I[1], j in I[2], k in I[3]]
         proj() = abs(sum(sim.R[1, I...] .* sgn))
-        dt = Hydro3D.radiation_timestep(sim.radiation, g, sim.cfl_radiation)
+        dt = Honghu.radiation_timestep(sim.radiation, g, sim.cfl_radiation)
         a = Float64[proj()]
         for s in 1:nst
             step!(sim, dt)
@@ -449,18 +449,18 @@ if "ensman" in SECTIONS
     # whole substeps per hydrodynamic step.
     function ensman(; phi0, lim=ConstantChat(), n, kfac, cfl=cr_m1(1))
         rho0, T0, mu, gamma, alpha = 7.78e-10, 10.0, 1.0, 1.4, 3.1e-10
-        cv = Hydro3D.CGS.k_B / (mu * Hydro3D.CGS.m_u * (gamma - 1))
-        rad = RadiationPhysics(; c=Hydro3D.CGS.c_light, chat=phi0 * Hydro3D.CGS.c_light,
-                               a_rad=Hydro3D.CGS.a_rad, k_B=Hydro3D.CGS.k_B,
+        cv = Honghu.CGS.k_B / (mu * Honghu.CGS.m_u * (gamma - 1))
+        rad = RadiationPhysics(; c=Honghu.CGS.c_light, chat=phi0 * Honghu.CGS.c_light,
+                               a_rad=Honghu.CGS.a_rad, k_B=Honghu.CGS.k_B,
                                opacity=ConstantOpacity(kfac * alpha / rho0), chat_limiter=lim)
         sim = Simulation(; n=(n, 1, 1), xlo=(0.0, 0.0, 0.0), xhi=(7e10, 1.0, 1.0),
                          eos=IdealGas(; gamma, cv), radiation=rad,
                          boundaries=Boundaries((Reflecting(), Outflow()), (Periodic(), Periodic()),
                                                (Periodic(), Periodic())),
-                         floors=Floors(erad=Hydro3D.CGS.a_rad * 1e-4), cfl=0.4,
+                         floors=Floors(erad=Honghu.CGS.a_rad * 1e-4), cfl=0.4,
                          cfl_radiation=cfl)
         set_initial_conditions!(sim) do x, y, z
-            (rho=rho0, vx=-20e5, T=T0, Erad=Hydro3D.CGS.a_rad * T0^4, Fx=0.0)
+            (rho=rho0, vx=-20e5, T=T0, Erad=Honghu.CGS.a_rad * T0^4, Fx=0.0)
         end
         return sim
     end
@@ -519,18 +519,18 @@ end
 if "ensman_floored" in SECTIONS
     println("\n== the Ensman shock on 64 cells with E floored before the coupling solve ==")
     # The earlier algorithm: raise E to the floor after every transport stage, even
-    # where the solve could absorb a negative E. Redefines a Hydro3D method for the
+    # where the solve could absorb a negative E. Redefines a Honghu method for the
     # rest of the process, so it runs after every section but the clipped one,
     # which redefines it again; the reference and the RSLA run first.
     "ensman" in SECTIONS || error("ensman_floored needs the ensman section's set-up")
     ref = score(ensman(; phi0=1.0, n=64, kfac=1.0, cfl=0.4), 7.5e3)
     a = score(ensman(; phi0=0.01, n=64, kfac=1.0), 7.5e3)
     b = score(ensman(; phi0=0.01, n=64, kfac=1.0, lim=StabilityBound()), 7.5e3)
-    @eval Hydro3D function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
-                                             chat::AbstractArray{T,4},
-                                             phys::RadiationPhysics{NG,M,T},
-                                             g::CartesianGrid{T},
-                                             floors::Floors{T}) where {NG,M,T}
+    @eval Honghu function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
+                                            chat::AbstractArray{T,4},
+                                            phys::RadiationPhysics{NG,M,T},
+                                            g::CartesianGrid{T},
+                                            floors::Floors{T}) where {NG,M,T}
         ef = floors.erad / NG
         n = 0
         for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1], gr in 1:NG
@@ -552,15 +552,15 @@ if "diffusion_thick_clipped" in SECTIONS
     println("\n== the thick hot spot with |F| clipped to cE before the coupling solve ==")
     # What codes commonly do: the full realizability repair between the transport
     # stage and the implicit solve, instead of flooring E only. This redefines a
-    # Hydro3D method for the rest of the process, so the section runs last; the
+    # Honghu method for the rest of the process, so the section runs last; the
     # reference runs first, unclipped, and the clipped run goes through
     # `invokelatest` because this block was compiled before the redefinition.
     ref = thick(phi0=1.0, cfl=0.4)
-    @eval Hydro3D function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
-                                             chat::AbstractArray{T,4},
-                                             phys::RadiationPhysics{NG,M,T},
-                                             g::CartesianGrid{T},
-                                             floors::Floors{T}) where {NG,M,T}
+    @eval Honghu function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
+                                            chat::AbstractArray{T,4},
+                                            phys::RadiationPhysics{NG,M,T},
+                                            g::CartesianGrid{T},
+                                            floors::Floors{T}) where {NG,M,T}
         amend_rad_state!(R, phys, g, floors)
     end
     r = Base.invokelatest(thick; lim=StabilityBound())

@@ -18,17 +18,17 @@
 # same residual, same tolerance rule; the `ImplicitEuler` rows are reproducible
 # only at commit 2190e3c or earlier.
 
-using Hydro3D
-using Hydro3D: AbstractCoupling, CouplingState, CouplingResult, SVec, solve_coupling,
-               coupling_rhs, coupling_jacobian, gas_scale, gas_temperature_of,
-               solve_jacobian, ArrowheadSolve, apply_energy_floors,
-               group_energies, group_energy_values, energy_balance,
-               coupling_coefficients,
-               maxabs, sumvec, dot, mul, divide, ngroups
-using Hydro3D.Problems
+using Honghu
+using Honghu: AbstractCoupling, CouplingState, CouplingResult, SVec, solve_coupling,
+              coupling_rhs, coupling_jacobian, gas_scale, gas_temperature_of,
+              solve_jacobian, ArrowheadSolve, apply_energy_floors,
+              group_energies, group_energy_values, energy_balance,
+              coupling_coefficients,
+              maxabs, sumvec, dot, mul, divide, ngroups
+using Honghu.Problems
 using LinearAlgebra: cond
 using Printf
-# Selectively, as `src/Hydro3D.jl` does: a blanket `using OrdinaryDiffEq` would
+# Selectively, as `src/Honghu.jl` does: a blanket `using OrdinaryDiffEq` would
 # shadow this package's own `step!`.
 using OrdinaryDiffEq: Rodas5P, FBDF
 # Test-only, and not in `[deps]`; loaded by UUID as the test suite does, since it
@@ -36,9 +36,9 @@ using OrdinaryDiffEq: Rodas5P, FBDF
 const BracketingNonlinearSolve = Base.require(Base.PkgId(
     Base.UUID("70df07ce-3d50-431d-a3e7-ca6ddb60ac1e"), "BracketingNonlinearSolve"))
 using .BracketingNonlinearSolve: ModAB, Brent, Bisection
-using Hydro3D: ZBrent
+using Honghu: ZBrent
 
-const P = Hydro3D.Problems
+const P = Honghu.Problems
 
 setprecision(BigFloat, 256)
 
@@ -46,7 +46,7 @@ setprecision(BigFloat, 256)
 
 function cell_state(::Type{T}=Float64; NG=4, opacity, Tgas=1.3, Trad=0.5, rho=1.0, cv=1.0,
                     dt=1e-3, c=1.0, chat=1.0, arad=1.0, kB=1.0) where {T}
-    grp = NG == 1 ? Hydro3D.GREY : RadiationGroups(T(1) / T(10), T(20), NG)
+    grp = NG == 1 ? Honghu.GREY : RadiationGroups(T(1) / T(10), T(20), NG)
     Erad = (T(arad) * T(Trad)^4) * planck_fractions(grp, T(Trad), T(kB))
     z = zero(SVec{NG,T})
     chatv = SVec{NG,T}(ntuple(_ -> T(chat), NG)...)
@@ -136,11 +136,11 @@ end
 PlainDirect(; tolerance=1e-9, maxit=100, test=:residual, damp=false, raise=false) =
     PlainDirect(tolerance, maxit, test, damp, raise)
 
-function Hydro3D.solve_coupling(m::PlainDirect, s::CouplingState{NG,M,T}) where {NG,M,T}
+function Honghu.solve_coupling(m::PlainDirect, s::CouplingState{NG,M,T}) where {NG,M,T}
     tol = T(m.tolerance)
     if m.raise
         kdt = (s.dt * s.chat) * s.rho
-        kP = first(Hydro3D.coupling_opacity(s, Hydro3D.gas_temperature_of(s, s.Egas)))
+        kP = first(Honghu.coupling_opacity(s, Honghu.gas_temperature_of(s, s.Egas)))
         tol = max(tol, 4 * eps(T) * max(maxabs(mul(kdt, kP)), one(T)))
     end
     atol = tol * abs(s.Egas + dot(gas_scale(s), s.Erad + s.src))
@@ -242,9 +242,9 @@ function section_conditioning()
         end
 
         Tg = Egas / s.cv
-        B = Hydro3D.thermal_emission(s, Tg)
-        dB = Hydro3D.thermal_emission_dT(s, Tg)
-        kP, kE = Hydro3D.coupling_opacity(s, Tg)
+        B = Honghu.thermal_emission(s, Tg)
+        dB = Honghu.thermal_emission_dT(s, Tg)
+        kP, kE = Honghu.coupling_opacity(s, Tg)
         Q = zeros(NG + 1, NG + 1)
         Q[1, 1] = 1.0
         for g in 1:NG
@@ -552,8 +552,8 @@ function mg_marshak(m; NG=4, n=64, expo=-3.5, kappa0=300.0, T0=0.1, Erad0=1e-4)
                            opacity=PowerLawOpacity(kappa0=kappa0, T0=1.0, n=expo),
                            beta_order=0, coupling=m)
     fracL = planck_fractions(groups, 1.0, 1.0)
-    wall = Fixed(ntuple(Hydro3D.NRAD * NG) do i
-        gr, comp = divrem(i - 1, Hydro3D.NRAD)
+    wall = Fixed(ntuple(Honghu.NRAD * NG) do i
+        gr, comp = divrem(i - 1, Honghu.NRAD)
         comp == 0 ? fracL[gr+1] : 0.0
     end)
     outflow = (Outflow(), Outflow())
@@ -595,8 +595,8 @@ function section_derivation()
     gas0 = s.Egas - dot(cs, s.work)
     rad0 = s.Erad + s.src + s.work
     T0 = s.Egas / s.cv
-    B = Hydro3D.thermal_emission(s, T0)
-    kP, _ = Hydro3D.coupling_opacity(s, T0)
+    B = Honghu.thermal_emission(s, T0)
+    kP, _ = Honghu.coupling_opacity(s, T0)
     n_expo = 2.0
 
     println("\n== the elimination fixes the Newton direction, not just the step length ==")
@@ -756,16 +756,16 @@ function _counted_solve(rf, s::CouplingState{NG,M,T}; tol=1e-9, maxit=100) where
     G = (x, s) -> (n[] += 1; energy_balance(s, x, group_energy_values(s, x)))
     Etot = abs(s.Egas + dot(gas_scale(s), s.Erad + s.src))
     atol = tol * Etot
-    lo, hi, _, _ = Hydro3D._energy_bracket(G, s)
-    sol = Hydro3D.solve(Hydro3D.IntervalNonlinearProblem{false}(G, (lo, hi), s), rf;
-                        abstol=atol, maxiters=maxit)
+    lo, hi, _, _ = Honghu._energy_bracket(G, s)
+    sol = Honghu.solve(Honghu.IntervalNonlinearProblem{false}(G, (lo, hi), s), rf;
+                       abstol=atol, maxiters=maxit)
     x = sol.u
     E, dE = group_energies(s, x)
     resolved = false
     if abs(energy_balance(s, x, E)) > atol
         dG = max(abs(one(T) + dot(gas_scale(s), dE)), one(T))
-        sol = Hydro3D.solve(Hydro3D.IntervalNonlinearProblem{false}(G, (sol.left, sol.right), s),
-                            rf; abstol=atol / dG, maxiters=maxit)
+        sol = Honghu.solve(Honghu.IntervalNonlinearProblem{false}(G, (sol.left, sol.right), s),
+                           rf; abstol=atol / dG, maxiters=maxit)
         x = sol.u
         resolved = true
     end

@@ -1,11 +1,11 @@
 """
-    Hydro3D.Problems
+    Honghu.Problems
 
 Ready-made test problems. Each function returns a fully initialised
 [`Simulation`](@ref) together with a suggested `tmax`, so that a complete run is
 
 ```julia
-sim, tmax = Hydro3D.Problems.sod_shock_tube(nx = 512)
+sim, tmax = Honghu.Problems.sod_shock_tube(nx = 512)
 run!(sim; tmax)
 ```
 
@@ -39,8 +39,8 @@ variant, splatted into the factory.
 """
 module Problems
 
-using ..Hydro3D
-using ..Hydro3D: SVec, AbstractClosure
+using ..Honghu
+using ..Honghu: SVec, AbstractClosure
 # for `rad_dust_reference`, the one problem whose reference is an ODE solve
 using OrdinaryDiffEq: ODEProblem, Rodas5P, AutoFiniteDiff
 

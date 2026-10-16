@@ -4,7 +4,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Overview
 
-Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with a method-of-lines scheme (HLLC or LLF) and two-moment (M1) radiation — grey, or in `NG` frequency groups — with an HLL solver and an IMEX PD-ARS integrator. It exists as a bench for prototyping algorithms and test problems destined for Quokka, so structural fidelity to Quokka is a design goal: a kernel written here should transliterate across, and back. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `../quokka` and is the reference to check against when a numerical detail is in doubt.
+Honghu is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with a method-of-lines scheme (HLLC or LLF) and two-moment (M1) radiation — grey, or in `NG` frequency groups — with an HLL solver and an IMEX PD-ARS integrator. It exists as a bench for prototyping algorithms and test problems destined for Quokka, so structural fidelity to Quokka is a design goal: a kernel written here should transliterate across, and back. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `../quokka` and is the reference to check against when a numerical detail is in doubt.
 
 ## Commands
 
@@ -17,20 +17,20 @@ julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
 julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
 julia --project=. docs/make.jl                      # build the docs site into docs/_site (needs quarto)
 julia --project=. -t 8 test/benchmarks.jl           # timing table (BenchmarkTools)
-julia --project=. -e 'include("src/Hydro3D.jl")'    # syntax check without precompiling
+julia --project=. -e 'include("src/Honghu.jl")'     # syntax check without precompiling
 ```
 
 ## Scripts and figures
 
 Examples share `examples/common.jl`, which handles the flags (`--no-plot`, `--outdir=DIR`), leaves positional arguments in `OPTS`, sets `GKSwstype` for headless GR, and exposes `PLOTTING`, `outpath`, `saveplot` and `plotting_note`. A new example should `include` it, guard its plotting block with `PLOTTING`, route every output path through `outpath`, and end with `plotting_note()`.
 
-Figures are **on by default** in examples: an example you have to post-process by hand is not much of an example. They are **off by default** in the test suite, because re-running every problem at production resolution costs a couple of minutes and writes files into the repo; `--figures` (or `HYDRO3D_FIGURES=1`) turns them on, and runs `docs/make_figures.jl` in a subprocess so its globals cannot collide with the test session.
+Figures are **on by default** in examples: an example you have to post-process by hand is not much of an example. They are **off by default** in the test suite, because re-running every problem at production resolution costs a couple of minutes and writes files into the repo; `--figures` (or `HONGHU_FIGURES=1`) turns them on, and runs `docs/make_figures.jl` in a subprocess so its globals cannot collide with the test session.
 
 Prefer building example figures out of `plotstate` / `plotpanels` rather than raw Plots calls. It keeps the examples short and doubles as documentation for the plotting API.
 
 ## Documentation site
 
-`docs/make.jl` writes one reference page per group of source files (its `PAGES` table) from the docstrings, uses the README as the front page and four notes in `docs/` as further pages, renders them with Quarto, and publishes every page twice: as HTML and as its own source, `<page>.md`, with `hydro3d-docs.md` bundling them all. CI deploys it to GitHub Pages from `main`. The build is strict, and three things fail it: a `[`name`](@ref)` whose target has no docstring, a file in `src/` with a docstring but no entry in `PAGES`, and any relative link or anchor in the output that does not resolve. So a new source file needs a line in `PAGES`, and a cross-reference to an undocumented name needs the docstring, not the brackets removed. `docs/documentation.md` (also a page on the site) explains how the system works and how to update each kind of page.
+`docs/make.jl` writes one reference page per group of source files (its `PAGES` table) from the docstrings, uses the README as the front page and four notes in `docs/` as further pages, renders them with Quarto, and publishes every page twice: as HTML and as its own source, `<page>.md`, with `honghu-docs.md` bundling them all. CI deploys it to GitHub Pages from `main`. The build is strict, and three things fail it: a `[`name`](@ref)` whose target has no docstring, a file in `src/` with a docstring but no entry in `PAGES`, and any relative link or anchor in the output that does not resolve. So a new source file needs a line in `PAGES`, and a cross-reference to an undocumented name needs the docstring, not the brackets removed. `docs/documentation.md` (also a page on the site) explains how the system works and how to update each kind of page.
 
 ## Dependencies
 
@@ -52,7 +52,7 @@ package and are absent otherwise. `src/plotting.jl` is the pattern — stubs and
 docstrings in `src/`, implementations in `ext/`, and a fallback that tells the
 caller which package to load rather than throwing `MethodError`. **`Plots`** is
 the worked example, and now the only one: the four plotting entry points live in
-`ext/Hydro3DPlotsExt.jl`, and a compute node never pays for the ~100-package
+`ext/HonghuPlotsExt.jl`, and a compute node never pays for the ~100-package
 plotting stack.
 
 `OrdinaryDiffEq` used to be the second, and is not any more. It is a hard
@@ -67,7 +67,7 @@ actually mean:
   `test_coupling_adaptive.jl` skipped itself, and the suite reported a clean 1027
   passes with a third of the coupling code unexercised. A dependency that is
   *required for a code path* does not belong in `[weakdeps]`, whatever it costs.
-- What it costs, measured: `using Hydro3D` goes from 0.035 s to 1.53 s, and a
+- What it costs, measured: `using Honghu` goes from 0.035 s to 1.53 s, and a
   fresh install precompiles ~190 packages instead of none. Wall time of a run is
   unaffected. That is real and it is the price of the decision.
 - One `[deps]` entry, not three. It used to be three: OrdinaryDiffEq 7 is a slim
@@ -81,7 +81,7 @@ actually mean:
   not `using OrdinaryDiffEq`, because it exports `step!` and so does this
   package; a blanket import would make `step!(sim)` ambiguous for every user with
   both in scope. `using LinearAlgebra: lu!, ldiv!` is there for the same reason
-  (`dot` and `norm`), and the two comments in `src/Hydro3D.jl` say so.
+  (`dot` and `norm`), and the two comments in `src/Honghu.jl` say so.
 
 `SciMLBase` is the other package: `BracketedCoupling` hands its one scalar
 equation, per cell, per step, through SciMLBase's `IntervalNonlinearProblem`
@@ -140,7 +140,7 @@ root-finder it calls was measured at zero bytes before it was let in.
 
 ## Source layout
 
-Include order in `src/Hydro3D.jl` matters, because later files use types defined earlier.
+Include order in `src/Honghu.jl` matters, because later files use types defined earlier.
 
 | File | Contents |
 |:---|:---|
@@ -174,7 +174,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `compare.jl` | `compare`, `ComparisonTable`, and the table reader/writer. |
 | `problems/` | Built-in test problems and the exact Riemann solver. |
 
-`ext/Hydro3DPlotsExt.jl` sits outside `src/` and is loaded by Julia's extension mechanism when Plots is present.
+`ext/HonghuPlotsExt.jl` sits outside `src/` and is loaded by Julia's extension mechanism when Plots is present.
 
 ## Invariants to preserve
 

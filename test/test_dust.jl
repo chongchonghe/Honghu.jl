@@ -2,12 +2,12 @@
 # one equation in the dust temperature. `docs/coupling-new-method-dust.md`
 # derives it; these are the properties it has to keep.
 
-using Hydro3D: CouplingState, SVec, solve_coupling, gas_scale, dust_energy_balance
+using Honghu: CouplingState, SVec, solve_coupling, gas_scale, dust_energy_balance
 
 "One cell with a dust model, in code units: `K = coefficient rho^2`."
 function dust_cell(; NG=4, opacity=ConstantOpacity(1.0), Tgas=1.0, Trad=0.5, rho=10.0,
                    coefficient=1.0, dt=1.0)
-    grp = NG == 1 ? Hydro3D.GREY : RadiationGroups(0.1, 20.0, NG)
+    grp = NG == 1 ? Honghu.GREY : RadiationGroups(0.1, 20.0, NG)
     Erad = (Trad^4) * planck_fractions(grp, max(Trad, 1e-10), 1.0) +
            SVec{NG,Float64}(ntuple(_ -> 1e-20, NG)...)
     z = zero(SVec{NG,Float64})
@@ -24,7 +24,7 @@ nodust(s::CouplingState{NG,M,T,O}) where {NG,M,T,O} =
     CouplingState{NG,M,T,O}(s.Egas, s.Erad, s.src, s.work, s.rho, s.cv, s.opacity, s.dt,
                             s.c, s.chat, s.a_rad, s.k_B, s.groups, s.Tfloor, s.Efloor)
 
-total_energy(s, Egas, Erad) = Egas + Hydro3D.dot(gas_scale(s), Erad)
+total_energy(s, Egas, Erad) = Egas + Honghu.dot(gas_scale(s), Erad)
 
 const DUST_OPACITIES = (ConstantOpacity(1.0),
                         PowerLawOpacity(kappa0=1.0, rho0=1.0, T0=1.0, m=0.0, n=2.0))
@@ -118,7 +118,7 @@ const DUST_OPACITIES = (ConstantOpacity(1.0),
         # history, as Quokka's test does; Quokka's tolerance is 3e-3, and first
         # order in dt = 1e-8 gives 2e-4 here. With a constant opacity the answer
         # does not depend on the grouping.
-        for groups in (Hydro3D.GREY, RadiationGroups([1e-3, 0.1, 1.0, 10.0, 1e3]))
+        for groups in (Honghu.GREY, RadiationGroups([1e-3, 0.1, 1.0, 10.0, 1e3]))
             sim, tmax = P.rad_dust(; groups)
             ts = Float64[]
             Tg = Float64[]

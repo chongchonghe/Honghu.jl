@@ -1,18 +1,18 @@
 """
-    Hydro3DPlotsExt
+    HonghuPlotsExt
 
-Plotting methods for Hydro3D, loaded automatically when Plots is available.
+Plotting methods for Honghu, loaded automatically when Plots is available.
 
-Provides methods for [`Hydro3D.plotstate`](@ref), [`Hydro3D.plotpanels`](@ref)
-[`Hydro3D.animate_run`](@ref) and [`Hydro3D.plotcompare`](@ref), plus a Plots
+Provides methods for [`Honghu.plotstate`](@ref), [`Honghu.plotpanels`](@ref)
+[`Honghu.animate_run`](@ref) and [`Honghu.plotcompare`](@ref), plus a Plots
 recipe so that `plot(sim)` works directly.
 """
-module Hydro3DPlotsExt
+module HonghuPlotsExt
 
-using Hydro3D
-using Hydro3D: Simulation, CartesianGrid, ndim, field, coordinates, has_radiation,
-               available_fields, ComparisonTable, read_comparison, convergence_rate,
-               metric_columns, is_error_metric
+using Honghu
+using Honghu: Simulation, CartesianGrid, ndim, field, coordinates, has_radiation,
+              available_fields, ComparisonTable, read_comparison, convergence_rate,
+              metric_columns, is_error_metric
 using Plots
 using Printf
 
@@ -36,8 +36,8 @@ function _title(sim::Simulation, label)
     @sprintf("%s   (t = %.4g, step %d)", label, sim.t, sim.step)
 end
 
-function Hydro3D.plotstate(sim::Simulation; var::Symbol=:density, slice=nothing,
-                           logscale::Bool=false, kwargs...)
+function Honghu.plotstate(sim::Simulation; var::Symbol=:density, slice=nothing,
+                          logscale::Bool=false, kwargs...)
     g = sim.grid
     data, label = field(sim, var)
     d1, d2, k = _plane(sim, slice)
@@ -66,21 +66,21 @@ function Hydro3D.plotstate(sim::Simulation; var::Symbol=:density, slice=nothing,
     heatmap(x, y, permutedims(z); kw...)
 end
 
-function Hydro3D.plotpanels(sim::Simulation; vars=nothing, slice=nothing,
-                            size=(950, 620), kwargs...)
+function Honghu.plotpanels(sim::Simulation; vars=nothing, slice=nothing,
+                           size=(950, 620), kwargs...)
     picked = vars === nothing ?
              (has_radiation(sim) ?
               (:density, :speed, :pressure, :temperature, :Erad, :Trad) :
               (:density, :speed, :pressure, :temperature)) : Tuple(vars)
-    panels = [Hydro3D.plotstate(sim; var=v, slice=slice, kwargs...) for v in picked]
+    panels = [Honghu.plotstate(sim; var=v, slice=slice, kwargs...) for v in picked]
     ncol = length(panels) <= 4 ? 2 : 3
     plot(panels...; layout=(cld(length(panels), ncol), ncol), size=size)
 end
 
-function Hydro3D.animate_run(sim::Simulation; tmax, nframes::Integer=100,
-                             var::Symbol=:density, fps::Integer=20,
-                             filename::AbstractString="hydro3d.gif",
-                             clims=nothing, verbose::Bool=true, kwargs...)
+function Honghu.animate_run(sim::Simulation; tmax, nframes::Integer=100,
+                            var::Symbol=:density, fps::Integer=20,
+                            filename::AbstractString="honghu.gif",
+                            clims=nothing, verbose::Bool=true, kwargs...)
     t0 = sim.t
     dtf = (tmax - t0) / nframes
     dtf > 0 || throw(ArgumentError("tmax = $tmax is not after the current time $t0"))
@@ -95,10 +95,10 @@ function Hydro3D.animate_run(sim::Simulation; tmax, nframes::Integer=100,
     plotkw = clims === nothing ? kwargs : (; clims=clims, kwargs...)
 
     anim = Animation()
-    frame(anim, Hydro3D.plotstate(sim; var=var, plotkw...))
+    frame(anim, Honghu.plotstate(sim; var=var, plotkw...))
     for m in 1:nframes
-        Hydro3D.run!(sim; tmax=min(t0 + m * dtf, tmax), verbose=false)
-        frame(anim, Hydro3D.plotstate(sim; var=var, plotkw...))
+        Honghu.run!(sim; tmax=min(t0 + m * dtf, tmax), verbose=false)
+        frame(anim, Honghu.plotstate(sim; var=var, plotkw...))
         verbose && m % 10 == 0 && @printf("  frame %d/%d  t = %.4g\n", m, nframes, sim.t)
     end
     gif(anim, filename; fps=fps, show_msg=false)
@@ -129,11 +129,11 @@ end
 
 # --- comparison tables -------------------------------------------------------
 
-Hydro3D.plotcompare(path::AbstractString, more::AbstractString...; kwargs...) =
-    Hydro3D.plotcompare(read_comparison(path), map(read_comparison, more)...; kwargs...)
+Honghu.plotcompare(path::AbstractString, more::AbstractString...; kwargs...) =
+    Honghu.plotcompare(read_comparison(path), map(read_comparison, more)...; kwargs...)
 
-function Hydro3D.plotcompare(t::ComparisonTable, more::ComparisonTable...;
-                             metric=nothing, kwargs...)
+function Honghu.plotcompare(t::ComparisonTable, more::ComparisonTable...;
+                            metric=nothing, kwargs...)
     ts = (t, more...)
     any(isempty, ts) && throw(ArgumentError("plotcompare: the table is empty"))
     # One panel per (table, metric). Several tables in one figure is how you
@@ -171,7 +171,7 @@ _sweeps(t::ComparisonTable) = length(unique(t[:size])) > 1
 # picture of a head-to-head, on a linear axis because a bar chart is read from
 # zero.
 function _barpanel(t::ComparisonTable, m::AbstractString; title="")
-    bv = Hydro3D._by_variant(t)
+    bv = Honghu._by_variant(t)
     labels = [v for (v, _) in bv]
     y = [t[m][k][1] for (_, k) in bv]
     bar(labels, y; legend=false, ylabel=m, title=title, titlefontsize=10,
@@ -192,12 +192,12 @@ function _panel(t::ComparisonTable, m::AbstractString; title="")
     pl = plot(; xscale=:log10, yscale=(errorlike ? :log10 : :identity),
               xlabel="cells per side", ylabel=m, title=title, titlefontsize=10,
               xticks=(ticks, string.(Int.(ticks))), legend=:best)
-    for (i, (v, k)) in enumerate(Hydro3D._by_variant(t))
-        lbl = errorlike && Hydro3D._decreasing(y[k]) ?
+    for (i, (v, k)) in enumerate(Honghu._by_variant(t))
+        lbl = errorlike && Honghu._decreasing(y[k]) ?
               @sprintf("%s  (rate %.2f)", v, convergence_rate(t, m; variant=v)) : v
         plot!(pl, sizes[k], y[k]; marker=:circle, ms=4, lw=2, c=i, label=lbl)
     end
     return pl
 end
 
-end # module Hydro3DPlotsExt
+end # module HonghuPlotsExt

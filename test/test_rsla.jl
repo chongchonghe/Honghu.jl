@@ -7,10 +7,10 @@
 # that a local `chat` beats a global one on a shock and on a Marshak wave, and
 # that a per-group `chat` does not conserve energy.
 
-using Hydro3D: chat_factor, per_group, flux_form, update_chat!, energy_exchange_dt, LocalCell,
-               stability_denominator, _signal_sum, ConstantChat, StabilityBound,
-               OpticalDepthFit, CouplingState, solve_coupling, gbase, IERAD, IEGAS,
-               gas_scale
+using Honghu: chat_factor, per_group, flux_form, update_chat!, energy_exchange_dt, LocalCell,
+              stability_denominator, _signal_sum, ConstantChat, StabilityBound,
+              OpticalDepthFit, CouplingState, solve_coupling, gbase, IERAD, IEGAS,
+              gas_scale
 
 const ISO = 1 / sqrt(3)          # the signal speed of an isotropic radiation field
 
@@ -131,11 +131,11 @@ end
 # A uniform static medium carrying a grid-scale checkerboard in E_rad, at a
 # fixed local phi (or under a real limiter). Returns the growth factor per
 # substep of the checkerboard, which the von Neumann analysis predicts exactly.
-struct FixedPhi <: Hydro3D.AbstractChatLimiter
+struct FixedPhi <: Honghu.AbstractChatLimiter
     phi::Float64
 end
-Hydro3D.chat_factor(l::FixedPhi, phi0, cell::LocalCell) = l.phi
-Hydro3D._convert_limiter(l::FixedPhi, ::Type{T}) where {T} = l
+Honghu.chat_factor(l::FixedPhi, phi0, cell::LocalCell) = l.phi
+Honghu._convert_limiter(l::FixedPhi, ::Type{T}) where {T} = l
 
 function checkerboard_growth(lim; D, n=8, phi0=1e-3, tau, Pcal, nst=24, nmeas=12)
     cv, gamma = 1.0, 5 / 3
@@ -156,7 +156,7 @@ function checkerboard_growth(lim; D, n=8, phi0=1e-3, tau, Pcal, nst=24, nmeas=12
     sgn = [(-1.0)^((i - g.lo[1]) + (D > 1) * (j - g.lo[2]) + (D > 2) * (k - g.lo[3]))
            for i in I[1], j in I[2], k in I[3]]
     proj() = abs(sum(sim.R[IERAD, I...] .* sgn))
-    dt = Hydro3D.radiation_timestep(sim.radiation, g, sim.cfl_radiation)
+    dt = Honghu.radiation_timestep(sim.radiation, g, sim.cfl_radiation)
     a1 = 0.0
     for s in 1:nst
         step!(sim, dt)
@@ -274,7 +274,7 @@ end
                      chat[1, :, 1, 1] .= fast
                      chat[1, 4, 1, 1] = l          # cell 4 -- left of face 5
                      chat[1, 5, 1, 1] = r          # cell 5 -- right of face 5
-                     Hydro3D.rad_fluxes!(flux, qL, qR, R, chat, phys, Val(1), g)
+                     Honghu.rad_fluxes!(flux, qL, qR, R, chat, phys, Val(1), g)
                      flux[IERAD, 5, 1, 1]
                  end, ((slow, fast), (fast, slow), (slow, slow), (fast, fast)))
     lo_hi, hi_lo, lo_lo, hi_hi = fluxes
@@ -384,32 +384,32 @@ end
 
 @testset "the energy-exchange step is opt-in and only shortens" begin
     sim, _ = P.radhydro_shock(n=32, chat_limiter=StabilityBound())
-    dt_rsla = Hydro3D.radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
+    dt_rsla = Honghu.radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
     # Off by default: the limiter runs at the plain RSLA step.
-    @test Hydro3D._rad_dt(sim) == dt_rsla
+    @test Honghu._rad_dt(sim) == dt_rsla
     on, _ = P.radhydro_shock(n=32, chat_limiter=StabilityBound(energy_step=true))
     dt_E = energy_exchange_dt(on.U, on.R, on.eos, on.radiation, on.grid, 0.5, on.floors)
     @test dt_E > 0
     dt_c = dt_rsla * on.radiation.chat / on.radiation.c   # the unreduced CFL step
-    @test Hydro3D._rad_dt(on) == min(dt_rsla, max(dt_E, dt_c))
+    @test Honghu._rad_dt(on) == min(dt_rsla, max(dt_E, dt_c))
     # ... and in a radiation-dominated gas it stops at the unreduced step rather
     # than asking for more than running at the true speed of light would cost.
     rich, _ = P.radhydro_pulse_dyn(n=32, chat_over_c=0.01,
                                    chat_limiter=StabilityBound(energy_step=true))
-    dtr = Hydro3D.radiation_timestep(rich.radiation, rich.grid, rich.cfl_radiation)
-    @test Hydro3D._rad_dt(rich) ≈ dtr * 0.01
+    dtr = Honghu.radiation_timestep(rich.radiation, rich.grid, rich.cfl_radiation)
+    @test Honghu._rad_dt(rich) ≈ dtr * 0.01
 end
 
 # A limiter that reads the gas temperature through `hrat` (which rises through a
 # shock) and ripples an otherwise uniform `phi` by `amp`.
-struct Ripple <: Hydro3D.AbstractChatLimiter
+struct Ripple <: Honghu.AbstractChatLimiter
     phi::Float64
     amp::Float64
     flux::Bool
 end
-Hydro3D._convert_limiter(l::Ripple, ::Type{T}) where {T} = l
-Hydro3D.chat_factor(l::Ripple, phi0, w::LocalCell) = l.phi * (1 - l.amp * min(1.0, w.hrat / 0.08))
-Hydro3D.flux_form(l::Ripple) = l.flux
+Honghu._convert_limiter(l::Ripple, ::Type{T}) where {T} = l
+Honghu.chat_factor(l::Ripple, phi0, w::LocalCell) = l.phi * (1 - l.amp * min(1.0, w.hrat / 0.08))
+Honghu.flux_form(l::Ripple) = l.flux
 
 @testset "phi belongs on the time derivative, not inside the divergence" begin
     # The RSLA changes how fast radiation relaxes, not where it relaxes to. With
@@ -432,12 +432,12 @@ end
 
 # phi = 0.1 where the absorption coefficient is below 1.5e-12 and 0.02 above it;
 # with a negligible opacity the density profile is a position switch.
-struct PhiStep <: Hydro3D.AbstractChatLimiter
+struct PhiStep <: Honghu.AbstractChatLimiter
     flux::Bool
 end
-Hydro3D._convert_limiter(l::PhiStep, ::Type{T}) where {T} = l
-Hydro3D.chat_factor(l::PhiStep, phi0, w::LocalCell) = w.chiE < 1.5e-12 ? 0.1 : 0.02
-Hydro3D.flux_form(l::PhiStep) = l.flux
+Honghu._convert_limiter(l::PhiStep, ::Type{T}) where {T} = l
+Honghu.chat_factor(l::PhiStep, phi0, w::LocalCell) = w.chiE < 1.5e-12 ? 0.1 : 0.02
+Honghu.flux_form(l::PhiStep) = l.flux
 
 @testset "a steady beam crosses a jump in phi unchanged" begin
     # Free streaming through vacuum, phi dropping five-fold halfway across. The
@@ -491,7 +491,7 @@ end
     # negative there. Flooring E before the solve added energy every substep and
     # made the IRSLA ~17 times worse than the RSLA against chat = c; the solve
     # conserves e + E/phi and absorbs the negative E.
-    CGS = Hydro3D.CGS
+    CGS = Honghu.CGS
     function ensman(; phi0, lim=ConstantChat(), cfl=0.9)
         rho0, T0, gamma = 7.78e-10, 10.0, 1.4
         rad = RadiationPhysics(; c=CGS.c_light, chat=phi0 * CGS.c_light, a_rad=CGS.a_rad,
