@@ -25,6 +25,8 @@ them with [`reset_diagnostics!`](@ref).
 | `rad_substeps` | IMEX radiation substeps taken |
 | `floors_hydro` | cell updates that hit a gas density or pressure floor |
 | `floors_rad` | cell updates projected back onto the M1 admissible set |
+| `floors_presolve` | cells whose radiation energy was floored before a coupling solve, because the energy the solve conserves was not positive |
+| `repairs_postsolve` | cells whose radiation state was repaired after a coupling solve |
 | `newton_cells` | cells passed through the implicit coupling solve |
 | `newton_iterations` | Newton iterations summed over those cells |
 | `newton_max` | worst-case Newton iterations in any one cell |
@@ -39,13 +41,15 @@ mutable struct Diagnostics
     rad_substeps::Int
     floors_hydro::Int
     floors_rad::Int
+    floors_presolve::Int
+    repairs_postsolve::Int
     newton_cells::Int
     newton_iterations::Int
     newton_max::Int
     newton_failures::Int
 end
 
-Diagnostics() = Diagnostics(0, 0, 0, 0, 0, 0, 0, 0)
+Diagnostics() = Diagnostics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 """
     reset_diagnostics!(sim) -> Diagnostics
@@ -56,6 +60,7 @@ separately from the transient that preceded it.
 function reset_diagnostics!(sim)
     d = sim.diag
     d.steps = d.rad_substeps = d.floors_hydro = d.floors_rad = 0
+    d.floors_presolve = d.repairs_postsolve = 0
     d.newton_cells = d.newton_iterations = d.newton_max = d.newton_failures = 0
     return d
 end
@@ -134,13 +139,14 @@ struct RadiationWorkspace{T<:AbstractFloat}
     Rtmp::Array{T,4}
     Utmp::Array{T,4}
     chat::Array{T,4}
+    chiF::Array{T,4}
 end
 
 function RadiationWorkspace(g::CartesianGrid{T}, nrad::Integer=NRAD,
                             ng::Integer=nrad ÷ NRAD) where {T}
     RadiationWorkspace(allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
                        allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
-                       allocate(g, NHYDRO), allocate(g, ng))
+                       allocate(g, NHYDRO), allocate(g, ng), allocate(g, ng))
 end
 
 """
@@ -420,7 +426,8 @@ function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}) where {D}
     g = sim.grid
     nrad = nradvars(sim.radiation)
     reconstruct!(rw.qL, rw.qR, rw.prim, sim.radiation_reconstruction, Val(D), g, nrad)
-    rad_fluxes!(rw.flux, rw.qL, rw.qR, R, rw.chat, sim.radiation, Val(D), g)
+    rad_fluxes!(rw.flux, rw.qL, rw.qR, R, _sweep_chat(sim), sim.radiation, Val(D), g,
+                sim.radiation.wavespeed_correction ? rw.chiF : nothing)
     flux_divergence!(dR, rw.flux, Val(D), g, nrad)
     return nothing
 end
@@ -441,8 +448,16 @@ function rad_rhs!(dR::Array{T,4}, R::Array{T,4}, sim::Simulation{T}, t::T) where
     g.active[1] && _rad_sweep!(dR, R, sim, Val(1))
     g.active[2] && _rad_sweep!(dR, R, sim, Val(2))
     g.active[3] && _rad_sweep!(dR, R, sim, Val(3))
+    _sweep_chat(sim) === nothing && scale_by_phi!(dR, sim.rw.chat, sim.radiation, g)
     return dR
 end
+
+# The `chat` the flux sweep uses: the per-cell array under the standard RSLA or
+# the flux form of a local limiter; `nothing` -- the unreduced flux, each cell
+# scaled by its own `phi` afterwards -- under the default time-derivative form.
+@inline _sweep_chat(sim::Simulation) = _sweep_chat(sim.radiation.chat_limiter, sim.rw.chat)
+@inline _sweep_chat(::ConstantChat, chat) = chat
+@inline _sweep_chat(lim::AbstractChatLimiter, chat) = flux_form(lim) ? chat : nothing
 
 # --- stage drivers -----------------------------------------------------------
 
@@ -462,14 +477,28 @@ function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
     return sim
 end
 
-# Recompute the local reduced speed of light for one IMEX stage from the state
-# that stage is about to transport. A no-op under `ConstantChat`, down to the
+# Compute the local reduced speed of light for one IMEX substep from the state at
+# its start; both stages then use it. A no-op under `ConstantChat`, down to the
 # ghost fills -- which is what makes the default path bit-for-bit unchanged.
 @inline _stage_chat!(sim::Simulation, U, R, dt, t) =
     _stage_chat!(sim, sim.radiation.chat_limiter, U, R, dt, t)
 
-@inline _stage_chat!(::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Array{T,4},
-                     dt::T, t::T) where {T} = nothing
+function _stage_chat!(sim::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Array{T,4},
+                      dt::T, t::T) where {T}
+    sim.radiation.wavespeed_correction || return nothing
+    fill_ghosts!(U, sim.boundaries, sim.grid, t)
+    update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
+    return nothing
+end
+
+# The flux absorption coefficient of the wave-speed correction for one stage,
+# from the state that stage transports.
+function _stage_chiF!(sim::Simulation{T}, U::Array{T,4}, t::T) where {T}
+    sim.radiation.wavespeed_correction || return nothing
+    fill_ghosts!(U, sim.boundaries, sim.grid, t)
+    update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
+    return nothing
+end
 
 function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
                       R::Array{T,4}, dt::T, t::T) where {T}
@@ -494,12 +523,16 @@ step into scratch storage and applies the implicit coupling there; stage 3
 forms the Shu-Osher combination of the two stages, adds the transport of the
 stage-2 state, and applies the implicit coupling again.
 
-Each stage begins by recomputing the local reduced speed of light from the state
-that stage transports, so the transport and the coupling that follows it see the
-same `chat` -- the order the improved RSLA is derived for, in which every
-explicit stage is immediately followed by the implicit solve that damps what it
-amplified. With the default [`ConstantChat`](@ref) limiter the two
-[`update_chat!`](@ref) calls are no-ops.
+The local reduced speed of light is computed once, from the state at the start
+of the substep, and both stages use it. That is the scheme the stability bound
+is derived for -- one `phi` per cell held fixed through the whole PD-ARS step --
+and it keeps `e + sum_g E_g/phi_g` exactly conserved over the substep: each stage
+conserves it for its own `phi`, so a `phi` that changed between the stages would
+leave a residual `(E(2) - E^n)(1/phi_b - 1/phi_a)`. With the default
+[`ConstantChat`](@ref) limiter the [`update_chat!`](@ref) call is a no-op. The
+flux absorption coefficient of the optional wave-speed correction, which only
+the standard RSLA may use, is a property of the flux and is refreshed for each
+stage.
 """
 function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     g = sim.grid
@@ -514,21 +547,29 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     combine!(rw.Rtmp, one(T), sim.R, zero(T), sim.R, T(IMEX_AEX_21) * dt, rw.dR, g,
              nradvars(sim.radiation))
     copyto!(rw.Utmp, sim.U)
-    amend_rad_state!(rw.Rtmp, phys, g, fl)
+    # The transport stage's state goes to the solve as it is: the flux of a thick
+    # cell at a large local CFL number is turned into the diffusion flux by the
+    # solve, and a negative energy is absorbed by it (see floor_rad_energy!).
+    d = sim.diag
+    d.floors_presolve += floor_rad_energy!(rw.Rtmp, rw.Utmp, rw.chat, phys, g, fl)
     s1 = radiation_source_step!(rw.Utmp, rw.Rtmp, rw.chat, sim.eos, phys, g,
                                 T(IMEX_AIM_22) * dt,
                                 sim.source, t + dt, fl; update_momentum=upd)
+    d.repairs_postsolve += amend_rad_state!(rw.Rtmp, phys, g, fl)
 
     # --- stage 3: Shu-Osher combination + implicit coupling ------------------
-    _stage_chat!(sim, rw.Utmp, rw.Rtmp, dt, t + dt)
+    # Same `chat` as stage 2; only the wave-speed correction's `chiF` follows
+    # the stage state.
+    _stage_chiF!(sim, rw.Utmp, t + dt)
     rad_rhs!(rw.dR, rw.Rtmp, sim, t + dt)
     combine!(sim.R, T(1 - IMEX_ALPHA), sim.R, T(IMEX_ALPHA), rw.Rtmp,
              T(IMEX_AEX_32) * dt, rw.dR, g, nradvars(sim.radiation))
     combine_gas!(sim.U, T(IMEX_ALPHA), rw.Utmp, g)
-    amend_rad_state!(sim.R, phys, g, fl)
+    d.floors_presolve += floor_rad_energy!(sim.R, sim.U, rw.chat, phys, g, fl)
     s2 = radiation_source_step!(sim.U, sim.R, rw.chat, sim.eos, phys, g,
                                 T(IMEX_AIM_33) * dt,
                                 sim.source, t + dt, fl; update_momentum=upd)
+    d.repairs_postsolve += amend_rad_state!(sim.R, phys, g, fl)
     return s1 + s2
 end
 
@@ -555,27 +596,26 @@ end
 
 # --- driver ------------------------------------------------------------------
 
-# The radiation transport step: the RSLA CFL condition, plus -- only when a
-# `chat` limiter is active -- the radiation-force feedback bound. That bound
-# constrains the standard RSLA too, but adding a step restriction to the default
-# path would silently change every existing result, so it rides with the
-# limiter that also implements the other half of the same constraint.
+# The radiation transport step: the RSLA CFL condition -- which the standard
+# RSLA and the stability-bound limiter are both stable at, whatever the ratio of
+# radiation to gas pressure -- plus, only when asked for, the shorter step at
+# which the limiter can reach `phi = 1` in thick, radiation-rich cells (see
+# `energy_exchange_dt`).
 @inline _rad_dt(sim::Simulation) = _rad_dt(sim, sim.radiation.chat_limiter)
 
-@inline _rad_dt(sim::Simulation, ::ConstantChat) =
+@inline _rad_dt(sim::Simulation, ::AbstractChatLimiter) =
     radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
 
-function _rad_dt(sim::Simulation, ::AbstractChatLimiter)
+function _rad_dt(sim::Simulation, lim::StabilityBound)
     dt = radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
-    # The radiation-force channel is a loop through the *gas velocity*: an
-    # amplified flux perturbation accelerates the gas, and the gas re-seeds the
-    # radiation on the next step. With hydrodynamics disabled the gas cannot
-    # move and the loop is open, so the constraint is pure cost -- on the Vaytet
-    # Marshak wave, a static problem with hot radiation over cold gas, it was
-    # 5.4x the steps for no change in the answer.
-    sim.hydro_enabled || return dt
-    return min(dt, radiation_pressure_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid,
-                                         sim.cfl_radiation, sim.floors))
+    lim.energy_step || return dt
+    dtE = energy_exchange_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid, lim.xi,
+                             sim.floors)
+    # Never below the step of the unreduced scheme: there `phi = 1` is stable in
+    # every cell, so a shorter step would cost more than not reducing at all --
+    # which a strongly radiation-dominated cell would otherwise ask for.
+    dtc = dt * sim.radiation.chat / sim.radiation.c
+    return min(dt, max(dtE, dtc))
 end
 
 """

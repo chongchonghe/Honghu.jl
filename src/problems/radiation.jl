@@ -266,6 +266,49 @@ function radhydro_shock(; n::Integer=256, nx::Integer=n,
                         beta_order::Integer=1, chat_factor=10.0,
                         chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
                         kwargs...)
+    # upstream (left) and downstream (right) Rankine-Hugoniot states at Mach 3
+    Lx = 0.01578396467532876                      # 9.11 mean free paths
+    sim = _lowrie_edwards_shock(; nx, closure, beta_order, chat_limiter,
+                                mach=3.0, T_hi=3.661912665809719,
+                                rho1=3.0021676971081166, xlo=0.0, xhi=Lx,
+                                shock_position=0.0130,
+                                chat=chat_factor * (3.0 + 1.0), kwargs...)
+    return sim, 3 * Lx / 3.0                      # three shock-crossing times
+end
+
+"""
+    radhydro_shock_super(; n = 128, chat_over_c = 0.025, closure = EddingtonClosure(),
+                         beta_order = 1, chat_limiter = ConstantChat(), kwargs...)
+        -> (sim, tmax)
+
+The Mach 5 *supercritical* radiative shock of Lowrie & Edwards (2008), in the
+form of Quokka's `RadhydroShockSuper` test: the same dimensionless units and
+opacity as [`radhydro_shock`](@ref), downstream state `rho = 3.5979`,
+`T = 8.5572`, on `x in [-0.04, 0.01]` with the shock initially at `x = 0`.
+
+Supercritical means the radiative precursor heats the upstream gas to nearly the
+downstream temperature, and that makes it the problem most sensitive to the RSLA:
+the strong exchange in the precursor amplifies the RSLA's energy error. Quokka's
+default reduction for it is `chat/c = 0.025`. `chat_over_c = 1` is the reference
+a limiter should be scored against; `tmax` is three shock-crossing times.
+"""
+function radhydro_shock_super(; n::Integer=128, nx::Integer=n, chat_over_c=0.025,
+                              closure::AbstractClosure=EddingtonClosure(),
+                              beta_order::Integer=1,
+                              chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
+                              kwargs...)
+    c = sqrt(3 * 1.0e6)
+    sim = _lowrie_edwards_shock(; nx, closure, beta_order, chat_limiter,
+                                mach=5.0, T_hi=8.557199218476, rho1=3.597910653061,
+                                xlo=-0.04, xhi=0.01, shock_position=0.0,
+                                chat=chat_over_c * c, kwargs...)
+    return sim, 3 * 0.05 / 5.0                    # three shock-crossing times
+end
+
+# The Lowrie & Edwards (2008) radiative shock at a given Mach number, shared by
+# `radhydro_shock` (Mach 3) and `radhydro_shock_super` (Mach 5).
+function _lowrie_edwards_shock(; nx, closure, beta_order, chat_limiter, mach, T_hi,
+                               rho1, xlo, xhi, shock_position, chat, kwargs...)
     a_rad = 1.0e-4
     sigma_a = 1.0e6
     c_s0 = 1.0
@@ -276,16 +319,9 @@ function radhydro_shock(; n::Integer=256, nx::Integer=n,
     cv = k_B / (mu * (gamma - 1))                 # 0.9
     kappa_abs = sigma_a * (c_s0 / c)              # absorption coefficient, 1/length
 
-    # upstream (left) and downstream (right) Rankine-Hugoniot states at Mach 3
     T_lo, rho0 = 1.0, 1.0
-    v0 = 3.0 * c_s0
-    T_hi = 3.661912665809719
-    rho1 = 3.0021676971081166
+    v0 = mach * c_s0
     v1 = v0 * rho0 / rho1
-
-    chat = chat_factor * (v0 + c_s0)
-    Lx = 0.01578396467532876                      # 9.11 mean free paths
-    shock_position = 0.0130
 
     eos = IdealGas(; gamma, cv)
     rad = RadiationPhysics(; c, chat, a_rad, closure, beta_order, chat_limiter,
@@ -298,7 +334,8 @@ function radhydro_shock(; n::Integer=256, nx::Integer=n,
     hi_rad = Fixed((a_rad * T_hi^4, 0.0, 0.0, 0.0))
     outflow = (Outflow(), Outflow())
 
-    sim = Simulation(; n=(nx, 1, 1), xhi=(Lx, 1.0, 1.0), eos=eos, radiation=rad,
+    sim = Simulation(; n=(nx, 1, 1), xlo=(xlo, 0.0, 0.0), xhi=(xhi, 1.0, 1.0), eos=eos,
+                     radiation=rad,
                      boundaries=Boundaries((lo_gas, hi_gas), outflow, outflow),
                      radiation_boundaries=Boundaries((lo_rad, hi_rad), outflow, outflow),
                      cfl=0.4, cfl_radiation=0.4, kwargs...)
@@ -309,7 +346,7 @@ function radhydro_shock(; n::Integer=256, nx::Integer=n,
             (rho=rho1, vx=v1, T=T_hi, Erad=a_rad * T_hi^4, Fx=0.0)
         end
     end
-    return sim, 3 * Lx / v0                       # three shock-crossing times
+    return sim
 end
 
 """
@@ -482,4 +519,51 @@ function total_erad(sim)
         out .+= @view sim.R[Hydro3D.gbase(gr)+Hydro3D.IERAD, ir, jr, kr]
     end
     return out
+end
+
+"""
+    radhydro_pulse_dyn(; n = 128, chat_over_c = 1.0, v0 = 3e7, kappa0 = 500.0,
+                       chat_limiter = ConstantChat(), kwargs...) -> (sim, tmax)
+
+The advecting radiation pulse in the dynamic diffusion limit of He, Wibking &
+Krumholz (2024a), in the form of Quokka's `RadhydroPulseDyn` test, in CGS: a
+Gaussian temperature pulse, `T` from `1e7` to `2e7` K over a width of 24 cm, in
+pressure balance between gas and radiation, carried by a uniform flow of
+`v0 = 3e7` cm/s through a periodic box 1024 cm wide. The opacity is `500 cm² g⁻¹`
+at `rho ≈ 1.2 g cm⁻³`, so a cell is thousands of mean free paths thick and the
+optical depth of the pulse times `v0/c` is about ten: the radiation is carried
+with the gas rather than diffusing through it.
+
+This is the regime in which Wibking & Krumholz (2022) show the RSLA makes
+order-unity errors whatever `chat` is, and it is radiation-rich -- radiation
+holds about a third of the heat capacity -- which is the regime in which the
+stability bound caps `phi` at the RSLA step (see [`StabilityBound`](@ref)).
+`chat_over_c = 1` is the reference; `tmax = 4.8e-6` s moves the pulse by 144 cm.
+"""
+function radhydro_pulse_dyn(; n::Integer=128, nx::Integer=n, chat_over_c=1.0, v0=3e7,
+                            kappa0=500.0,
+                            chat_limiter::Hydro3D.AbstractChatLimiter=ConstantChat(),
+                            beta_order::Integer=1, wavespeed_correction::Bool=false,
+                            kwargs...)
+    c = Hydro3D.CGS.c_light
+    a_rad = Hydro3D.CGS.a_rad
+    k_B = Hydro3D.CGS.k_B
+    mu = 2.33 * Hydro3D.CGS.m_u
+    gamma = 5 / 3
+    cv = k_B / (mu * (gamma - 1))
+    T_lo, T_hi, rho0, width = 1.0e7, 2.0e7, 1.2, 24.0
+    Tprof(x) = T_lo + (T_hi - T_lo) * exp(-x^2 / (2 * width^2))
+    # gas + radiation pressure balance: rho k T/mu + a T^4/3 = const
+    rhoprof(x) = (T = Tprof(x); rho0 * T_lo / T + (a_rad * mu / (3 * k_B)) * (T_lo^4 / T - T^3))
+    rad = RadiationPhysics(; c, chat=chat_over_c * c, a_rad, k_B, beta_order, chat_limiter,
+                           opacity=ConstantOpacity(kappa0), wavespeed_correction)
+    sim = Simulation(; n=(nx, 1, 1), xlo=(-512.0, 0.0, 0.0), xhi=(512.0, 1.0, 1.0),
+                     eos=IdealGas(; gamma, cv), radiation=rad,
+                     boundaries=Boundaries(Periodic()), cfl=0.8, cfl_radiation=0.4,
+                     kwargs...)
+    set_initial_conditions!(sim) do x, y, z
+        T = Tprof(x)
+        (rho=rhoprof(x), vx=v0, T=T, Erad=a_rad * T^4, Fx=0.0)
+    end
+    return sim, 4.8e-6
 end

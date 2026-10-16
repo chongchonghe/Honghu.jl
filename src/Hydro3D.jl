@@ -116,7 +116,7 @@ export LevermoreClosure, EddingtonClosure
 export RadiationGroups, ngroups, planck_integral, planck_fractions
 export AbstractCoupling, BracketedCoupling, QuokkaCoupling, AdaptiveCoupling
 export AbstractDustModel, NoDust, BateKetoDust
-export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit, per_group
+export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit, per_group, flux_form
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 
 # numerics

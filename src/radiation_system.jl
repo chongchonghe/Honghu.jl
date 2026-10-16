@@ -63,6 +63,19 @@ Parameters of the two-moment (M1) radiation module, grey or multigroup.
     which is appropriate only for a static medium.
   - `tolerance`, `max_iterations`, `max_outer_iterations` : controls of the
     implicit coupling solve (see [`radiation_source_step!`](@ref)).
+  - `wavespeed_correction = false` : scale the HLL dissipation of the radiation
+    *energy* at each face by `epsilon = min(1, 1/tau)`, with `tau` the harmonic
+    mean of the two cells' flux-mean optical depths across the face (Skinner et
+    al. 2019; optional in Quokka). In optically thick cells the HLL
+    dissipation `sigma chat (E_R - E_L)/2` is a numerical diffusion far faster
+    than the physical one, `c/(3 tau)`; the correction removes it. Allowed
+    with the standard RSLA only: with a local `chat_limiter` the stability bound
+    no longer holds. A face's correction is set by both cells beside it, so a
+    thick cell bounded with its own correction can run at `phi = 1` behind an
+    almost undamped face beside a thin one, and in a uniform medium the lowered
+    dissipation lets modes near a quarter of the grid frequency grow wherever
+    the radiation's inertia matters, which the checkerboard bound does not see
+    (paper Sec. 3.2; `analysis/v2/check_wavespeed.py`).
 """
 struct RadiationPhysics{NG,M,T<:AbstractFloat,O<:AbstractOpacity,C<:AbstractClosure,
                         S<:AbstractCoupling,L<:AbstractChatLimiter,D<:AbstractDustModel}
@@ -80,6 +93,7 @@ struct RadiationPhysics{NG,M,T<:AbstractFloat,O<:AbstractOpacity,C<:AbstractClos
     max_iterations::Int
     max_outer_iterations::Int
     dust::D
+    wavespeed_correction::Bool
 end
 
 function RadiationPhysics(; c, chat=c, a_rad, opacity,
@@ -92,10 +106,14 @@ function RadiationPhysics(; c, chat=c, a_rad, opacity,
                           beta_order::Integer=1,
                           tolerance=1e-9,
                           max_iterations::Integer=100,
-                          max_outer_iterations::Integer=5)
+                          max_outer_iterations::Integer=5,
+                          wavespeed_correction::Bool=false)
     0 <= beta_order <= 1 || throw(ArgumentError("beta_order must be 0 or 1, got $beta_order"))
     chat <= c || throw(ArgumentError("the reduced speed of light must satisfy chat <= c"))
     k_B > 0 || throw(ArgumentError("k_B must be positive, got $k_B"))
+    wavespeed_correction && !(chat_limiter isa ConstantChat) &&
+        throw(ArgumentError("the wave-speed correction cannot be combined with a local " *
+                            "chat_limiter: the stability bound does not hold for it"))
     dust isa NoDust || coupling isa BracketedCoupling ||
         throw(ArgumentError("a dust model is supported by BracketedCoupling only, " *
                             "got coupling = $(nameof(typeof(coupling)))"))
@@ -105,7 +123,7 @@ function RadiationPhysics(; c, chat=c, a_rad, opacity,
     RadiationPhysics(cc, cch, ar, kb, gr, opacity, closure, coupling,
                      _convert_limiter(chat_limiter, typeof(cc)), Int(beta_order), tol,
                      Int(max_iterations), Int(max_outer_iterations),
-                     _convert_dust(dust, typeof(cc)))
+                     _convert_dust(dust, typeof(cc)), wavespeed_correction)
 end
 
 # A limiter's parameters must be the simulation's float type, for the same
@@ -113,9 +131,9 @@ end
 # inner loop and a `Float64` `beta` in a `Float32` run would promote every one.
 _convert_limiter(l::ConstantChat, ::Type{T}) where {T} = l
 _convert_limiter(l::StabilityBound, ::Type{T}) where {T} =
-    StabilityBound(T(l.beta), l.per_group)
+    StabilityBound(T(l.beta), l.energy_step, T(l.xi), l.flux_form)
 _convert_limiter(l::OpticalDepthFit, ::Type{T}) where {T} =
-    OpticalDepthFit(T(l.s), T(l.p), l.per_group)
+    OpticalDepthFit(T(l.s), T(l.p), l.per_group, l.flux_form)
 
 # `GREY` is a Float64 constant; a Float32 simulation needs its own copy.
 _convert_groups(g::RadiationGroups{NG,M,T}, ::Type{T}) where {NG,M,T} = g
@@ -209,15 +227,71 @@ end
 """
     amend_rad_state!(R, phys, grid, floors) -> Int
 
-Repair the radiation state of the *interior* cells in place. Used after the
-explicit transport stages of the IMEX scheme, whose output must be admissible
-before the implicit coupling solve runs; the ghost cells are refilled from the
-boundary conditions before they are next read, so there is no point touching
-them here.
+Repair the radiation state of the *interior* cells in place. Used after each
+implicit coupling solve of the IMEX scheme, so that every stage hands the next
+transport step an admissible state -- not between the transport stage and the
+solve, where the flux must be left alone (see [`floor_rad_energy!`](@ref)). The
+ghost cells are refilled from the boundary conditions before they are next read,
+so there is no point touching them here.
 """
 function amend_rad_state!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
                           g::CartesianGrid{T}, floors::Floors{T}) where {NG,M,T}
     _amend_range!(R, phys, floors, g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3])
+end
+
+"""
+    floor_rad_energy!(R, U, chat, phys, grid, floors) -> Int
+
+Hand the transport stage's radiation state to the implicit coupling solve
+unchanged where the solve can absorb it, and floor the radiation energy only
+where it cannot. Used after the explicit transport stages of the IMEX scheme,
+before the solve; returns the number of cells floored.
+
+Neither the flux nor the energy is limited where the solve can take the state.
+In an optically thick cell run at a local CFL number far above one -- which is
+what a local reduced speed of light does at `phi = 1` -- the transport stage
+leaves `|F| >> cE`, and the solve, which divides the flux by
+`1 + chat rho kappa_F dt >> 1`, is exactly what turns it into the diffusion flux
+`-c grad E / (3 rho kappa_F)`. Clipping `|F|` to `cE` first threw that flux away:
+on the thick hot spot of the paper's test it raised the IRSLA error from 0.0003%
+to 0.80%, twice that of the standard RSLA. The same stage can also leave `E < 0`
+where a thick cell at large `phi` borders cells at small `phi` across a steep
+jump; raising `E` to the floor there adds energy every substep, and on an Ensman
+shock resolved by 64 cells it made the IRSLA error 17 times that of the RSLA.
+
+The solve conserves `e_int + sum_g E_g/phi_g` (with `phi_g = chat_g/c`) and
+returns a positive temperature whenever that is positive, so a negative `E` is
+left for it to absorb. Only a cell whose budget is not positive is floored, as
+before; the full repair, [`amend_rad_state!`](@ref), runs after the solve.
+"""
+function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
+                           chat::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
+                           g::CartesianGrid{T}, floors::Floors{T}) where {NG,M,T}
+    ef = floors.erad / NG
+    c = phys.c
+    nbad = Threads.Atomic{Int}(0)
+    threaded_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]) do j, k
+        local bad = 0
+        @inbounds for i in g.lo[1]:g.hi[1]
+            rho = U[IRHO, i, j, k]
+            mx, my, mz = U[IMX, i, j, k], U[IMY, i, j, k], U[IMZ, i, j, k]
+            budget = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
+            low = false
+            for gr in 1:NG
+                er = R[gbase(gr)+IERAD, i, j, k]
+                budget += er * c / chat[gr, i, j, k]
+                low |= !(er > ef)
+            end
+            (low && !(budget > 0)) || continue
+            for gr in 1:NG
+                b = gbase(gr)
+                R[b+IERAD, i, j, k] > ef || (R[b+IERAD, i, j, k] = ef)
+            end
+            bad += 1
+        end
+        bad > 0 && Threads.atomic_add!(nbad, bad)
+    end
+    return nbad[]
 end
 
 function _amend_range!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
@@ -302,12 +376,14 @@ As in the hydro sweep, an inadmissible reconstructed state (non-positive energy
 density, or a reduced flux at or beyond the causal limit) falls back to the
 piecewise-constant state of the adjoining cells.
 """
-function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::A,
+function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::Union{A,Nothing},
                      phys::RadiationPhysics{NG,MM,T},
-                     ::Val{D}, g::CartesianGrid{T}) where {NG,MM,T,A<:AbstractArray{T,4},D}
+                     ::Val{D}, g::CartesianGrid{T},
+                     chiF::Union{A,Nothing}=nothing) where {NG,MM,T,A<:AbstractArray{T,4},D}
     e1, e2, e3 = _shift(Val(D))
     c = phys.c
     cl = phys.closure
+    dl = g.dx[D]
     ir, jr, kr = face_ranges(g, Val(D))
     threaded_jk(jr, kr) do j, k
         # Groups are transported independently -- the M1 system couples them only
@@ -349,9 +425,11 @@ function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::A,
                 FzR = R[b+IFRZ, i, j, k]
             end
 
-            chatf = min(chat[gr, im, jm, km], chat[gr, i, j, k])
+            chatf = _face_chat(chat, c, gr, im, jm, km, i, j, k)
 
-            F = hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chatf, Val(D), cl)
+            eps = _face_epsilon(chiF, dl, gr, im, jm, km, i, j, k)
+            F = hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chatf, Val(D), cl,
+                              eps)
 
             flux[b+IERAD, i, j, k] = F[1]
             flux[b+IFRX, i, j, k] = F[2]
@@ -360,6 +438,52 @@ function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::A,
         end
     end
     return nothing
+end
+
+# The reduced speed at a face: the minimum of the two cells it separates, or --
+# when `chat` is `nothing` -- the true speed of light, for the time-derivative
+# form of a local chat (see `flux_form`), in which the flux is the unreduced one
+# and each cell scales its own update afterwards.
+@inline _face_chat(chat::AbstractArray, c, gr, im, jm, km, i, j, k) =
+    @inbounds min(chat[gr, im, jm, km], chat[gr, i, j, k])
+@inline _face_chat(::Nothing, c, gr, im, jm, km, i, j, k) = c
+
+# The wave-speed correction at a face: `min(1, 1/tau)` with `tau` the harmonic
+# mean of the two cells' optical depths across it, as Quokka forms it; one
+# without the correction.
+@inline _face_epsilon(::Nothing, dl::T, gr, im, jm, km, i, j, k) where {T} = one(T)
+@inline function _face_epsilon(chiF::AbstractArray{T,4}, dl::T, gr, im, jm, km, i, j,
+                               k) where {T}
+    @inbounds tL = chiF[gr, im, jm, km] * dl
+    @inbounds tR = chiF[gr, i, j, k] * dl
+    s = tL + tR
+    s > 0 || return one(T)
+    return min(one(T), s / (2 * tL * tR))
+end
+
+"""
+    scale_by_phi!(dR, chat, phys, grid)
+
+Multiply each interior cell's radiation right-hand side by its own reduction
+`chat_g/c`, group by group: the time-derivative form of a local reduced speed of
+light (see [`flux_form`](@ref)).
+"""
+function scale_by_phi!(dR::AbstractArray{T,4}, chat::AbstractArray{T,4},
+                       phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T}) where {NG,M,T}
+    c = phys.c
+    ir = g.lo[1]:g.hi[1]
+    threaded_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]) do j, k
+        @inbounds for i in ir, gr in 1:NG
+            # A division, not a multiplication by 1/c: it is exactly one where
+            # chat = c, so a cell at phi = 1 runs the unmodified scheme bit for bit.
+            phi = chat[gr, i, j, k] / c
+            b = gbase(gr)
+            for n in 0:3
+                dR[b+n, i, j, k] *= phi
+            end
+        end
+    end
+    return dR
 end
 
 """
@@ -385,11 +509,12 @@ end
 # `rad_fluxes!` and `radiation_timestep` above do.
 
 """
-    _grid_scales(grid) -> (dx_min, sum_d 1/dx_d)
+    _grid_scales(grid) -> (dx_min, sum_d 1/dx_d, (1/dx_1, 1/dx_2, 1/dx_3))
 
-The two grid numbers the limiter needs, over the *active* directions only: the
-cell width its optical depth is measured across, and the reciprocal-width sum the
-CFL number is built from (the same one `radiation_timestep` forms).
+The grid numbers the limiter needs, over the *active* directions only: the
+smallest cell width (read by the fitting form), the reciprocal-width sum the CFL
+number is built from (the same one `radiation_timestep` forms), and the
+per-direction reciprocal widths, zero in an inactive direction.
 
 A free function because both callers capture the result in a threaded closure,
 and a variable assigned inside a loop in the enclosing scope would be boxed --
@@ -405,36 +530,75 @@ every cell would then allocate. That is not hypothetical: written inline it cost
             invdx += one(T) / g.dx[d]
         end
     end
-    return (dxmin, invdx)
+    inv3 = ntuple(d -> g.active[d] ? one(T) / g.dx[d] : zero(T), 3)
+    return (dxmin, invdx, inv3)
 end
 
 """
-    _signal_speed(closure, R, i, j, k, g, c) -> sig
+    _signal_sum(closure, R, i, j, k, g, c, inv3) -> sum_d sigma_d / dx_d
 
-The fastest signal the M1 system carries in group `g` of this cell, as a fraction
-of `chat`: `sqrt(chi(|F|/cE))`, the same wave speed estimate `m1_flux` hands the
-HLL solver.
+The HLL signal speed of group `g` in this cell along each active direction, as a
+fraction of `chat`, divided by the cell width and summed: the rate at which one
+explicit stage amplifies a grid-scale checkerboard, per unit `chat dt`.
 
-`1/sqrt(3)` where the radiation is isotropic and one where it free-streams. It is
-the `sig` of [`chat_factor`](@ref), and computing it locally rather than assuming
-the isotropic value is what keeps [`StabilityBound`](@ref) honest in a
-free-streaming cell -- which is exactly the cell that has no source damping to
-spare.
+`sigma_d = max(0.1, sqrt(T_dd))` is exactly the speed `m1_flux` hands the Riemann
+solver along `d`: `1/sqrt(3)` in every direction where the radiation is
+isotropic, and -- where it free-streams -- one along the beam and the `0.1` floor
+across it. Using the closure's own speeds rather than the P1 value is what keeps
+[`StabilityBound`](@ref) honest in a free-streaming cell, which is exactly the
+cell with no source damping to spare; using them *per direction* rather than
+the largest of them keeps a beamed cell in two or three dimensions from being
+bounded as if it beamed along every axis at once.
 """
-@inline function _signal_speed(cl::AbstractClosure, R::AbstractArray{T,4}, i, j, k,
-                               gr::Integer, c::T) where {T}
+@inline function _signal_sum(cl::AbstractClosure, R::AbstractArray{T,4}, i, j, k,
+                             gr::Integer, c::T, inv3::NTuple{3,T}) where {T}
     b = gbase(gr)
+    iso = sqrt(one(T) / 3) * (inv3[1] + inv3[2] + inv3[3])
     @inbounds er = R[b+IERAD, i, j, k]
-    er > 0 || return one(T) / sqrt(T(3))
+    er > 0 || return iso
     ce = c * er
     @inbounds fx = R[b+IFRX, i, j, k] / ce
     @inbounds fy = R[b+IFRY, i, j, k] / ce
     @inbounds fz = R[b+IFRZ, i, j, k] / ce
-    f = sqrt(fx * fx + fy * fy + fz * fz)
     # `amend_rad` keeps `f < 1` in the interior, but this also runs in ghost
-    # cells filled by a user boundary condition, which nothing has repaired.
-    f < 1 || return one(T)
-    return sqrt(eddington_factor(cl, f))
+    # cells filled by a user boundary condition, which nothing has repaired: an
+    # inadmissible state gets the fastest speed the closure can produce.
+    fx * fx + fy * fy + fz * fz < 1 ||
+        return inv3[1] + inv3[2] + inv3[3]
+    t = eddington_tensor(cl, fx, fy, fz)
+    s = zero(T)
+    for d in 1:3
+        s += max(T(0.1), sqrt(t[d, d])) * inv3[d]
+    end
+    return s
+end
+
+"""
+    update_chiF!(chiF, U, eos, phys, grid, floors)
+
+Fill the per-cell, per-group flux absorption coefficient `rho kappa_F` over the
+whole array including ghost cells, for the wave-speed correction of
+[`RadiationPhysics`](@ref).
+"""
+function update_chiF!(chiF::AbstractArray{T,4}, U::AbstractArray{T,4}, eos::AbstractEOS,
+                      phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
+                      floors::Floors{T}) where {NG,M,T}
+    n1, n2, n3 = g.dims
+    op = phys.opacity
+    groups = phys.groups
+    rhomin = floors.rho
+    pmin = floors.pressure
+    threaded_jk(1:n2, 1:n3) do j, k
+        @inbounds for i in 1:n1
+            rho, Tgas = _cell_temperature(U, eos, i, j, k, rhomin, pmin)
+            kappa = group_opacities(op, groups, rho, Tgas)
+            for gr in 1:NG
+                kF = last(_limiter_opacities(op, groups, kappa, rho, Tgas, gr))
+                chiF[gr, i, j, k] = rho * kF
+            end
+        end
+    end
+    return chiF
 end
 
 """
@@ -460,6 +624,30 @@ change.
                     phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
                     floors::Floors{T}, dt::T) where {NG,M,T} = chat
 
+# The gas temperature of cell (i, j, k), with the same floors the coupling uses.
+@inline function _cell_temperature(U::AbstractArray{T,4}, eos, i, j, k,
+                                   rhomin::T, pmin::T) where {T}
+    @inbounds rho = U[IRHO, i, j, k]
+    rho < rhomin && (rho = rhomin)
+    @inbounds mx = U[IMX, i, j, k]
+    @inbounds my = U[IMY, i, j, k]
+    @inbounds mz = U[IMZ, i, j, k]
+    @inbounds Eint = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
+    emin = internal_energy(eos, rho, pmin)
+    Eint < emin && (Eint = emin)
+    return rho, temperature(eos, rho, Eint)
+end
+
+# The three opacities of group `gr`: grey runs distinguish the Planck, energy and
+# flux means, multigroup runs use the group opacity for all three, as the
+# coupling does.
+@inline function _limiter_opacities(op, groups::RadiationGroups{NG}, kappa, rho, Tgas,
+                                    gr) where {NG}
+    NG == 1 || return (kappa[gr], kappa[gr], kappa[gr])
+    return (planck_opacity(op, rho, Tgas), energy_mean_opacity(op, rho, Tgas),
+            flux_mean_opacity(op, rho, Tgas))
+end
+
 function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
                      U::AbstractArray{T,4}, R::AbstractArray{T,4}, eos::AbstractEOS,
                      phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
@@ -472,58 +660,42 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
     groups = phys.groups
     arad = phys.a_rad
 
-    # `nu0` is the CFL number this step actually runs at -- which is what the
-    # stability bound is derived for, and never larger than the nominal `C_r` the
-    # paper uses.
-    dxmin, invdx = _grid_scales(g)
-    nu0 = phi0 * c * dt * invdx
-
+    # The bound is a statement about the step actually being taken, which is
+    # `dt` here -- never the nominal CFL number, which a subcycled or
+    # hydro-limited step may undershoot or overshoot.
+    dxmin, _, inv3 = _grid_scales(g)
+    cdt = c * dt
     rhomin = floors.rho
     pmin = floors.pressure
 
     threaded_jk(1:n2, 1:n3) do j, k
         @inbounds for i in 1:n1
-            rho = U[IRHO, i, j, k]
-            rho < rhomin && (rho = rhomin)
-            mx = U[IMX, i, j, k]
-            my = U[IMY, i, j, k]
-            mz = U[IMZ, i, j, k]
-            Eint = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
-            emin = internal_energy(eos, rho, pmin)
-            Eint < emin && (Eint = emin)
-            Tgas = temperature(eos, rho, Eint)
-
-            # P_rad/P_gas, with `max(a T^4, E_rad)` so that a cell whose gas is
-            # hot but whose radiation has not caught up is still recognised as
-            # radiation-pressure dominated, and vice versa. Summed over groups:
-            # the force on the gas does not care which group carried it.
-            Erad = zero(T)
-            for gr in 1:NG
-                Erad += R[gbase(gr)+IERAD, i, j, k]
-            end
-            prat = max(arad * Tgas^4, Erad) / pressure(eos, rho, Eint)
-
+            rho, Tgas = _cell_temperature(U, eos, i, j, k, rhomin, pmin)
+            # 4 a T^3 / (rho c_v): the radiation-to-gas heat capacity ratio that
+            # sets how much damping the coupling can supply (see StabilityBound).
+            hcap = 4 * arad * Tgas^3 / heat_capacity(eos, rho, Tgas)
             kappa = group_opacities(op, groups, rho, Tgas)
             if NG == 1 || per_group(lim)
                 for gr in 1:NG
-                    tau_cell = rho * kappa[gr] * dxmin
-                    sig = _signal_speed(cl, R, i, j, k, gr, c)
-                    chat[gr, i, j, k] = c * chat_factor(lim, phi0, nu0, tau_cell, prat, sig)
+                    kP, kE, kF = _limiter_opacities(op, groups, kappa, rho, Tgas, gr)
+                    w = LocalCell(cdt, _signal_sum(cl, R, i, j, k, gr, c, inv3),
+                                  rho * kE, rho * kF, kE > 0 ? hcap * kP / kE : zero(T),
+                                  dxmin)
+                    chat[gr, i, j, k] = c * chat_factor(lim, phi0, w)
                 end
             else
-                # One `phi` for the whole cell: see [`per_group`](@ref) for why.
-                # `phi` is monotone in `tau_cell` and decreasing in `sig`, so the
-                # most restrictive group is the most transparent, most strongly
-                # beamed one, and the two extremes can be taken separately.
-                tau_cell = T(Inf)
-                sig = T(1) / sqrt(T(3))
+                # The fitting form with `per_group = false`: one `phi` for the whole
+                # cell, from the most restrictive group (see [`per_group`](@ref)).
+                phi = one(T)
                 for gr in 1:NG
-                    tau_cell = min(tau_cell, rho * kappa[gr] * dxmin)
-                    sig = max(sig, _signal_speed(cl, R, i, j, k, gr, c))
+                    kP, kE, kF = _limiter_opacities(op, groups, kappa, rho, Tgas, gr)
+                    w = LocalCell(cdt, _signal_sum(cl, R, i, j, k, gr, c, inv3),
+                                  rho * kE, rho * kF, kE > 0 ? hcap * kP / kE : zero(T),
+                                  dxmin)
+                    phi = min(phi, chat_factor(lim, phi0, w))
                 end
-                ch = c * chat_factor(lim, phi0, nu0, tau_cell, prat, sig)
                 for gr in 1:NG
-                    chat[gr, i, j, k] = ch
+                    chat[gr, i, j, k] = c * phi
                 end
             end
         end
@@ -532,54 +704,48 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
 end
 
 """
-    radiation_pressure_dt(U, R, eos, phys, grid, cfl, floors) -> dt
+    energy_exchange_dt(U, R, eos, phys, grid, xi, floors) -> dt
 
-The time-step constraint that radiation pressure imposes on the transport step,
-`dt = cfl / (c max(phi0, 2 P) sum_d 1/dx_d)` minimised over interior cells, with
-`P = max(a_rad T^4, E_rad)/P_gas`.
+The longest substep at which every optically thick cell may run at `phi = 1`,
+`dt = xi / (c max_i [4 a_rad T^3 / (rho c_v) * sum_d sigma_d/dx_d])` minimised
+over interior cells. Requested by `StabilityBound(energy_step = true)`.
 
-This is the same feedback loop that [`StabilityBound`](@ref)'s `phi_P` channel
-caps, in the regime where capping `phi` cannot help: at `2 P > phi0` even
-`phi = phi0` -- the standard RSLA itself -- is unstable, and `phi` is already at
-its floor, so only the step can give. Returns the ordinary RSLA step wherever
-radiation pressure is not dynamically significant, which is almost everywhere.
+**Not a stability condition.** The standard RSLA and the stability-bound limiter
+are both stable without it, at any radiation-to-gas pressure ratio. What it buys
+is accuracy where radiation carries a large share of the heat capacity: there
+the limiter's energy channel caps `phi` near `phi0/(sigma C_r)` at the RSLA step,
+because with `K = hrat c dt chi_E` the damping `chi_E/(2 + K)` saturates at
+`1/(hrat c dt)` and cannot overcome the transport amplification. Below this
+step it can, by a margin `1 - xi`, and cells thick enough -- `chi_E / sum_d(1/dx_d)`
+beyond about `2 sigma/(1 - xi)` -- reach `phi = 1` and the exact equations.
 
-Evaluated only when a limiter other than [`ConstantChat`](@ref) is in use. Not
-because the RSLA is exempt from the instability -- it is not -- but because
-adding a step restriction to the default path would silently change every
-existing result.
+With hydrodynamics disabled the gas still exchanges heat with the radiation, so
+unlike a radiation-*force* constraint this one does not switch off when the gas
+cannot move.
 """
-function radiation_pressure_dt(U::AbstractArray{T,4}, R::AbstractArray{T,4},
-                               eos::AbstractEOS, phys::RadiationPhysics{NG,M,T},
-                               g::CartesianGrid{T}, cfl::Real,
-                               floors::Floors{T}) where {NG,M,T}
+function energy_exchange_dt(U::AbstractArray{T,4}, R::AbstractArray{T,4},
+                            eos::AbstractEOS, phys::RadiationPhysics{NG,M,T},
+                            g::CartesianGrid{T}, xi::Real,
+                            floors::Floors{T}) where {NG,M,T}
     c = phys.c
-    phi0 = phys.chat / c
     arad = phys.a_rad
-    invdx = last(_grid_scales(g))
+    cl = phys.closure
+    _, _, inv3 = _grid_scales(g)
     rhomin = floors.rho
     pmin = floors.pressure
 
-    # The largest `max(phi0, 2 P)` over interior cells sets the smallest step.
-    speed = reduce_max_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3], T) do j, k
-        local m = phi0
+    rate = reduce_max_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3], T) do j, k
+        local m = zero(T)
         @inbounds for i in g.lo[1]:g.hi[1]
-            rho = U[IRHO, i, j, k]
-            rho < rhomin && (rho = rhomin)
-            mx = U[IMX, i, j, k]
-            my = U[IMY, i, j, k]
-            mz = U[IMZ, i, j, k]
-            Eint = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
-            emin = internal_energy(eos, rho, pmin)
-            Eint < emin && (Eint = emin)
-            Tgas = temperature(eos, rho, Eint)
-            Erad = zero(T)
+            rho, Tgas = _cell_temperature(U, eos, i, j, k, rhomin, pmin)
+            hcap = 4 * arad * Tgas^3 / heat_capacity(eos, rho, Tgas)
+            s = zero(T)
             for gr in 1:NG
-                Erad += R[gbase(gr)+IERAD, i, j, k]
+                s = max(s, _signal_sum(cl, R, i, j, k, gr, c, inv3))
             end
-            m = max(m, 2 * max(arad * Tgas^4, Erad) / pressure(eos, rho, Eint))
+            m = max(m, hcap * s)
         end
         return m
     end
-    return T(cfl) / (c * speed * invdx)
+    return rate > 0 ? T(xi) / (c * rate) : T(Inf)
 end
