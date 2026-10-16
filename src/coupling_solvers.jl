@@ -44,7 +44,8 @@
                      linsolve = ArrowheadSolve())
 
 Backward Euler in Quokka's *replaced* base variables `(E_gas, R_g)`, where `R_g`
-is the energy handed from gas to radiation group `g` over the step. The default.
+is the energy handed from gas to radiation group `g` over the step. The
+formulation Quokka runs; the default is [`BracketedCoupling`](@ref).
 
 Why not the obvious variables: with `(E_gas, E_g)` the residual for a group is a
 difference of two large, nearly-cancelling terms once `tau = chat rho kappa dt`
