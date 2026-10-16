@@ -7,8 +7,8 @@
 # reduction is needed, because matter coupling damps radiation modes strongly
 # enough that the implicit source update stabilises a CFL-violating transport
 # step. Making `phi` local removes the error where it is large and keeps the
-# reduction where it pays: this is the improved RSLA (IRSLA) of Krumholz,
-# Wibking & He.
+# reduction where it pays: this is the adaptive RSLA (ARSA; IRSLA in this code)
+# of He, Krumholz & Wibking.
 #
 # This file holds the rule and nothing else: `AbstractChatLimiter`, the local
 # quantities it reads (`LocalCell`), and the pointwise `chat_factor`. The array
@@ -89,7 +89,7 @@ the step is still stable at.
 Accuracy increases monotonically with `phi` up to the stability limit, so the
 optimal local choice is the limit itself -- and for the IMEX PD-ARS update used
 here, with the HLL transport flux, that limit is known exactly. A von Neumann
-analysis of one substep (Krumholz, Wibking & He, Sec. 3) finds the worst mode is
+analysis of one substep (He, Krumholz & Wibking, Sec. 3) finds the worst mode is
 always the grid-scale checkerboard, for which the transport symbol is a pure
 dissipation and the coupling splits into an energy block `(T, E)` and a momentum
 block `(v, F)`. Each block is a 2×2 problem with a closed-form boundary:

@@ -258,9 +258,9 @@ measurements live.
 
 Four things about it that are not obvious from the code:
 
-- **The interface value is the minimum of the two adjacent cells.** Krumholz,
-  Wibking & He argue for this and then write `max` in their own algorithm
-  summary. The argument is right: an optically thick cell may locally run at the
+- **The interface value is the minimum of the two adjacent cells.** An early
+  draft of He, Krumholz & Wibking argues for this and then writes `max` in its
+  own algorithm summary. The argument is right: an optically thick cell may locally run at the
   full speed of light, and letting it set the signal speed of a flux into a
   transparent neighbour would impose a CFL-violating speed where no source
   damping exists to control the amplification.

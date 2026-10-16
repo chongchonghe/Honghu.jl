@@ -1,6 +1,6 @@
 # The variable reduced speed of light: what the measurements say
 
-Findings from implementing the improved reduced speed of light approximation (IRSLA) of Krumholz, Wibking & He in Hydro3D and testing it. The implementation is `src/rsla.jl` plus the two array drivers at the end of `src/radiation_system.jl`; the numbers below are reproduced by `examples/rsla_limiter.jl` and pinned by `test/test_rsla.jl`.
+Findings from implementing the adaptive reduced speed of light approximation (ARSA; IRSLA in the code) of He, Krumholz & Wibking in Hydro3D and testing it. The implementation is `src/rsla.jl` plus the two array drivers at the end of `src/radiation_system.jl`; the numbers below are reproduced by `examples/rsla_limiter.jl` and pinned by `test/test_rsla.jl`.
 
 Everything is scored as a relative $L_1$ error in the gas temperature against a $\hat{c} = c$ reference at the same resolution, and — unless a row says otherwise — at the same number of steps as the standard RSLA it is compared with, so every comparison is at equal cost.
 
