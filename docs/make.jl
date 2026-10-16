@@ -244,7 +244,6 @@ function write_index()
     s = read(joinpath(ROOT, "README.md"), String)
     s = replace(s, r"\A# Honghu\.jl\s*\n" => "")
     s = replace(s, "](docs/figures/" => "](figures/", "src=\"docs/figures/" => "src=\"figures/",
-                "](../Hydro.jl)" => "](https://github.com/chongchonghe/Hydro.jl)",
                 "](future.md)" => "]($REPO/blob/main/future.md)")
     write(joinpath(DOCS, "index.qmd"), "---\ntitle: \"Honghu.jl\"\n---\n\n" * s)
 end

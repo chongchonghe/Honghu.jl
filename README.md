@@ -6,7 +6,7 @@ The name is 鸿鹄 (hóng hú): a great swan-like bird that flies high and far, 
 
 A three-dimensional radiation-hydrodynamics code in pure Julia. Three standard libraries, OrdinaryDiffEq and SciMLBase: OrdinaryDiffEq for the matter-radiation coupling's error-controlled reference solver, SciMLBase for the interface its default root-finder is written against. Plotting is a weak dependency that activates only if you load Plots.
 
-Honghu solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — on a uniform Cartesian grid. It is a rewrite of [Hydro.jl](../Hydro.jl) following the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
+Honghu solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — on a uniform Cartesian grid. It follows the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
 
 Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
@@ -448,4 +448,4 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 
 ## Author
 
-Rewritten from [Hydro.jl](https://github.com/chongchonghe/Hydro.jl) by [Chong-Chong He](https://chongchonghe.github.io/) (chongchong.he@anu.edu.au).
+[Chong-Chong He](https://chongchonghe.github.io/) (chongchong.he@anu.edu.au).

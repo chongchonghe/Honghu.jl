@@ -63,7 +63,7 @@ Add an entry `"name" => ("Title", ["file.jl", ...])` to `PAGES`, and add `refere
 
 ### The front page
 
-Edit `README.md`. The build copies it to `docs/index.qmd`. It drops the first line, `# Honghu.jl`, which becomes the page title, and it rewrites the links that are written for GitHub's view of the repository: `docs/figures/...` becomes `figures/...`, in Markdown links and in HTML `src` attributes, and the links to `future.md` and `../Hydro.jl` become GitHub URLs (`write_index` in `docs/make.jl`). Any other relative link in the README must point at something on the site, or the link check fails. To link to another file in the repository, use its full GitHub URL.
+Edit `README.md`. The build copies it to `docs/index.qmd`. It drops the first line, `# Honghu.jl`, which becomes the page title, and it rewrites the links that are written for GitHub's view of the repository: `docs/figures/...` becomes `figures/...`, in Markdown links and in HTML `src` attributes, and the link to `future.md` becomes a GitHub URL (`write_index` in `docs/make.jl`). Any other relative link in the README must point at something on the site, or the link check fails. To link to another file in the repository, use its full GitHub URL.
 
 ### A note
 
