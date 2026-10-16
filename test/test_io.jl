@@ -52,6 +52,15 @@ end
         bad = joinpath(dir, "bad.h3d")
         write(bad, vcat(b"NOTMAGIC", raw[9:end]))
         @test_throws ErrorException load_checkpoint!(sim2, bad)
+
+        # a script that saves to a fixed `.h3d` path and loads it back still
+        # works: the path is kept as given, and the file is in the new format
+        f = save_checkpoint(sim, joinpath(dir, "run.h3d"))
+        @test f == joinpath(dir, "run.h3d")
+        @test read(f)[1:8] == b"HONGHU\x00\x01"
+        sim3, _ = P.sod_shock_tube(nx=32)
+        load_checkpoint!(sim3, joinpath(dir, "run.h3d"))
+        @test sim3.U == sim.U
     end
 end
 

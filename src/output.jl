@@ -185,10 +185,13 @@ const _CHECKPOINT_MAGIC_HYDRO3D = b"HYDRO3D\x01"
 
 Write a raw binary checkpoint (grid metadata plus the full conserved state,
 ghost cells included) that [`load_checkpoint!`](@ref) can restore. The file
-extension `.honghu` is added if absent.
+extension `.honghu` is added unless the path already ends in `.honghu`, or in
+`.h3d`, the extension from the package's old name: a script that saves to and
+loads from a fixed `.h3d` path keeps working. The file is written in the
+current format either way.
 """
 function save_checkpoint(sim::Simulation{T}, path::AbstractString) where {T}
-    fn = endswith(path, ".honghu") ? String(path) : path * ".honghu"
+    fn = endswith(path, ".honghu") || endswith(path, ".h3d") ? String(path) : path * ".honghu"
     g = sim.grid
     open(fn, "w") do f
         write(f, _CHECKPOINT_MAGIC)
