@@ -1,6 +1,6 @@
 # Hydro3D.jl
 
-A three-dimensional radiation-hydrodynamics code in pure Julia. Three standard libraries and OrdinaryDiffEq, which the matter-radiation coupling's reference solver and default implicit stepper are built on; plotting is a weak dependency that activates only if you load Plots.
+A three-dimensional radiation-hydrodynamics code in pure Julia. Three standard libraries, OrdinaryDiffEq and SciMLBase: OrdinaryDiffEq for the matter-radiation coupling's error-controlled reference solver, SciMLBase for the interface its default root-finder is written against. Plotting is a weak dependency that activates only if you load Plots.
 
 Hydro3D solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — on a uniform Cartesian grid. It is a rewrite of [Hydro.jl](../Hydro.jl) following the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
 
@@ -43,9 +43,9 @@ Radiation subcycles inside each hydro step at the reduced speed of light $\hat{c
 
 ## Install and run
 
-Requires Julia 1.9 or newer. The dependencies are three standard libraries — `Printf`, `Dates` and `LinearAlgebra` — and `OrdinaryDiffEq`, which two pieces of the matter-radiation coupling are built on: `AdaptiveCoupling`, the error-controlled reference solver, and `ImplicitEulerStepper`, the backward-Euler stepper `DirectCoupling` defaults to. `OrdinaryDiffEqSDIRK` and `OrdinaryDiffEqNonlinearSolve` are named alongside it, because version 7 of the meta-package exports neither `ImplicitEuler` nor `NLNewton`; both already sit inside its own dependency closure, so the two extra lines add nothing to the manifest or the load time.
+Requires Julia 1.9 or newer. The dependencies are three standard libraries — `Printf`, `Dates` and `LinearAlgebra` — plus `OrdinaryDiffEq` and `SciMLBase`. `OrdinaryDiffEq` supplies `AdaptiveCoupling`, the error-controlled reference solver of the matter-radiation coupling. `SciMLBase` supplies the `IntervalNonlinearProblem` interface through which `BracketedCoupling`, the default coupling solver, hands its one scalar equation to a root-finder; the default root-finder, `ZBrent`, is written in `src/rootfind.jl`. `SciMLBase` already sits inside OrdinaryDiffEq's dependency closure, so naming it adds nothing to the manifest or the load time.
 
-That is a real cost and it is worth stating plainly: `using Hydro3D` takes 1.5 s rather than 0.035 s, and a first install precompiles around 190 packages instead of none. What it does not cost is run time — no integrator is on the path of the default coupling solver, whose wall time and allocation per cell are unchanged — and what it buys is a library implementation of the implicit step to check the hand-written ones against.
+That is a real cost and it is worth stating plainly: `using Hydro3D` takes 1.5 s rather than 0.035 s, and a first install precompiles around 190 packages instead of none. What it does not cost is run time — no integrator is on the path of the default coupling solver, which allocates nothing per cell — and what it buys is an error-controlled solution of the coupling to check the one-step solvers against.
 
 `Plots` is optional: load it and the plotting methods appear (see [Plotting](#plotting)); leave it out and the ~100-package plotting stack never enters the picture, which matters on a compute node.
 
@@ -278,21 +278,20 @@ Call any of them without Plots loaded and you get an error telling you to load i
 
 ```
 hydro3d.jl/
-  Project.toml   deps: Printf, Dates, LinearAlgebra (stdlibs) and OrdinaryDiffEq
-                 with its SDIRK and NonlinearSolve sub-packages;
-                 Plots is a weak dependency
+  Project.toml   deps: Printf, Dates, LinearAlgebra (stdlibs), OrdinaryDiffEq
+                 and SciMLBase; Plots is a weak dependency
   README.md      this file
   CLAUDE.md      invariants, performance traps, and a per-file guide to src/
   logs.md        development log: what was asked for, what was built, why
   future.md      work not done, with enough detail to start; known bugs
   src/           the package -- 33 files, one concern each
     planck.jl    the incomplete Planck integral and RadiationGroups
-    newton.jl    Newton on a bordered system, and the two linear solves
+    newton.jl    the linear solve of one Newton step on a bordered system
     coupling*.jl the coupling interface and the three solvers behind it
     riemann/     one Riemann solver per file, mirroring Quokka's headers
     problems/    built-in problems, exact solutions, per-problem metrics
   ext/           plotting methods, loaded only when Plots is present
-  test/          1217 tests in thirteen files, plus benchmarks.jl
+  test/          the test suite, plus benchmarks.jl
   docs/          make_figures.jl, make_animations.jl, and the generated figures/
   examples/      sod_1d, kelvin_helmholtz_2d, sedov_3d, compare_schemes,
                  marshak_wave, radiation_shadow, radiating_blast_3d
@@ -361,29 +360,26 @@ Diagnostics stay grey-shaped by default. `field(sim, :Erad)`, `:Fx`, `:reduced_f
 
 ## Matter-radiation coupling solvers
 
-The implicit energy exchange is a $(1+N_g)$-dimensional stiff solve per cell, and which solver takes it is a property of `RadiationPhysics`:
+With $N_g \geq 2$ groups the implicit energy exchange is a $(1+N_g)$-dimensional stiff solve per cell, and which solver takes it is a property of `RadiationPhysics`:
 
 ```julia
 rad = RadiationPhysics(c = 1.0, a_rad = 1.0, opacity = ConstantOpacity(1e3),
-                       groups = groups, coupling = DirectCoupling())
+                       groups = groups, coupling = QuokkaCoupling())
 ```
 
-All three solve the same equations, and every Jacobian in the file is exact — each carries the opacity's own $\mathrm{d}\kappa/\mathrm{d}T$, which is why the opacity law travels with the cell state rather than a frozen pair of numbers. `DirectCoupling` and `AdaptiveCoupling` are *generated* from `coupling_rhs` and `coupling_jacobian` and so have no physics of their own to keep in step; `QuokkaCoupling` is a different discretisation in different unknowns, sharing the right-hand side only through its opening guess and hand-deriving the rest. That independence is what makes the three agreeing a check rather than three copies of one derivation, and the suite asserts that they do. They differ in how the step is taken:
+The physics is stated once, in `coupling_coefficients` — the per-group emission rate and absorption coefficient — and the opacity law travels with the cell state, so every temperature derivative, $\mathrm{d}\kappa/\mathrm{d}T$ included, is the derivative of what the solver actually sees. `BracketedCoupling` and `AdaptiveCoupling` are built from it; `QuokkaCoupling` is a separate, hand-derived formulation that shares only its opening guess with them, which is what makes their agreement a check rather than two copies of one derivation. They differ in how the step is taken:
 
 | Solver | What it is, and when to reach for it |
 |:---|:---|
-| `QuokkaCoupling()` | **The default, and what to run production with.** Backward Euler in Quokka's replaced base variables $(E_\mathrm{gas}, R_g)$, where $R_g$ is the energy handed from the gas to group $g$ over the step. Writing the unknown as the *transfer* moves the optical depth $\tau = \hat{c}\rho\kappa\Delta t$ out of the residual, so the conditioning stops tracking it and one step can cross a coupling time $10^8$ times shorter than $\Delta t$. Allocates nothing per cell. |
-| `DirectCoupling()` | Backward Euler in the natural variables $(E_\mathrm{gas}, E_g)$, with nothing hand-derived: the residual is $u - u_0 - \Delta t\,f(u)$ and its Jacobian $I - \Delta t\,J$, both generated. Use it as the independent check on the default, and to measure what the base-variable replacement buys — its residual is a difference of two nearly-cancelling terms, so its achievable tolerance degrades in proportion to $\tau$. |
-| `AdaptiveCoupling()` | An error-controlled stiff integrator (`Rosenbrock23` by default) over the same step. **A reference, not a production solver**: it says what the coupling ODE's answer *is*, so the one-step solvers can be checked against a controlled error rather than an assumed one. It takes tens of internal steps per cell per timestep: 2 to 70 times the wall time of a hand-written Newton step, and 8–13 kB a cell where that costs nothing. |
+| `BracketedCoupling()` | **The default, and what to run production with.** Backward Euler in the natural variables $(E_\mathrm{gas}, E_g)$, reduced to one scalar equation. At fixed temperature the group equations are linear in $E_g$, so they are solved in closed form, and what is left is the cell's energy balance as a function of $E_\mathrm{gas}$ alone. That equation always has a sign change on a known interval, so it goes to a bracketing root-finder — `ZBrent()` by default, Brent's method in `src/rootfind.jl`, 7.7 evaluations a cell on average — which cannot leave the bracket. No Jacobian, no linear solve, nothing allocated. Over 240 cells spanning three opacity laws and $\tau_\mathrm{cell}$ from $10^{-4}$ to $10^{12}$ it fails none. It is the only solver that supports a dust model. `docs/coupling-new-method.md` describes it in full. |
+| `QuokkaCoupling()` | The $(1+N_g)$ Newton iteration in Quokka's replaced base variables $(E_\mathrm{gas}, R_g)$, where $R_g$ is the energy handed from the gas to group $g$ over the step. Writing the unknown as the *transfer* moves the optical depth $\tau = \hat{c}\rho\kappa\Delta t$ out of the residual, so the conditioning stops tracking it. Kept because Quokka runs it, and because it and the default agree while sharing no residual, no iteration and no linear solve. With a steeply temperature-dependent opacity its Newton direction can go wrong: it fails 75 of the same 240 cells. |
+| `AdaptiveCoupling()` | An error-controlled stiff integrator (`Rosenbrock23` by default) over the same step. **A reference, not a production solver**: it says what the coupling ODE's answer *is*, so the one-step solvers can be checked against a controlled error rather than an assumed one. It takes tens of internal steps per cell per timestep: 12 times the wall time of the one-step solvers at its loosest setting and several hundred times at a tight one, and 8 to 21 kB a cell where they cost nothing. |
 
-`DirectCoupling` takes two further knobs, and they are not interchangeable:
+`QuokkaCoupling` takes one further knob, `linsolve`: how each Newton step's $(1+N_g)\times(1+N_g)$ system is inverted. `ArrowheadSolve()`, the default, eliminates the diagonal group block into the gas row in $O(N_g)$ and forms no matrix; `DenseSolve()` factorises the same system without assuming that structure. The arrowhead is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today rather than a truth about radiation — add Compton redistribution or overlapping lines and switch to `DenseSolve`. `BracketedCoupling`'s closed form makes the same assumption and has no such switch: a term that couples groups directly would leave no closed form to use.
 
-- `stepper` — how the implicit step is driven to a root. `ImplicitEulerStepper()`, the default, is OrdinaryDiffEq's `ImplicitEuler` run non-adaptively over one step of length $\Delta t$, which is backward Euler and nothing else; `NewtonStepper()` is the hand-written iteration, which allocates nothing and is 2.4 to 120 times faster. They share the right-hand side and the Jacobian and *nothing* else — not the residual form, the opening iterate, the convergence test or the linear algebra — which is what makes them a cross-check rather than two copies of one loop.
-- `linsolve` — how each Newton step's $(1+N_g)\times(1+N_g)$ system is inverted, and **`NewtonStepper`'s alone**, since `ImplicitEuler` brings its own. `ArrowheadSolve()`, the default here and for `QuokkaCoupling`, eliminates the diagonal group block into the gas row in $O(N_g)$ and forms no matrix; `DenseSolve()` factorises the same system without assuming that structure. The arrowhead is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today rather than a truth about radiation — add Compton redistribution or overlapping lines and switch to `DenseSolve`.
+Cells that hit `max_iterations` are counted in `newton_failures` and reported by `run!` rather than throwing, so a solver failing on part of a grid shows up in the run summary rather than silently. It is worth reading: [`future.md`](future.md) records, with a reproduction, a convergence failure of `QuokkaCoupling` on a steeply falling opacity from a gas much hotter than the radiation.
 
-Cells that hit `max_iterations` are counted in `newton_failures` and reported by `run!` rather than throwing, so a solver failing on part of a grid shows up in the run summary rather than silently. It is worth reading: the default has a known convergence failure on a steeply falling opacity from a gas much hotter than the radiation, recorded with a reproduction in [`future.md`](future.md), and `DirectCoupling` solves that cell correctly.
-
-None of this is consulted by a grey run: with one group the coupling is the 2×2 driver in `src/source_terms.jl`, tuned by `RadiationPhysics`'s own `tolerance` and `max_iterations`, and `coupling` is ignored.
+None of this is consulted by a grey run: with one group the coupling is the 2×2 driver in `src/source_terms.jl`, tuned by `RadiationPhysics`'s own `tolerance` and `max_iterations`, and `coupling` is ignored — unless a dust model is set, which sends even a grey run through the multigroup driver and `BracketedCoupling`.
 
 ## Source terms
 
