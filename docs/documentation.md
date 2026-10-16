@@ -9,7 +9,7 @@ This page explains how the documentation site of Honghu.jl is made, where each p
 | Home page | `README.md` | copied to `docs/index.qmd` by `docs/make.jl`, with a few links rewritten |
 | Reference | the docstrings in `src/` | written to `docs/reference/*.qmd` by `docs/make.jl` |
 | Notes | `docs/*.md`: the four technical notes and this page | rendered as they are |
-| Figures | `docs/figures/` | made by `docs/make_figures.jl` and `docs/make_animations.jl` |
+| Figures | `docs/figures/` | made by `docs/make_figures.jl` and `docs/make_animations.jl`, except the logo images `honghu-*.png`, which no script makes |
 
 Every page is published twice, from the same source and in the same build: as HTML, and as Markdown. The Markdown copy of `x.html` is `x.md` in the same folder, and the line "Markdown: this page" at the top of each HTML page links to it. The copy is the page's source itself. The only change is that links to other pages point at their `.md` copies instead of their `.qmd` sources. Two more files sit at the site root: `honghu-docs.md`, which holds all pages in one file in navigation order, and `llms.txt`, an index of the Markdown pages in the llms.txt format. Both exist so that a person or a coding agent can read the whole documentation as plain text.
 
@@ -63,7 +63,7 @@ Add an entry `"name" => ("Title", ["file.jl", ...])` to `PAGES`, and add `refere
 
 ### The front page
 
-Edit `README.md`. The build copies it to `docs/index.qmd`. It drops the first line, `# Honghu.jl`, which becomes the page title, and it rewrites the links that are written for GitHub's view of the repository: `docs/figures/...` becomes `figures/...`, and the links to `future.md` and `../Hydro.jl` become GitHub URLs (`write_index` in `docs/make.jl`). Any other relative link in the README must point at something on the site, or the link check fails. To link to another file in the repository, use its full GitHub URL.
+Edit `README.md`. The build copies it to `docs/index.qmd`. It drops the first line, `# Honghu.jl`, which becomes the page title, and it rewrites the links that are written for GitHub's view of the repository: `docs/figures/...` becomes `figures/...`, in Markdown links and in HTML `src` attributes, and the links to `future.md` and `../Hydro.jl` become GitHub URLs (`write_index` in `docs/make.jl`). Any other relative link in the README must point at something on the site, or the link check fails. To link to another file in the repository, use its full GitHub URL.
 
 ### A note
 
@@ -79,7 +79,7 @@ To link from one note to another, use a relative link to its `.md` file, such as
 
 ### The navigation and the look
 
-`docs/_quarto.yml` holds the navbar, the menus and the theme. It is written by hand and no script regenerates it.
+`docs/_quarto.yml` holds the navbar, the menus and the theme, and names the navbar icon and the favicon. It is written by hand and no script regenerates it.
 
 ## What fails the build
 

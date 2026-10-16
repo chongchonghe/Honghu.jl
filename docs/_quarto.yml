@@ -16,9 +16,11 @@ project:
 
 website:
   title: "Honghu.jl"
+  favicon: figures/honghu-favicon.png
   site-url: https://chongchonghe.github.io/Honghu.jl/
   repo-url: https://github.com/chongchonghe/Honghu.jl
   navbar:
+    logo: figures/honghu-icon.png
     left:
       - href: index.qmd
         text: Home

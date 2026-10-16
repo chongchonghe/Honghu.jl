@@ -1,5 +1,9 @@
 # Honghu.jl
 
+<p align="center"><img src="docs/figures/honghu-logo.png" alt="Honghu.jl logo" width="300"></p>
+
+The name is 鸿鹄 (hóng hú): a great swan-like bird that flies high and far, and in classical Chinese an image of lofty ambition.
+
 A three-dimensional radiation-hydrodynamics code in pure Julia. Three standard libraries, OrdinaryDiffEq and SciMLBase: OrdinaryDiffEq for the matter-radiation coupling's error-controlled reference solver, SciMLBase for the interface its default root-finder is written against. Plotting is a weak dependency that activates only if you load Plots.
 
 Honghu solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — on a uniform Cartesian grid. It is a rewrite of [Hydro.jl](../Hydro.jl) following the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
