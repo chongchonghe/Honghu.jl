@@ -1,0 +1,57 @@
+# Build the documentation site on every push and pull request, and deploy it to
+# GitHub Pages from main. The build is strict (see docs/make.jl), so a pull
+# request that breaks a cross-reference or a link fails here before it merges.
+#
+# One-time setup: Settings -> Pages -> Build and deployment -> Source:
+# "GitHub Actions".
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  # A newer push supersedes a pull request build, but never interrupts a deploy.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v3
+      # Pinned to the version the site is built and checked with locally;
+      # Quarto's link handling and llms-txt have changed between releases.
+      - uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: 1.9.38
+      - name: Install package dependencies
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Build the site
+        run: julia --project=. docs/make.jl
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/_site
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
