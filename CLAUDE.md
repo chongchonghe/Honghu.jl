@@ -9,9 +9,10 @@ Hydro3D is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler 
 ## Commands
 
 ```bash
-julia --project=. -t 4 test/runtests.jl             # full suite, ~70 s
+julia --project=. -t 4 test/runtests.jl             # full suite, ~80 s
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw docs/figures/
 julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a figure)
+julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]  # every number of the ARSA paper's Sec. 5
 julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
 julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
 julia --project=. -t 8 test/benchmarks.jl           # timing table (BenchmarkTools)
@@ -146,7 +147,7 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `eos.jl` | `AbstractEOS`, `IdealGas`. Energies are volumetric; `cv` is specific. |
 | `opacity.jl` | `AbstractOpacity` and four concrete laws. Planck / energy / flux means are distinguished; `dkappa_dT` is the optional temperature derivative the coupling's exact Jacobian needs. |
 | `dust.jl` | `AbstractDustModel`, `NoDust`, `BateKetoDust`: whether the radiation couples to the gas or to dust in instantaneous equilibrium, and the Keto & Field collision rate between dust and gas. The model only; the solve is in the coupling files. |
-| `rsla.jl` | `AbstractChatLimiter` and the pointwise `chat_factor`: the rule that makes the reduced speed of light local. The array drivers that apply it are in `radiation_system.jl`, as `source_terms.jl` holds the loop over cells for `coupling.jl`'s physics. |
+| `rsla.jl` | The rule that makes the reduced speed of light local: `AbstractChatLimiter` (`ConstantChat`, `StabilityBound`, `OpticalDepthFit`), the `LocalCell` it reads, the pointwise `chat_factor`, and the `per_group` / `flux_form` traits. The array drivers that apply it are in `radiation_system.jl`, as `source_terms.jl` holds the loop over cells for `coupling.jl`'s physics. |
 | `coupling.jl` | `AbstractCoupling`, `CouplingState`, and the coupling physics in three layers: `coupling_coefficients` (the per-group emission rate and absorption coefficient — the single source of truth), `coupling_rhs` / `coupling_jacobian` built from it for the ODE, and `group_energies` / `energy_balance` built from it for the scalar reduction. |
 | `coupling_solvers.jl` | The two one-step solvers: `BracketedCoupling` (the default; its scalar equation goes to a bracketing root-finder, `ZBrent` by default, in `E_gas` without dust and in `T_d` with it) and `QuokkaCoupling`. |
 | `coupling_ode.jl` | `AdaptiveCoupling`, the error-controlled reference solve, and the `ODEFunction` it is written against. |
@@ -156,9 +157,9 @@ Include order in `src/Hydro3D.jl` matters, because later files use types defined
 | `limiters.jl`, `reconstruction.jl` | Slope limiters; `PCM` / `PLM` / `PPM`. |
 | `riemann/state.jl` | `HydroState` (field names match `quokka::HydroState`), `AbstractRiemannSolver`, the `riemann_flux` generic, and the direction permutation helpers. |
 | `riemann/hllc.jl`, `riemann/llf.jl` | One solver per file, mirroring Quokka's `HLLC.hpp` / `LLF.hpp`. Pointwise, canonical (normal = x) form. |
-| `riemann_radiation.jl` | M1 closure, Eddington tensor, `hll_radiation`. |
+| `riemann_radiation.jl` | M1 closure, Eddington tensor, `hll_radiation` (its `epsE` is the optional wave-speed correction). |
 | `hydro_system.jl` | `Floors`, `cons2prim!` / `enforce_floors!`, the flux sweep, flux divergence, hydro CFL. |
-| `radiation_system.jl` | `RadiationPhysics`, the group layout (`ngroups`, `nradvars`, `gbase`), state repair, the HLL flux sweep, radiation CFL, and the two drivers of the `chat` limiter (`update_chat!`, `radiation_pressure_dt`). |
+| `radiation_system.jl` | `RadiationPhysics`, the group layout (`ngroups`, `nradvars`, `gbase`), state repair, the HLL flux sweep, radiation CFL, the two drivers of the `chat` limiter (`update_chat!`, `energy_exchange_dt`), `scale_by_phi!`, and `floor_rad_energy!`, the only repair allowed before a coupling solve. |
 | `source_terms.jl` | The implicit matter-radiation coupling — the hardest file. Two drivers, chosen by dispatch on `NG`: the grey 2×2 Newton written out inline, and `multigroup_source_step!`, which hands each cell to an `AbstractCoupling`. |
 | `integrators.jl` | SSP-RK tableaux and the IMEX PD-ARS constants. |
 | `simulation.jl` | `Simulation`, workspaces, right-hand sides, stage drivers, `run!`. |
@@ -249,35 +250,21 @@ Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`,
 
 ## The variable reduced speed of light
 
-`chat` is a field, not a number: `sim.rw.chat[g, i, j, k]`, recomputed at the
-start of every IMEX stage from the state that stage transports. `RadiationPhysics`
-carries a `chat_limiter` that decides it, and `ConstantChat()` -- the default --
-is the standard RSLA and a measured no-op, down to the ghost fills. Read
-`docs/rsla-findings.md` before changing anything here; it is where the
-measurements live.
+`chat` is a field, not a number: `sim.rw.chat[g, i, j, k]`, one value per cell and per group. `RadiationPhysics` carries a `chat_limiter` that sets it. `ConstantChat()`, the default, is the standard RSLA and a measured no-op, down to the ghost fills. `StabilityBound()` is the adaptive reduced speed of light approximation (ARSA) of He, Krumholz & Wibking, "An Adaptive Reduced Speed of Light Approximation" (J. Comput. Phys., in preparation), and this code is its reference implementation; the code and the example names still call it IRSLA. Every cell and group runs at the largest `phi = chat/c` that the PD-ARS step supports stably at the time step of the standard RSLA, `phi = min(1, max(phi0, beta / (c dt Lambda)))`, with `Lambda` the `stability_denominator`. `OpticalDepthFit` is the earlier two-parameter fitting form; it carries no stability bound and is kept to reproduce old results.
 
-Four things about it that are not obvious from the code:
+`examples/irsla_paper.jl` produces every number and data file of the paper's Sec. 5, one section at a time, and `examples/linear_waves_rhd.jl` the linear-wave test; `test/test_rsla.jl` pins each point below. `docs/rsla-findings.md` records the measurements that led here but predates the ARSA commit (`b287f03`): its numbers were taken with the earlier limiter, and its §4 (one `phi` per cell) and the interface minimum in §7 are superseded. Where it and the docstrings in `src/rsla.jl` disagree, the docstrings are current; `git log irsla-variable-chat-stage2` has the reasoning commit by commit.
 
-- **The interface value is the minimum of the two adjacent cells.** An early
-  draft of He, Krumholz & Wibking argues for this and then writes `max` in its
-  own algorithm summary. The argument is right: an optically thick cell may locally run at the
-  full speed of light, and letting it set the signal speed of a flux into a
-  transparent neighbour would impose a CFL-violating speed where no source
-  damping exists to control the amplification.
-- **The stability bound carries the closure's signal speed, not `1/sqrt(3)`.**
-  The published `2/sqrt(3)` is twice the P1 speed and is too generous by
-  `sqrt(3)` wherever M1 free-streams -- which is where there is no damping to
-  spare. Without the correction the Vaytet Marshak wave is 130% wrong. See
-  `_signal_speed` and findings §2.
-- **The time step is set from the global `phi0`, never from the local `phi`.**
-  Cells at `phi = 1` are precisely the ones thick enough that the implicit
-  exchange stabilises them, and shrinking `dt` for them would forfeit the whole
-  point.
-- **One `phi` per cell, not per group.** A per-group `phi` breaks the identity
-  `Delta[e + sum_g E_g] = (1 - phi) Delta e` that makes the RSLA's
-  non-conservation a known function of the gas energy change; measured, it loses
-  45% of a cell's energy in 400 coupling steps. `per_group = true` restores the
-  published prescription. Findings §4.
+Things about it that are not obvious from the code:
+
+- **The bound is exact, and only for this scheme.** A von Neumann analysis of one PD-ARS substep with HLL transport finds that the grid-scale checkerboard is always the worst mode, and there the coupling splits into an energy block and a momentum block, each with a closed-form boundary `phi c dt [sum_d sigma_d/dx_d - chi/(2 + K)] <= 1`: `chi_E` and `K = 4 a T^3 kappa_P c dt / c_v` for the energy block, `chi_F` and `K` dropped (smaller by `(a/c)^2`) for the momentum block. A checkerboard grows at 1.1 times the bound and decays at 0.9 times it, in one, two and three dimensions. The optical depth enters as `chi / sum_d(1/dx_d)`; the earlier `chi dx_min` was `D` times too generous and grew a checkerboard by 1.06 to 1.88 per substep in 2D and 3D. Change the transport flux, the integrator or the coupling, and the bound has to be derived again; the checkerboard test is what will notice.
+- **`phi` multiplies the time derivative, not the flux divergence.** With the default `flux_form = false` the sweep computes the unreduced HLL flux (`rad_fluxes!` is handed `chat = nothing`), and `scale_by_phi!` multiplies each cell's update by its own `phi`. Steady states are then exact for any `phi(x)`, the flux differences telescope in `E/phi`, and no interface value is needed. With `phi` inside the divergence the steady state solves `div F + F . grad(ln phi) = S` instead; on the Mach 5 shock a 5% ripple in `phi` raised the L1 error from 0.19% to 2.3%, worse than the RSLA. `flux_form = true` keeps that form, with the minimum of the two cells at each interface, for comparison only. For a uniform `phi` the two forms are the same scheme, and `ConstantChat` keeps the old path through the `chat` array so that it stays bit for bit.
+- **The signal speed is the closure's, per direction.** `sigma_d = max(0.1, sqrt(T_dd))`, the speed `m1_flux` hands the Riemann solver, summed by `_signal_sum`. Under M1 it reaches one where the radiation free-streams, so a bound written with the P1 value `1/sqrt(3)` is `sqrt(3)` too generous in exactly the cells with no damping to spare; it made the Vaytet Marshak wave 130% wrong (findings §2).
+- **The time step comes from the global `phi0`, never from the local `phi`.** Cells at `phi = 1` are the ones thick enough that the implicit exchange stabilises them, and shrinking `dt` for them would forfeit the point. No step restriction is needed for stability either: the standard RSLA is stable at its own step for any `P_rad/P_gas`, which is why `radiation_pressure_dt` was removed. Its replacement, `StabilityBound(energy_step = true)` through `energy_exchange_dt`, is opt-in and buys accuracy, not stability: in thick, radiation-rich cells the heat-capacity channel caps `phi` near `phi0/(sigma C_r)`, and a shorter step lifts the cap. It never goes below the CFL step of the unreduced scheme, where `phi = 1` is stable everywhere; without that floor `radhydro_pulse_dyn` asked for 9 times the substeps of running at `chat = c`. The limiter reads the `dt` actually taken, so the shortened last step of `run!` shows a larger `phi` than the run had; report `phi` from the last full step.
+- **One `phi` per group, set once per IMEX substep.** `per_group(::StabilityBound)` is always true. What a local `phi` conserves, per cell or per group alike, is `e + sum_g E_g/phi_g`; the RSLA identity `Delta[e + sum_g E_g] = (1 - phi) Delta e` holds only for a globally uniform `phi`, so the per-cell default it used to justify bought nothing and was less accurate (Vaytet at `phi0 = 0.01`: 10.7% against 7.7%). `OpticalDepthFit(per_group = false)` keeps the old behaviour. `_stage_chat!` computes `phi` from the state at the start of the substep and both stages use it. That is what the bound assumes, and a `phi` changed between the stages would leave a residual `(E(2) - E^n)(1/phi_b - 1/phi_a)` in the conserved energy. Only the wave-speed correction's `chiF` is refreshed per stage.
+- **Before the coupling solve, repair nothing the solve can absorb.** This holds for every limiter, the standard RSLA included. A thick cell at `phi = 1` runs at a local CFL number far above one, and its transport stage leaves `|F| >> cE` and sometimes `E < 0`. The solve divides the flux by `1 + chat rho kappa_F dt`, which turns it into the diffusion flux, and it returns a positive temperature whenever `e + sum_g E_g/phi_g > 0`. So `floor_rad_energy!` floors `E` only where that budget is not positive, and `amend_rad_state!` does the full repair after the solve. Clipping `|F|` first raised the error on the thick hot spot from 0.0003% to 0.80%; flooring `E` everywhere made the 64-cell Ensman shock 17 times worse than the RSLA. `Diagnostics` counts the two as `floors_presolve` and `repairs_postsolve`.
+- **The wave-speed correction is for the standard RSLA only.** `RadiationPhysics(wavespeed_correction = true)` (Skinner et al. 2019, optional in Quokka) throws with any limiter but `ConstantChat`, because the bound does not hold for the corrected scheme: a thick cell at `phi = 1` beside a thin one grew by about `1e43` in 200 steps, and in a uniform medium modes near a quarter of the grid frequency grow where the radiation's inertia matters, which the checkerboard bound does not see.
+
+`radhydro_shock_super`, the Mach 5 Lowrie & Edwards shock in the form of Quokka's `RadhydroShockSuper`, is the problem that shows the method (0.17% L1 against 3.39% for the RSLA); `radhydro_pulse_dyn` is the radiation-dominated one that exercises `energy_step`.
 
 ## Source terms
 
@@ -294,7 +281,7 @@ Two properties the tests pin, and that a change here must keep:
 
 ## Closures
 
-`RadiationPhysics` carries a `closure`. `LevermoreClosure()` is the M1 default. `EddingtonClosure()` fixes `chi = 1/3`, cannot free-stream, and exists only so that reference solutions derived under the P1 approximation can be reproduced -- `radhydro_shock` needs it, exactly as Quokka overrides `ComputeEddingtonFactor` for the same problem. Do not make it the default, and do not use it for anything with a directional radiation field.
+`RadiationPhysics` carries a `closure`. `LevermoreClosure()` is the M1 default. `EddingtonClosure()` fixes `chi = 1/3`, cannot free-stream, and exists only so that reference solutions derived under the P1 approximation can be reproduced -- `radhydro_shock` and `radhydro_shock_super` need it, exactly as Quokka overrides `ComputeEddingtonFactor` for the same problem. Do not make it the default, and do not use it for anything with a directional radiation field.
 
 ## Style
 
