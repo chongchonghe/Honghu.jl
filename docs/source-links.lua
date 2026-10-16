@@ -1,6 +1,8 @@
 -- Link every page to its Markdown twin and to the bundle of all pages, which
 -- docs/make.jl writes after the render: `<page>.md` beside `<page>.html`, and
--- `honghu-docs.md` and `llms.txt` at the site root. Quarto resolves every
+-- `honghu-docs.md` at the site root. `llms.txt` is not linked: it is the same
+-- index on every page, and agents look for it at the root by convention.
+-- Quarto resolves every
 -- `<a href>` against the project's inputs and warns about a `.md` it cannot find,
 -- which these are not; `data-noresolveinput` tells it to leave them alone.
 
@@ -20,8 +22,7 @@ function Pandoc(doc)
   quarto.doc.include_text("in-header",
     '<link rel="alternate" type="text/markdown" href="' .. twin .. '">')
   local line = '<p class="markdown-links">Markdown: <a data-noresolveinput href="' .. twin .. '">this page</a>'
-    .. ' · <a data-noresolveinput href="' .. root .. '/honghu-docs.md">all pages in one file</a>'
-    .. ' · <a data-noresolveinput href="' .. root .. '/llms.txt">llms.txt</a></p>'
+    .. ' · <a data-noresolveinput href="' .. root .. '/honghu-docs.md">all pages in one file</a></p>'
   table.insert(doc.blocks, 1, pandoc.RawBlock("html", line))
   return doc
 end
