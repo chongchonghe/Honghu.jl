@@ -1,0 +1,36 @@
+# Run the test suite on every pull request and on every push to main.
+#
+# The suite runs the way CLAUDE.md runs it, `julia --project=. -t 4
+# test/runtests.jl`, rather than through `Pkg.test`: Pkg.test forces bounds
+# checking on, which disables every `@inbounds` and so changes what
+# test_performance.jl measures. GitHub's ubuntu runners have four cores.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      # 1.12 is the version the suite is tested against (see Project.toml).
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v3
+      - name: Install package dependencies
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Run the test suite
+        run: julia --project=. -t 4 test/runtests.jl
