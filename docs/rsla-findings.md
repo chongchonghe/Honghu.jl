@@ -141,13 +141,13 @@ The paper gives each group its own $\phi$, "which poses no difficulty because th
 
 This was first read as an argument for one $\phi$ per cell, and the earlier limiter defaulted to that, taken from the most restrictive group, on the grounds that a conservation property one can write down is worth a few per cent of $L_1$ error. **That reasoning was reversed in `b287f03`.** The identity needs $\phi$ uniform over cells as well, so any local limiter loses it, per cell or per group. What a local $\phi$ keeps, in the time-derivative form of A1, is exact conservation of $e + \sum_g E_g/\phi_g$: the coupling conserves it cell by cell, and the flux differences telescope in $E_g/\phi_g$. That holds for a per-group $\phi$ exactly as for a per-cell one, and the von Neumann analysis finds both stable for the coupled multigroup system. The choice therefore comes down to accuracy, and on the Vaytet wave per-group is the more accurate, with both limiters:
 
-| $\phi_0$ | earlier limiter, per cell | earlier limiter, per group |
-|---:|---:|---:|
-| 0.03 | 3.172% | 3.975% |
-| 0.01 | 4.903% | 2.830% |
-| 0.003 | 22.894% | 18.579% |
+| $\phi_0$ | earlier limiter, per cell | earlier limiter, per group | current limiter, per cell | current limiter, per group |
+|---:|---:|---:|---:|---:|
+| 0.03 | 3.172% | 3.975% | 4.3% | 2.7% |
+| 0.01 | 4.903% | 2.830% | 11.5% | 7.8% |
+| 0.003 | 22.894% | 18.579% | 26.0% | 21.2% |
 
-With the earlier limiter per-group was better at two of the three reductions. With the current one, at $\phi_0 = 0.01$, per-group scores 7.7% against 10.7% for one $\phi$ per cell (as quoted in `b287f03`). So `StabilityBound` now always uses one $\phi$ per group, and only `OpticalDepthFit` keeps the `per_group` switch, to reproduce earlier results. This is also what Quokka does (A7).
+The current-limiter columns are those of the `per_group` docstring in `src/rsla.jl`. With the earlier limiter per-group was better at two of the three reductions; with the current one it is better at all three, at the same cost. So `StabilityBound` now always uses one $\phi$ per group, and only `OpticalDepthFit` keeps the `per_group` switch, to reproduce earlier results. This is also what Quokka does (A7).
 
 ### A6. The advantage grows under refinement
 
