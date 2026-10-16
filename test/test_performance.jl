@@ -74,9 +74,10 @@ end
                                                     g, Hydro3D.NRAD), sim) < LIMIT
     @test bytes_per_cell(() -> Hydro3D.rad_fluxes!(rw.flux, rw.qL, rw.qR, sim.R,
                                                    rw.chat, rad, Val(1), g), sim) < LIMIT
-    # The `chat` limiter runs once per stage over the whole array, ghost cells
-    # included. `group_opacities` and `_signal_speed` both build `SVec`s inside
-    # the cell loop, which is exactly the shape that boxed and allocated before.
+    # The `chat` limiter runs once per IMEX substep over the whole array, ghost
+    # cells included. `group_opacities` and `_signal_sum` (through
+    # `eddington_tensor`) both build `SVec`s inside the cell loop, which is
+    # exactly the shape that boxed and allocated before.
     lrad = RadiationPhysics(c=10.0, chat=1.0, a_rad=1.0, opacity=ConstantOpacity(1.0),
                             chat_limiter=StabilityBound())
     @test bytes_per_cell(() -> Hydro3D.update_chat!(rw.chat, sim.U, sim.R, sim.eos, lrad,

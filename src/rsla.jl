@@ -17,9 +17,13 @@
 # state, for the same reason `coupling.jl` holds the coupling physics and
 # `source_terms.jl` the loop over cells.
 #
-# What reads the resulting `(NG, i, j, k)` array: `rad_fluxes!` (interface value
-# = min of the two adjacent cells) and the source step (the cell's own value, per
-# group). Nothing else needs to know that `chat` is not a constant.
+# What reads the resulting `(NG, i, j, k)` array, as the cell's own value per
+# group: `scale_by_phi!`, which multiplies each cell's transport update by its
+# `phi` (the default time-derivative form, see `flux_form`), the pre-solve floor
+# `floor_rad_energy!`, and the source step. `rad_fluxes!` reads it only under the
+# standard RSLA or with `flux_form = true`, and then takes the minimum of the two
+# cells at each interface. Nothing else needs to know that `chat` is not a
+# constant.
 
 """
     AbstractChatLimiter

@@ -249,7 +249,9 @@ end
     # Paper section 5 argues at length for the minimum -- an optically thick cell
     # must not impose a CFL-violating speed on a transparent neighbour -- and
     # then its own algorithm summary says maximum. The minimum is what is
-    # implemented, and this is the test that says so.
+    # implemented wherever `rad_fluxes!` is handed a `chat` array -- the standard
+    # RSLA and `flux_form = true` -- and this is the test that says so. The
+    # default, time-derivative form needs no interface value at all.
     c = 3.0
     phys = RadiationPhysics(c=c, chat=c, a_rad=1.0, opacity=ConstantOpacity(0.0))
     g = CartesianGrid(n=(4, 1, 1), xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0), nghost=2)

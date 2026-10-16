@@ -366,11 +366,17 @@ Solve the HLL Riemann problem of the M1 system at every interface normal to
 direction `D`.
 
 `chat` is the per-cell, per-group reduced speed of light (see
-[`update_chat!`](@ref)); the interface uses the **minimum** of the two adjacent
-cells. That is the stable choice wherever it varies: an optically thick cell may
+[`update_chat!`](@ref)), or `nothing`. An array is passed under the standard RSLA
+and in the flux form of a local limiter (see [`flux_form`](@ref)), and the
+interface then uses the **minimum** of the two adjacent cells. In the flux form
+that is the stable choice wherever `chat` varies: an optically thick cell may
 locally run at the full speed of light, but letting it set the signal speed of a
 flux into a transparent neighbour would impose a CFL-violating speed there,
 where no source damping is available to control the resulting amplification.
+`nothing` is passed in the default, time-derivative form of a local limiter: the
+flux is then the unreduced one, at the true speed of light, and
+[`scale_by_phi!`](@ref) multiplies each cell's update by its own `phi`
+afterwards, so no interface value is needed.
 
 As in the hydro sweep, an inadmissible reconstructed state (non-positive energy
 density, or a reduced flux at or beyond the causal limit) falls back to the
