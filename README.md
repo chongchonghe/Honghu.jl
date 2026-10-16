@@ -448,4 +448,4 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 
 ## Author
 
-Rewritten from [Hydro.jl](https://github.com/chongchonghe/Hydro.jl) by Chong-Chong He (che1234@umd.edu).
+Rewritten from [Hydro.jl](https://github.com/chongchonghe/Hydro.jl) by [Chong-Chong He](https://chongchonghe.github.io/) (chongchong.he@anu.edu.au).

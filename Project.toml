@@ -1,6 +1,6 @@
 name = "Honghu"
 uuid = "dadb9192-06c8-4952-8646-5842d530648b"
-authors = ["ChongChong He <che1234@umd.edu> and contributors"]
+authors = ["ChongChong He <chongchong.he@anu.edu.au> and contributors"]
 version = "0.1.0"
 
 # Three stdlibs and two packages from one tree.
