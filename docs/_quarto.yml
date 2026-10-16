@@ -12,6 +12,7 @@ project:
     - coupling-new-method-dust.md
     - coupling-findings.md
     - rsla-findings.md
+    - documentation.md
 
 website:
   title: "Hydro3D.jl"
@@ -38,6 +39,8 @@ website:
           - coupling-new-method-dust.md
           - coupling-findings.md
           - rsla-findings.md
+          - text: "---"
+          - documentation.md
     right:
       - icon: github
         href: https://github.com/chongchonghe/hydro3d.jl

@@ -47,7 +47,7 @@ const PAGES = [
 
 # Hand-written pages, in navigation order after the reference.
 const NOTES = ["coupling-new-method.md", "coupling-new-method-dust.md",
-               "coupling-findings.md", "rsla-findings.md"]
+               "coupling-findings.md", "rsla-findings.md", "documentation.md"]
 
 const MODULES = (Hydro3D, Hydro3D.Problems, Hydro3D.CGS)
 
@@ -366,7 +366,9 @@ function check_markdown()
         endswith(f, ".md") || continue
         file = joinpath(dir, f)
         s = read(file, String)
-        prose = replace(replace(s, r"```.*?```"s => ""), r"`[^`\n]*`" => "")
+        # Fences, then double-backtick spans (which may hold a backtick), then
+        # single ones.
+        prose = replace(s, r"```.*?```"s => "", r"``.+?``" => "", r"`[^`\n]*`" => "")
         for m in eachmatch(r"\]\(([^)\s]+)\)", prose)
             link = m[1]
             occursin(EXTERNAL, link) && continue
@@ -377,6 +379,19 @@ function check_markdown()
         end
     end
     return bad
+end
+
+# A page this script writes or copies must also be one Quarto renders and the
+# navbar lists, which docs/_quarto.yml says by hand: a note needs its name in the
+# render list and in the menu, a reference page in the menu.
+function check_config()
+    yml = read(joinpath(DOCS, "_quarto.yml"), String)
+    missing = [f for f in ["reference/index.qmd"; ["reference/$p.qmd" for (p, _) in PAGES]]
+               if !occursin(f, yml)]
+    append!(missing, filter(f -> count(f, yml) < 2, NOTES))
+    isempty(missing) ||
+        error("not in docs/_quarto.yml (render list and Notes or Reference menu):\n  " *
+              join(missing, "\n  "))
 end
 
 function coverage(entries)
@@ -392,6 +407,7 @@ end
 
 function main(args)
     sha = readchomp(`git -C $ROOT rev-parse HEAD`)
+    check_config()
     entries, moddocs = collect_entries()
     refmap = build_refmap(entries)
     write_reference(entries, moddocs, refmap, sha)
