@@ -260,3 +260,15 @@ git -C hydro3d.jl log --oneline
 (The list is deliberately not pinned here; it went stale twice.)
 
 The repository was initialised in this session and has no remote, so there is no pull request; the work is on `main` in this directory. Development happened in a git worktree under `.claude/worktrees/` (background-session isolation) and was fast-forwarded onto `main` at the end.
+
+## Follow-up: the package is renamed Honghu (2026-10-17)
+
+> Rename the package from Hydro3D to Honghu (Honghu.jl), and give it the new logo.
+
+The name is 鸿鹄 (hóng hú), a great swan-like bird that flies high and far, and in classical Chinese an image of lofty ambition. The logo is that bird rising, in blue with an orange wing tip: the flowing wings stand for hydrodynamics, the orange for radiation.
+
+What changed: the module, the name in `Project.toml` (the UUID is kept), `src/Honghu.jl`, the plotting extension `HonghuPlotsExt`, every `Hydro3D.` qualification, the run banner, the default GIF name, the environment variable `HONGHU_FIGURES`, the documentation bundle `honghu-docs.md`, the figure legends, and the repository and site URLs, which now name `chongchonghe/Honghu.jl`. The file formats carry the new name too: a checkpoint is a `.honghu` file that starts with the magic `HONGHU\x00\x01`, and a comparison table starts with `# honghu comparison`. Files written under the old name still load: `load_checkpoint!` accepts the magic `HYDRO3D\x01` of the old `.h3d` files, whose layout is otherwise the same, and `read_comparison` skips the old header. `test_io.jl` and `test_compare.jl` build one of each old file and read it back. The README and the home page show the logo, the site's navbar shows the bird alone, and the site has a favicon cut from it.
+
+What did not change: the sections above are history and keep the old name, and so do the dated reviews in `docs/superpowers/reviews/`. Hydro.jl, the predecessor, keeps its name. The new URLs assume that the GitHub repository is renamed to `Honghu.jl`, which is done on GitHub rather than in the code.
+
+1468 tests, about 80 s.
