@@ -26,6 +26,33 @@ slower for one that does.
 abstract type AbstractOpacity end
 
 """
+    planck_opacity(op, rho, T) -> kappa_P
+
+The Planck-mean specific opacity of `op` at density `rho` and gas temperature
+`T`. It weights thermal emission, the `rho kappa_P a_rad T^4` term of the
+matter-radiation coupling. Part of the [`AbstractOpacity`](@ref) interface.
+"""
+function planck_opacity end
+
+"""
+    energy_mean_opacity(op, rho, T) -> kappa_E
+
+The energy-mean specific opacity of `op` at density `rho` and gas temperature
+`T`. It weights the absorption of the radiation energy, the `rho kappa_E E_rad`
+term of the coupling. Part of the [`AbstractOpacity`](@ref) interface.
+"""
+function energy_mean_opacity end
+
+"""
+    flux_mean_opacity(op, rho, T) -> kappa_F
+
+The flux-mean specific opacity of `op` at density `rho` and gas temperature
+`T`. It weights the damping of the radiation flux, `rho kappa_F F`, and so the
+radiation force on the gas. Part of the [`AbstractOpacity`](@ref) interface.
+"""
+function flux_mean_opacity end
+
+"""
     dkappa_dT(op, rho, T) -> (dkappaP_dT, dkappaE_dT)
 
 Temperature derivatives of the Planck- and energy-mean opacities.

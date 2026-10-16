@@ -23,7 +23,7 @@ radiation-matter coupling. `test/test_extensions.jl` pins this list: it defines
 an EOS implementing exactly these methods and runs a simulation with it.
 
 !!! warning "The built-in HLLC solver assumes a gamma-law gas"
-    [`hllc`](@ref) uses `adiabatic_index(eos)` as a scalar in the Roe-averaged
+    [`HLLC`](@ref) uses `adiabatic_index(eos)` as a scalar in the Roe-averaged
     sound speed and in Rider's wave-speed correction, so it is *structurally* a
     gamma-law solver. Defining `adiabatic_index` on a genuinely non-ideal EOS
     silences the `MethodError` and then silently uses an effective constant
