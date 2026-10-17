@@ -469,8 +469,10 @@ end
         # it does; above, so a regression that doubles it is caught rather than
         # shrugged at -- and it is far more than the one path here that forms a
         # matrix at all.
+        # The bound depends on the Julia version, because OrdinaryDiffEq's
+        # allocation does: at NG = 8 it is 13.0 kB on 1.12 and 20.8 kB on 1.10.
         ad = coupling_bytes(AdaptiveCoupling(), s)
-        @test 4_000 < ad < 20_000
+        @test 4_000 < ad < (VERSION < v"1.11" ? 32_000 : 20_000)
         @test ad > 4 * qd
     end
 end
@@ -484,8 +486,11 @@ end
     for NG in (2, 4), k0 in (1e-3, 1.0, 1e3, 1e9), (Tg, Tr) in ((1.3, 0.5), (0.5, 1.3))
         s = cell_state(; NG, opacity=law(k0), Tgas=Tg, Trad=Tr)
         Etot = s.Egas + sumvec(s.Erad)
-        results = [solve_coupling(BracketedCoupling(root_finder=rf), s)
-                   for rf in (Honghu.ZBrent(), Brent(), ModAB(), ITP(), Bisection())]
+        # `Any[...]`, not `[...]`: an untyped comprehension asks the compiler for
+        # the common result type over five root-finder types, and inside the full
+        # suite that inference overflows the stack on Julia 1.10.
+        results = Any[solve_coupling(BracketedCoupling(root_finder=rf), s)
+                      for rf in (Honghu.ZBrent(), Brent(), ModAB(), ITP(), Bisection())]
         @test all(r.converged for r in results)
         for r in results[2:end]
             @test abs(r.Egas - results[1].Egas) <= 2e-9 * Etot

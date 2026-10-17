@@ -1,3 +1,12 @@
+# Measured inside a function: on Julia 1.10, `@allocated` written directly in a
+# testset body reports 16 bytes for this call, which compiled code does not
+# allocate.
+function svec_bytes(a, b)
+    f(x, y) = dot(x + y, x - y)
+    f(a, b)
+    @allocated f(a, b)
+end
+
 @testset "SVec" begin
     a = SVec(1.0, 2.0, 3.0)
     b = SVec(4.0, 5.0, 6.0)
@@ -13,9 +22,7 @@
     @test norm(SVec(3.0, 4.0)) == 5.0
     @test Tuple(zero(SVec{3,Float64})) == (0.0, 0.0, 0.0)
     # arithmetic must not allocate
-    f(x, y) = dot(x + y, x - y)
-    f(a, b)
-    @test (@allocated f(a, b)) == 0
+    @test svec_bytes(a, b) == 0
 end
 
 @testset "equation of state" begin

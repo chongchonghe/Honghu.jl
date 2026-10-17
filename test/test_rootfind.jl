@@ -23,8 +23,8 @@ end
             @test abs(sol.u - sqrt(2)) <= 2 * eps(sqrt(2))
             @test sol.left <= sqrt(2) <= sol.right       # the returned bracket brackets
             # No point is evaluated twice. BracketingNonlinearSolve's `Brent`
-            # re-evaluates `f(c)` every iteration: on [1, 2] it makes 20
-            # evaluations at 9 distinct points.
+            # re-evaluated `f(c)` every iteration before version 1.12.8: on
+            # [1, 2] it made 20 evaluations at 9 distinct points.
             @test length(unique(xs)) == length(xs)
             @test length(xs) <= nmax
         end
@@ -41,10 +41,17 @@ end
         sol, xs = traced_solve(x -> x^4 - 2, 0.0, 4.0, ZBrent(); abstol=5e-11)
         @test abs(sol.u - 2^0.25) <= 1e-10
         @test length(xs) <= 14
-        # ... and it is the minimum step that the library's `Brent` is missing,
-        # not just its repeated evaluations: it needs far more distinct points.
+        # ... and it is the minimum step that the library's `Brent` was missing,
+        # not just its repeated evaluations: without it, far more distinct points.
+        # BracketingNonlinearSolve 1.12.8 took this method upstream
+        # (SciML/NonlinearSolve.jl#1340), and from then on the two must agree;
+        # the release a fresh install resolves to decides which is checked.
         _, ys = traced_solve(x -> x^4 - 2, 0.0, 4.0, Brent(); abstol=5e-11)
-        @test length(unique(ys)) > 2 * length(xs)
+        if pkgversion(BracketingNonlinearSolve) >= v"1.12.8"
+            @test length(unique(ys)) <= 14
+        else
+            @test length(unique(ys)) > 2 * length(xs)
+        end
     end
 
     @testset "edge cases" begin

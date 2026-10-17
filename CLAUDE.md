@@ -96,7 +96,10 @@ Brent's algorithm: no minimum step, and `f(c)` recomputed every iteration. On
 the coupling's equation that meant 20.1 evaluations a cell and 70 in the worst,
 against 7.7 and 12 for an in-tree `zbrent` of about 60 lines of code. So `ZBrent` is written in-tree, and
 BracketingNonlinearSolve is test-only (`[extras]`): the suite checks `ZBrent`
-against its `ModAB`, `ITP` and `Bisection`. `[extras]` is not on the load path
+against its `ModAB`, `ITP` and `Bisection`. The fix has since gone upstream
+(SciML/NonlinearSolve.jl#1340, released in BracketingNonlinearSolve 1.12.8), so
+the library's `Brent` now matches `ZBrent`; switching the default to it is planned
+in `docs/coupling-new-method.md` §5.6 and has not been done. `[extras]` is not on the load path
 when the suite is run directly, so `test/runtests.jl` loads it by UUID -- it is in
 the manifest anyway, through OrdinaryDiffEq. Two things about bracketing
 root-finders that are easy to get wrong, both handled in

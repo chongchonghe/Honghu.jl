@@ -236,15 +236,15 @@ The three root-finders give the same temperature field on every problem, to the 
 
 ### 5.6 The upstream fix, and what changes if it lands
 
-The two defects of §5.1 are reported upstream with a fix, as [SciML/NonlinearSolve.jl#1340](https://github.com/SciML/NonlinearSolve.jl/pull/1340) (opened 2026-09-28, from the branch `brent-zbrent-minimum-step` of the fork `chongchonghe/NonlinearSolve.jl`). It replaces the library's loop with Brent's `zero` / `zbrent`, so the library's `Brent` evaluates $f$ once per iteration and takes the minimum step. On the functions of §5.1 it brings the library's counts down to `ZBrent`'s: 20 to 9 on $x^2 - 2$ and 62 to 12 on $x^4 - 2$.
+The two defects of §5.1 are reported upstream with a fix, as [SciML/NonlinearSolve.jl#1340](https://github.com/SciML/NonlinearSolve.jl/pull/1340) (opened 2026-09-28, from the branch `brent-zbrent-minimum-step` of the fork `chongchonghe/NonlinearSolve.jl`). It replaces the library's loop with Brent's `zero` / `zbrent`, so the library's `Brent` evaluates $f$ once per iteration and takes the minimum step. On the functions of §5.1 it brings the library's counts down to `ZBrent`'s: 20 to 9 on $x^2 - 2$ and 62 to 12 on $x^4 - 2$. It was merged the same day and released in BracketingNonlinearSolve 1.12.8 on 2026-09-29.
 
-**If it is merged and released, Honghu can drop `ZBrent`** and make `BracketingNonlinearSolve.Brent()` the default `root_finder`. BracketingNonlinearSolve then moves back from `[extras]` to `[deps]`, because the package would call it, and `src/rootfind.jl` is deleted. Before switching, on the released version:
+**Now that it is released, Honghu can drop `ZBrent`** and make `BracketingNonlinearSolve.Brent()` the default `root_finder`. BracketingNonlinearSolve then moves back from `[extras]` to `[deps]`, because the package would call it, and `src/rootfind.jl` is deleted. Before switching, on the released version:
 
 1. Run the `rootfind` section of `coupling_study.jl` and check that the library's `Brent` matches `ZBrent` in §5.2 and §5.3: about 12 evaluations and 1.9 μs per cell over the sweep, 0 bytes at every group count.
 2. Repoint the minimum-step test in `test/test_rootfind.jl` ($x^4 - 2$ in at most 14 evaluations) at the library's `Brent` rather than deleting it.
 3. Update §4.1, §5 and §8 of this document and CLAUDE.md to match.
 
-Until then `ZBrent` stays, and nothing in Honghu depends on the PR. The handoff for finishing the PR is `HANDOFF-PR1340.md` in the clone `NonlinearSolve.jl/`, next to this repository.
+That switch has not been made: `ZBrent` is still the default, and nothing in Honghu depends on the release. Step 2 is half done: from 1.12.8 on, `test/test_rootfind.jl` checks that the library's `Brent` needs as few points as `ZBrent` on $x^4 - 2$, where before it checked that the library needed more than twice as many. The handoff for finishing the PR is `HANDOFF-PR1340.md` in the clone `NonlinearSolve.jl/`, next to this repository.
 
 ## 6. Accuracy and cost
 
