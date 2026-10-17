@@ -20,7 +20,7 @@ using Honghu: gbase, multigroup_source_step!, group_opacities, group_centers,
               CouplingState, coupling_rhs, coupling_jacobian, solve_coupling, sumvec,
               solve_jacobian, maxabs
 using LinearAlgebra: cond          # only, so Honghu's own `dot`/`norm` still win
-using .BracketingNonlinearSolve: Bisection, ITP, ModAB, Brent   # alternatives to the default ZBrent
+using BracketingNonlinearSolve: Bisection, ITP, ModAB, Brent   # Brent is the default
 
 """
 A constant `chat` array of the shape the source drivers want.
@@ -487,10 +487,10 @@ end
         s = cell_state(; NG, opacity=law(k0), Tgas=Tg, Trad=Tr)
         Etot = s.Egas + sumvec(s.Erad)
         # `Any[...]`, not `[...]`: an untyped comprehension asks the compiler for
-        # the common result type over five root-finder types, and inside the full
+        # the common result type over four root-finder types, and inside the full
         # suite that inference overflows the stack on Julia 1.10.
         results = Any[solve_coupling(BracketedCoupling(root_finder=rf), s)
-                      for rf in (Honghu.ZBrent(), Brent(), ModAB(), ITP(), Bisection())]
+                      for rf in (Brent(), ModAB(), ITP(), Bisection())]
         @test all(r.converged for r in results)
         for r in results[2:end]
             @test abs(r.Egas - results[1].Egas) <= 2e-9 * Etot
@@ -503,7 +503,7 @@ end
     #    conservation error thousands of times the promised one -- measured
     #    3e-6 of the cell's energy with `Bisection`. This is the assertion the
     #    tolerance conversion exists for.
-    for rf in (Honghu.ZBrent(), Brent(), ModAB(), Bisection()), k0 in (1.0, 1e3, 1e9)
+    for rf in (Brent(), ModAB(), Bisection()), k0 in (1.0, 1e3, 1e9)
         s = cell_state(; NG=4, opacity=ConstantOpacity(k0), Tgas=10.0, Trad=1.0)
         r = solve_coupling(BracketedCoupling(root_finder=rf), s)
         Etot = s.Egas + sumvec(s.Erad)
@@ -520,7 +520,7 @@ end
     #    what makes the answer independent of the method.
     s = cell_state(; NG=4, opacity=PowerLawOpacity(kappa0=10.0, n=2.0), Tgas=0.1, Trad=3.0)
     ode = solve_coupling(AdaptiveCoupling(reltol=1e-8, abstol=1e-14), s).Egas
-    for rf in (Honghu.ZBrent(), Brent(), ModAB(), ITP(), Bisection())
+    for rf in (Brent(), ModAB(), ITP(), Bisection())
         r = solve_coupling(BracketedCoupling(root_finder=rf), s)
         @test r.converged
         @test r.Egas < 0.2

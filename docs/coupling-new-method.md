@@ -2,7 +2,7 @@
 
 This document describes the multigroup matter-radiation coupling solver Honghu uses in production, `BracketedCoupling`, and is complete on its own: the physics, the derivation, the algorithm, the choice of root-finder, and the measurements. It is the default for every run with $N_G \ge 2$ frequency groups; `RadiationPhysics(coupling = BracketedCoupling())` states it explicitly. The code is `solve_coupling(::BracketedCoupling, …)` in `src/coupling_solvers.jl` and the functions it calls in `src/coupling.jl`. Every number below is reproduced by `docs/coupling-experiments/coupling_study.jl` (§8).
 
-In one paragraph: one backward-Euler step of the coupling is a system of $1 + N_G$ nonlinear equations, but its $N_G$ group equations are linear in the group energies, so they are solved in closed form and the whole step reduces to **one scalar equation in the gas energy** — the statement that the cell's total energy is unchanged. That equation always has a sign change on a known interval, so it is handed as a lambda to a **bracketing root-finder** — by default `ZBrent`, Brent's method as Brent wrote it. Nothing in the solve forms a matrix or allocates memory, and over a 240-cell sweep spanning three opacity laws and sixteen decades of optical depth it fails on none.
+In one paragraph: one backward-Euler step of the coupling is a system of $1 + N_G$ nonlinear equations, but its $N_G$ group equations are linear in the group energies, so they are solved in closed form and the whole step reduces to **one scalar equation in the gas energy** — the statement that the cell's total energy is unchanged. That equation always has a sign change on a known interval, so it is handed as a lambda to a **bracketing root-finder** — by default the `Brent` of SciML's BracketingNonlinearSolve, Brent's method as Brent wrote it. Nothing in the solve forms a matrix or allocates memory, and over a 240-cell sweep spanning three opacity laws and sixteen decades of optical depth it fails on none.
 
 ## 1. The problem
 
@@ -141,17 +141,17 @@ sol = solve(IntervalNonlinearProblem{false}(G, (lo, hi), s), m.root_finder;
             abstol = atol, maxiters = m.max_iterations)                  # the algorithm
 ```
 
-The root-finder is a field of the solver, `BracketedCoupling(root_finder = ZBrent())` by default. `ZBrent` is written in `src/rootfind.jl` against SciMLBase's `IntervalNonlinearProblem` interface, so any bracketing method written to that interface is interchangeable with it — in particular those of SciML's BracketingNonlinearSolve, once that package is loaded; §5 compares them. SciMLBase was already a dependency of OrdinaryDiffEq and already loaded, so using its interface added nothing to the install or to the load time.
+The root-finder is a field of the solver, `BracketedCoupling(root_finder = Brent())` by default, the `Brent` of SciML's BracketingNonlinearSolve. It is called through SciMLBase's `IntervalNonlinearProblem` interface, so any bracketing method written to that interface is interchangeable with it, in particular the package's other methods; §5 compares them. Both packages were already in OrdinaryDiffEq's dependency tree and already loaded, so using them added nothing to the install or to the load time.
 
 The cell state travels as the problem parameter rather than being captured by the lambda, so the lambda closes over nothing and costs nothing. `_energy_bracket` takes the equation as `G::F … where {F}`, because Julia does not specialise on a function argument it only passes through, and without that the same code allocated 2.8 kB per cell.
 
 ### 4.2 Why derivative-free
 
-$dG/dE_\mathrm{gas}$ is known in closed form (§3.2), so Newton's method is an obvious alternative. It is not the better one, because of what an evaluation costs: $G$ needs one incomplete Planck integral per call, and $dG/dE_\mathrm{gas}$ needs its temperature derivative as well. At $N_G \ge 2$ that integral dominates the cost of the whole solve. A derivative-free method that takes about as many, cheaper evaluations wins: `ZBrent`'s and `ModAB`'s 12 value-only evaluations per cell take 0.57 of the time of the 9 value-and-derivative evaluations a Newton-in-bracket needed on the same sweep.
+$dG/dE_\mathrm{gas}$ is known in closed form (§3.2), so Newton's method is an obvious alternative. It is not the better one, because of what an evaluation costs: $G$ needs one incomplete Planck integral per call, and $dG/dE_\mathrm{gas}$ needs its temperature derivative as well. At $N_G \ge 2$ that integral dominates the cost of the whole solve. A derivative-free method that takes about as many, cheaper evaluations wins: Brent's and `ModAB`'s 12 value-only evaluations per cell take 0.57 of the time of the 9 value-and-derivative evaluations a Newton-in-bracket needed on the same sweep.
 
 ### 4.3 Converting the tolerance
 
-Every bracketing method — `ZBrent` and those of BracketingNonlinearSolve alike — stops when the bracket is narrower than `abstol` **in $E_\mathrm{gas}$**. The solver promises something else: $|G| \le \mathrm{tol}\cdot\mathcal{E}$, and by §2.2 $G$ is the cell's energy-conservation error. The two differ by $dG/dE_\mathrm{gas}$, which by §3.2 reaches $1 + (c/\hat c)\,4a_\mathrm{rad}T^3/c_V$ — thousands in a radiation-dominated cell, and more under a strongly reduced $\hat c$. Passing $\mathrm{tol}\cdot\mathcal{E}$ as `abstol` alone silently loosens conservation by that factor: measured with `ZBrent` over the sweep, 72 of 240 cells then conserve energy only to $1.9\times10^{-6}$ against a promised $10^{-9}$.
+Every bracketing method in BracketingNonlinearSolve, `Brent` included, stops when the bracket is narrower than `abstol` **in $E_\mathrm{gas}$**. The solver promises something else: $|G| \le \mathrm{tol}\cdot\mathcal{E}$, and by §2.2 $G$ is the cell's energy-conservation error. The two differ by $dG/dE_\mathrm{gas}$, which by §3.2 reaches $1 + (c/\hat c)\,4a_\mathrm{rad}T^3/c_V$ — thousands in a radiation-dominated cell, and more under a strongly reduced $\hat c$. Passing $\mathrm{tol}\cdot\mathcal{E}$ as `abstol` alone silently loosens conservation by that factor: measured with `ZBrent` over the sweep, 72 of 240 cells then conserve energy only to $1.9\times10^{-6}$ against a promised $10^{-9}$.
 
 So after the first solve the residual is checked. If it is too large, the solve is repeated on the library's own final bracket, `(sol.left, sol.right)`, with `abstol` divided by $dG/dE_\mathrm{gas}$ evaluated at the answer — effectively constant across a bracket that narrow, so one repeat always suffices, and it starts from an interval a few `abstol` wide. This is the one place the derivative is used, through `group_energies`. **Convergence is judged on $|G|$, not on the library's return code.**
 
@@ -163,19 +163,19 @@ In a Newton iteration on the $1 + N_G$ equations of §1.2, the group residual co
 
 `CouplingResult.iterations`, which feeds the run's `newton_mean` / `newton_max` diagnostics, counts the evaluations of $G$ made by the bracket march plus one per call to the root-finder. The root-finder interface returns no evaluation count without allocating (SciMLBase's statistics type is mutable), and counting through the lambda allocates 16 bytes per cell. Read a `newton_mean` of about 3 for this solver as "one march step each way plus one solve", not as three Newton iterations.
 
-## 5. The root-finder: `ZBrent`, and how it compares
+## 5. The root-finder: Brent's method, and how it compares
 
-Three bracketing methods are compared here. All interpolate where interpolation helps and never leave the bracket.
+Three bracketing methods are compared here. All interpolate where interpolation helps and never leave the bracket. Until 2026-10-17 the default was `ZBrent`, an in-tree copy of Brent's method, written because the library's `Brent` was not that method (§5.1). The fix went upstream and `ZBrent` is gone (§5.6). The measurements below were taken with `ZBrent`; the library's `Brent` from 1.12.8 on reproduces its rows exactly, so in the tables `ZBrent()` stands for today's default and "`Brent()` (library)" for the library before 1.12.8.
 
-- **`ZBrent`**, the default, in `src/rootfind.jl`: Brent's method as Brent (1973) wrote it and as Numerical Recipes transcribes it in `zbrent` — inverse quadratic interpolation or a secant step when either shrinks the bracket fast enough, bisection otherwise, and a minimum step (§5.1).
-- **`Brent`** from SciML's BracketingNonlinearSolve 1.12, which is a transcription of textbook pseudocode rather than of Brent's algorithm.
+- **`ZBrent`**, the default until 2026-10-17, formerly in `src/rootfind.jl`: Brent's method as Brent (1973) wrote it and as Numerical Recipes transcribes it in `zbrent` — inverse quadratic interpolation or a secant step when either shrinks the bracket fast enough, bisection otherwise, and a minimum step (§5.1).
+- **`Brent`** from SciML's BracketingNonlinearSolve before 1.12.8, which was a transcription of textbook pseudocode rather than of Brent's algorithm.
 - **`ModAB`** from the same package, a modified Anderson–Björck method: regula falsi with a correction that stops one end of the bracket from sticking.
 
-The last two plug into the same interface once BracketingNonlinearSolve is loaded, and the test suite checks `ZBrent` against both.
+All three plug into the same interface, and the test suite checks the default against `ModAB`, `ITP` and `Bisection`.
 
-### 5.1 What the library's `Brent` gets wrong
+### 5.1 What the library's `Brent` got wrong before 1.12.8
 
-Two defects, both visible in its source and both measured:
+Two defects, both visible in its source then and both measured:
 
 - **No minimum step.** When the interpolated step would move the estimate $b$ by less than $\mathrm{tol}_1 = 2\varepsilon_\mathrm{mach}|b| + \mathtt{abstol}$, Brent's algorithm moves it by $\mathrm{tol}_1$ towards the contrapoint instead. On a smooth convex function the interpolated iterates converge to the root from one side, so without that step the far end of the bracket is never replaced except by bisection — and the method stops only when the *bracket* is narrow, which then takes many halvings. The minimum step deliberately probes just past the root, and the far end collapses in one evaluation.
 - **Two evaluations per iteration.** It recomputes $f(c)$ at the top of every iteration, where $c$ is always an earlier point whose value is already known.
@@ -232,19 +232,17 @@ The three root-finders give the same temperature field on every problem, to the 
 
 ### 5.5 Which to use
 
-**`ZBrent` is the default**: Brent's method as Brent wrote it, the fastest of the three per cell and on the one test problem long enough to time, and it keeps the solver's promise exactly — conservation to the requested tolerance. **`ModAB` is equivalent** in robustness and cost on everything measured, and conserves energy to machine precision rather than to the tolerance; pass `BracketedCoupling(root_finder = ModAB())` if that margin is wanted, after loading BracketingNonlinearSolve. **The library's `Brent` is not recommended**: it is as robust but twice as expensive, for the reasons of §5.1. Keep `Bisection()` for checking: it is slow — 37 evaluations on average — and cannot return a wrong answer from a valid bracket, which is what makes it a reference.
+**Brent's method is the default**, now as the library's `Brent()` from 1.12.8, which is the `ZBrent` of the tables: the fastest of the three per cell and on the one test problem long enough to time, and it keeps the solver's promise exactly — conservation to the requested tolerance. **`ModAB` is equivalent** in robustness and cost on everything measured, and conserves energy to machine precision rather than to the tolerance; pass `BracketedCoupling(root_finder = ModAB())` if that margin is wanted, with `using BracketingNonlinearSolve: ModAB`. **The library's `Brent` before 1.12.8** was as robust but twice as expensive, for the reasons of §5.1; `Project.toml` now requires 1.12.8. Keep `Bisection()` for checking: it is slow — 37 evaluations on average — and cannot return a wrong answer from a valid bracket, which is what makes it a reference.
 
-### 5.6 The upstream fix, and what changes if it lands
+### 5.6 The upstream fix, and the switch to it
 
 The two defects of §5.1 are reported upstream with a fix, as [SciML/NonlinearSolve.jl#1340](https://github.com/SciML/NonlinearSolve.jl/pull/1340) (opened 2026-09-28, from the branch `brent-zbrent-minimum-step` of the fork `chongchonghe/NonlinearSolve.jl`). It replaces the library's loop with Brent's `zero` / `zbrent`, so the library's `Brent` evaluates $f$ once per iteration and takes the minimum step. On the functions of §5.1 it brings the library's counts down to `ZBrent`'s: 20 to 9 on $x^2 - 2$ and 62 to 12 on $x^4 - 2$. It was merged the same day and released in BracketingNonlinearSolve 1.12.8 on 2026-09-29.
 
-**Now that it is released, Honghu can drop `ZBrent`** and make `BracketingNonlinearSolve.Brent()` the default `root_finder`. BracketingNonlinearSolve then moves back from `[extras]` to `[deps]`, because the package would call it, and `src/rootfind.jl` is deleted. Before switching, on the released version:
+**Honghu now uses it.** On 2026-10-17 `BracketingNonlinearSolve.Brent()` became the default `root_finder`, BracketingNonlinearSolve moved from `[extras]` to `[deps]` with compat 1.12.8, and `src/rootfind.jl` was deleted. Three checks came first, on 1.12.8:
 
-1. Run the `rootfind` section of `coupling_study.jl` and check that the library's `Brent` matches `ZBrent` in §5.2 and §5.3: about 12 evaluations and 1.9 μs per cell over the sweep, 0 bytes at every group count.
-2. Repoint the minimum-step test in `test/test_rootfind.jl` ($x^4 - 2$ in at most 14 evaluations) at the library's `Brent` rather than deleting it.
-3. Update §4.1, §5 and §8 of this document and CLAUDE.md to match.
-
-That switch has not been made: `ZBrent` is still the default, and nothing in Honghu depends on the release. Step 2 is half done: from 1.12.8 on, `test/test_rootfind.jl` checks that the library's `Brent` needs as few points as `ZBrent` on $x^4 - 2$, where before it checked that the library needed more than twice as many. The handoff for finishing the PR is `HANDOFF-PR1340.md` in the clone `NonlinearSolve.jl/`, next to this repository.
+1. The `rootfind` section of `coupling_study.jl`, run with both: over the sweep the same 12.0 evaluations of $G$ a cell, the same 72 re-solves and the same deviations to every printed digit, 1.76 against 1.76 μs a cell; 0 bytes at every group count; and the same results on all four test problems.
+2. On $x^2 - 2$ and $x^4 - 2$, at the positive tolerances the solver uses, the two visit the same points and return the same root to the last bit. At `abstol = 0` the library takes one evaluation more and stops with `FloatingPointLimit`, which the solver never asks for.
+3. `test/test_rootfind.jl` now tests the library's `Brent` as the default: each point evaluated once, the minimum step on $x^4 - 2$ in at most 14 evaluations, zero allocation.
 
 ## 6. Accuracy and cost
 
@@ -275,10 +273,9 @@ The peak, 6% at $\tau \sim 1$, is a property of the time discretisation, not of 
 |:---|:---|
 | `src/coupling.jl` | `coupling_coefficients`, `group_energy_values`, `group_energies`, `energy_balance` (§2.3) |
 | `src/coupling_solvers.jl` | `BracketedCoupling`, its `solve_coupling`, `_energy_bracket` (§3.3, §4) |
-| `src/rootfind.jl` | `ZBrent`, and its method of SciMLBase's `solve` (§5.1) |
-| `src/Honghu.jl` | the selective import of `IntervalNonlinearProblem` and `ReturnCode` from SciMLBase |
-| `test/test_rootfind.jl` | `ZBrent` alone: each point evaluated once, the minimum step on $x^4 - 2$ (fails without it: 50 evaluations against a limit of 14), edge cases, zero allocation |
-| `test/test_radiation_multigroup.jl` | zero-byte allocation of the coupling; the testset "BracketedCoupling: the root-finder chooses how, not what", which pins §3.3, §4.3 and agreement between `ZBrent`, the library's Brent, ModAB, ITP and Bisection |
+| `src/Honghu.jl` | the selective imports of `IntervalNonlinearProblem` from SciMLBase and `Brent` from BracketingNonlinearSolve |
+| `test/test_rootfind.jl` | the library's `Brent`, as the default: each point evaluated once, the minimum step on $x^4 - 2$ (fails without it: 50 evaluations against a limit of 14), zero allocation |
+| `test/test_radiation_multigroup.jl` | zero-byte allocation of the coupling; the testset "BracketedCoupling: the root-finder chooses how, not what", which pins §3.3, §4.3 and agreement between Brent, ModAB, ITP and Bisection |
 
 ```bash
 julia --project=. -t 4 docs/coupling-experiments/coupling_study.jl rootfind     # §5, every table

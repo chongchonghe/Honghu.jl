@@ -85,13 +85,13 @@ $$\left|E_{\rm gas}(T_d^-) - E_{\rm gas}(T_d^+)\right| \le {\rm tol}\cdot E_{\rm
 
 This bounds the error of the returned $E_{\rm gas}$, and through conservation the error of $\sum_g (c/\hat{c}_g)E_g$, by ${\rm tol}\cdot E_{\rm tot}$. It is not amplified by anything. It costs two extra evaluations of steps 1 and 2 (no root-finder call).
 
-**The tolerance conversion.** The root-finder stops on bracket width in $T_d$. Start with `abstol` $= \tfrac12\,{\rm tol}\, T_d^+$. If the state test fails, re-solve on the returned bracket with `abstol` $= {\rm tol}\,E_{\rm tot} / (4\,|\Delta E_{\rm gas} / \Delta T_d|)$, using the slope measured across the current bracket. Repeat at most three times. The factor 4 is there because `ZBrent` stops at a half-width of `abstol`: a factor of 2 turns that into full width, and another factor of 2 is a margin for the slope changing across a wide first bracket. Without that margin, 21 cells failed. This is the same pattern as the dust-free solver's conversion, but it converts through $dE_{\rm gas}/dT_d$ instead of $dG/dE_{\rm gas}$.
+**The tolerance conversion.** The root-finder stops on bracket width in $T_d$. Start with `abstol` $= \tfrac12\,{\rm tol}\, T_d^+$. If the state test fails, re-solve on the returned bracket with `abstol` $= {\rm tol}\,E_{\rm tot} / (4\,|\Delta E_{\rm gas} / \Delta T_d|)$, using the slope measured across the current bracket. Repeat at most three times. The factor 4 is there because the root-finder stops at a half-width of `abstol`: a factor of 2 turns that into full width, and another factor of 2 is a margin for the slope changing across a wide first bracket. Without that margin, 21 cells failed. This is the same pattern as the dust-free solver's conversion, but it converts through $dE_{\rm gas}/dT_d$ instead of $dG/dE_{\rm gas}$.
 
 ## 5. Algorithm, per cell
 
 1. Guess: $T_d \leftarrow \max(E_{\rm gas}^0 / c_V,\ T_{\rm floor})$.
 2. March by factors of two on $H(T_d)$ until the sign changes. If no sign change is found, report the cell unconverged and keep the old state, as `BracketedCoupling` does.
-3. `solve(IntervalNonlinearProblem(H, (lo, hi), s), root_finder; abstol, maxiters)`, with `ZBrent()` as the default.
+3. `solve(IntervalNonlinearProblem(H, (lo, hi), s), root_finder; abstol, maxiters)`, with `Brent()` as the default.
 4. Test the state across the final bracket and convert the tolerance (§4).
 5. Set $E_g = E_g(T_d)$ and $E_{\rm gas} = E_{\rm gas}(T_d)$. Apply `apply_energy_floors`. Return $T_d$ too, because the flux update needs it (§7).
 

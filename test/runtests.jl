@@ -7,14 +7,9 @@ using Honghu: SVec, dot, norm, minmod, limit, ppm_edges, eddington_factor,
               variants, rows
 const P = Honghu.Problems
 
-# BracketingNonlinearSolve is test-only: its methods plug into the same interface
-# as `ZBrent` and the suite checks the default against them, but the package does
-# not call it, so it sits in `[extras]` rather than `[deps]`. `[extras]` is on the
-# load path only under `Pkg.test`, and this suite is run directly
-# (`julia --project=. test/runtests.jl`), so it is loaded by its UUID instead. That
-# works because it is already in the manifest, inside OrdinaryDiffEq's closure.
-const BracketingNonlinearSolve = Base.require(Base.PkgId(
-    Base.UUID("70df07ce-3d50-431d-a3e7-ca6ddb60ac1e"), "BracketingNonlinearSolve"))
+# The default root-finder, `Brent`, and the alternatives the suite checks it
+# against all come from BracketingNonlinearSolve, a dependency of the package.
+import BracketingNonlinearSolve
 
 @testset "Honghu" begin
     include("test_utils.jl")

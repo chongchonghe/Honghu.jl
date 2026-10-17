@@ -11,7 +11,7 @@
 
 using Honghu
 using Honghu: CouplingState, SVec, gas_scale, gas_temperature_of, energy_balance,
-              coupling_coefficients, _eliminate_groups, dot, ZBrent, IntervalNonlinearProblem, solve
+              coupling_coefficients, _eliminate_groups, dot, Brent, IntervalNonlinearProblem, solve
 using Printf
 
 function cell(; NG=1, opacity, Tgas=1.0, Trad=0.0, rho=1.0, cv=1.5, dt=1e-8, c=1e8, chat=1e7,
@@ -54,13 +54,13 @@ function solve_dust(s, K; tol=1e-9)
     ok || return (NaN, NaN, nb, false)
     f = (x, p) -> dustH(x, s, K)
     prob = IntervalNonlinearProblem{false}(f, (lo, hi), nothing)
-    sol = solve(prob, ZBrent(); abstol=tol * sol_scale(lo, hi) / 2, maxiters=200)
+    sol = solve(prob, Brent(); abstol=tol * sol_scale(lo, hi) / 2, maxiters=200)
     width = abs(first(dust_state(sol.left, s)) - first(dust_state(sol.right, s)))
     nsolve = 1
     while width > tol * Etot && nsolve < 4
         # convert: the bracket in T_d maps to E_gas by the local slope
         slope = width / max(sol.right - sol.left, eps(sol.u))
-        sol = solve(IntervalNonlinearProblem{false}(f, (sol.left, sol.right), nothing), ZBrent();
+        sol = solve(IntervalNonlinearProblem{false}(f, (sol.left, sol.right), nothing), Brent();
                     abstol=tol * Etot / (4slope), maxiters=200)
         width = abs(first(dust_state(sol.left, s)) - first(dust_state(sol.right, s)))
         nsolve += 1
@@ -106,7 +106,7 @@ const ADT = Base.require(Base.PkgId(Base.UUID("47edcb42-4c32-4615-8424-f2b9edc5f
 # RadDust parameters (Quokka testRadDust), but with the physical B = a T^4
 const c, chat, chi, K, cv, arad = 1e8, 1e7, 1e4, 1e6, 1.5, 1.0
 Tdust(T, E) = (h(x) = c * chi * (arad * x^4 - E) - K * sqrt(T) * (T - x);
-               solve(IntervalNonlinearProblem{false}((x, p) -> h(x), (1e-12, max(T, (max(E, 0.0)/arad)^0.25) + 1), nothing), ZBrent(); abstol=0.0).u)
+               solve(IntervalNonlinearProblem{false}((x, p) -> h(x), (1e-12, max(T, (max(E, 0.0)/arad)^0.25) + 1), nothing), Brent(); abstol=0.0).u)
 function rhs(u, p, t)
     Eg, E = u; T = max(Eg / cv, 1e-12); Td = Tdust(T, E)
     L = K * sqrt(T) * (T - Td)

@@ -38,7 +38,7 @@ const PAGES = [
     "rsla" => ("Reduced speed of light", ["rsla.jl"]),
     "coupling" => ("Matter-radiation coupling",
                    ["coupling.jl", "coupling_solvers.jl", "coupling_ode.jl", "source_terms.jl",
-                    "dust.jl", "newton.jl", "rootfind.jl"]),
+                    "dust.jl", "newton.jl"]),
     "output" => ("Output, plotting and comparison",
                  ["output.jl", "plotting.jl", "metrics.jl", "compare.jl"]),
     "problems" => ("Test problems", ["problems/"]),

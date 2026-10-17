@@ -272,3 +272,13 @@ What changed: the module, the name in `Project.toml` (the UUID is kept), `src/Ho
 What did not change: the sections above are history and keep the old name, and so do the dated reviews in `docs/superpowers/reviews/`. Hydro.jl, the predecessor, keeps its name. The new URLs assume that the GitHub repository is renamed to `Honghu.jl`, which is done on GitHub rather than in the code.
 
 1468 tests, about 80 s.
+
+## Follow-up: `ZBrent` retired for the library's `Brent` (2026-10-17)
+
+> Retire ZBrent and use the library's Brent. My fix was merged into the library's Brent.
+
+SciML/NonlinearSolve.jl#1340 put Brent's method, with the minimum step and one evaluation per iteration, into BracketingNonlinearSolve's `Brent`, released in 1.12.8. Measured first with the `rootfind` section of `coupling_study.jl`, the library's `Brent` matched `ZBrent` everywhere: the same evaluation counts, re-solves and answers over the 240-cell sweep, the same time per cell to 1%, 0 bytes at every group count, and the same results on the four test problems. On $x^2 - 2$ and $x^4 - 2$ at positive tolerances the two visit the same points and return the same root to the last bit.
+
+So `BracketedCoupling(root_finder = Brent())` is the default, BracketingNonlinearSolve moved from `[extras]` to `[deps]` with compat 1.12.8, and `src/rootfind.jl` is deleted. `test/test_rootfind.jl` now checks the two properties on the library's `Brent`, and `docs/coupling-new-method.md` §5.6 records the switch.
+
+1442 tests, about 75 s.

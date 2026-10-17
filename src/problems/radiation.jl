@@ -169,7 +169,7 @@ function rad_dust_reference(ts; groups::Honghu.RadiationGroups{NG}=Honghu.GREY, 
         # above both the gas and the radiation temperature
         hi = 2 * max(T, (max(sum(E), 0.0) / arad)^0.25) + 1
         Honghu.solve(Honghu.IntervalNonlinearProblem{false}(h, (1e-12, hi), nothing),
-                     Honghu.ZBrent(); abstol=0.0).u
+                     Honghu.Brent(); abstol=0.0).u
     end
     function rhs(u, _, _)
         T = max(u[1] / cv, 1e-12)

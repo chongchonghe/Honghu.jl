@@ -31,12 +31,7 @@ using Printf
 # Selectively, as `src/Honghu.jl` does: a blanket `using OrdinaryDiffEq` would
 # shadow this package's own `step!`.
 using OrdinaryDiffEq: Rodas5P, FBDF
-# Test-only, and not in `[deps]`; loaded by UUID as the test suite does, since it
-# is already in the manifest inside OrdinaryDiffEq's closure.
-const BracketingNonlinearSolve = Base.require(Base.PkgId(
-    Base.UUID("70df07ce-3d50-431d-a3e7-ca6ddb60ac1e"), "BracketingNonlinearSolve"))
-using .BracketingNonlinearSolve: ModAB, Brent, Bisection
-using Honghu: ZBrent
+using BracketingNonlinearSolve: ModAB, Brent, Bisection
 
 const P = Honghu.Problems
 
@@ -756,7 +751,8 @@ function _counted_solve(rf, s::CouplingState{NG,M,T}; tol=1e-9, maxit=100) where
     G = (x, s) -> (n[] += 1; energy_balance(s, x, group_energy_values(s, x)))
     Etot = abs(s.Egas + dot(gas_scale(s), s.Erad + s.src))
     atol = tol * Etot
-    lo, hi, _, _ = Honghu._energy_bracket(G, s)
+    Emin = s.cv * s.Tfloor
+    lo, hi, _, _ = Honghu._energy_bracket(G, s, max(s.Egas, Emin), Emin)
     sol = Honghu.solve(Honghu.IntervalNonlinearProblem{false}(G, (lo, hi), s), rf;
                        abstol=atol, maxiters=maxit)
     x = sol.u
@@ -773,14 +769,14 @@ function _counted_solve(rf, s::CouplingState{NG,M,T}; tol=1e-9, maxit=100) where
 end
 
 """
-`ZBrent` against BracketingNonlinearSolve's `Brent` and `ModAB` as
+BracketingNonlinearSolve's `Brent`, the default, against its `ModAB` as
 `BracketedCoupling`'s root-finder: robustness and cost
 over the 240-cell sweep, cost per cell against group count, and the four test
 problems. Everything is the shipped solver except the evaluation counts, which
 come from `_counted_solve`.
 """
 function section_rootfind()
-    finders = ["ZBrent (default)" => ZBrent(), "SciML Brent" => Brent(), "SciML ModAB" => ModAB()]
+    finders = ["Brent (default)" => Brent(), "ModAB" => ModAB()]
     cells = [(cell_state(; NG=4, opacity=mk(tau / DT), Tgas=Tg, Trad=Tr, dt=DT))
              for (_, mk) in LAWS for (Tg, Tr) in STATES for tau in TAUS]
     ref = [solve_coupling(BracketedCoupling(root_finder=Bisection(), tolerance=1e-13), s)
