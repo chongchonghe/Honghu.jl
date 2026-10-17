@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use Honghu.jl in your research, please cite it as below."
+title: "Honghu.jl: three-dimensional radiation hydrodynamics in Julia"
+type: software
+authors:
+  - given-names: Chong-Chong
+    family-names: He
+    email: chongchong.he@anu.edu.au
+    affiliation: Australian National University
+    website: "https://chongchonghe.github.io/"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/chongchonghe/Honghu.jl"
+url: "https://chongchonghe.github.io/Honghu.jl/"
+abstract: >-
+  Honghu.jl is a three-dimensional radiation-hydrodynamics code in pure Julia.
+  It solves the Euler equations with a method-of-lines finite-volume scheme
+  (HLLC or LLF Riemann solvers, PCM, PLM or PPM reconstruction) coupled to
+  two-moment (M1) radiation transport, grey or in frequency groups, with an HLL
+  solver, an IMEX PD-ARS time integrator and an implicit matter-radiation
+  coupling. It includes the adaptive reduced speed of light approximation and
+  dust-gas thermal coupling, and serves as a test bed for algorithms developed
+  for the Quokka code.
+keywords:
+  - radiation hydrodynamics
+  - astrophysics
+  - M1 closure
+  - reduced speed of light approximation
+  - finite-volume methods
+  - Julia

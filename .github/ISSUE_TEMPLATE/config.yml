@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://chongchonghe.github.io/Honghu.jl/
+    about: The README, the reference built from the docstrings, and the technical notes.

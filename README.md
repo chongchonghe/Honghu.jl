@@ -446,6 +446,16 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 - Vaytet et al. (2011), *JQSRT* 112, 1323 — multigroup M1, and the frequency-dependent Marshak wave
 - Wibking & Krumholz (2022), *MNRAS* 512, 1430; He, Wibking & Krumholz (2024), *MNRAS* 531, 3906 — Quokka
 
+## Contributing, support and citing
+
+Questions, bug reports and feature requests are welcome on the [issue tracker](https://github.com/chongchonghe/Honghu.jl/issues). [CONTRIBUTING.md](https://github.com/chongchonghe/Honghu.jl/blob/main/CONTRIBUTING.md) explains how to report a problem, how to propose a change, and how to run the tests and the documentation build. Everyone taking part is expected to follow the [code of conduct](https://github.com/chongchonghe/Honghu.jl/blob/main/CODE_OF_CONDUCT.md). Honghu is maintained by its author, who reads every issue and decides what is merged.
+
+If you use Honghu in your research, please cite it. [CITATION.cff](https://github.com/chongchonghe/Honghu.jl/blob/main/CITATION.cff) holds the metadata, and GitHub's "Cite this repository" button formats it.
+
+## License
+
+MIT; see [LICENSE](https://github.com/chongchonghe/Honghu.jl/blob/main/LICENSE).
+
 ## Author
 
 [Chong-Chong He](https://chongchonghe.github.io/) (chongchong.he@anu.edu.au).
