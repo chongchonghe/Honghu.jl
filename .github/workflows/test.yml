@@ -21,14 +21,20 @@ concurrency:
 
 jobs:
   test:
+    name: Julia ${{ matrix.julia }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.10 is the lowest version Project.toml allows (the long-term-support
+        # release), 1.12 the one development uses.
+        julia: ['1.10', '1.12']
     steps:
       - uses: actions/checkout@v7
-      # 1.12 is the version the suite is tested against (see Project.toml).
       - uses: julia-actions/setup-julia@v3
         with:
-          version: '1.12'
+          version: ${{ matrix.julia }}
       - uses: julia-actions/cache@v3
       - name: Install package dependencies
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
