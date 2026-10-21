@@ -10,11 +10,6 @@ Honghu solves the Euler equations coupled to the two-moment (M1) radiation trans
 
 Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
-| Kelvin-Helmholtz instability | M1 radiation shadow |
-|:---:|:---:|
-| ![Kelvin-Helmholtz](docs/figures/kh.gif) | ![shadow](docs/figures/shadow.gif) |
-| $256^2$, PPM + SSPRK3 | a beam striking an opaque clump; colour is $\log_{10}E_r$ over ten decades |
-
 ## Why Honghu
 
 - **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) (Zingale 2014; Harpole et al. 2019) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, and radiation hydrodynamics with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
@@ -26,6 +21,11 @@ Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a 
 - **Built to be extended.** A new equation of state, opacity law, Riemann solver, reconstruction, coupling solver or speed-of-light limiter is a new type and a few methods. Julia's multiple dispatch compiles it into the same allocation-free kernels, with no change to the core. See [Extending](#extending).
 - **Light to install.** Three standard libraries and three packages; plotting loads only when you load Plots. Julia 1.10, the long-term-support release, and newer, tested on both in CI.
 - **Documentation for people and for AI agents.** Every page of the [documentation](https://chongchonghe.github.io/Honghu.jl/) is published as HTML and as Markdown, all pages come as one file, and an `llms.txt` index points coding agents at them.
+
+| Kelvin-Helmholtz instability | M1 radiation shadow |
+|:---:|:---:|
+| ![Kelvin-Helmholtz](docs/figures/kh.gif) | ![shadow](docs/figures/shadow.gif) |
+| $256^2$, PPM + SSPRK3 | a beam striking an opaque clump; colour is $\log_{10}E_r$ over ten decades |
 
 ## What it solves
 
