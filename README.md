@@ -2,11 +2,11 @@
 
 <p align="center"><img src="docs/figures/honghu-logo.png" alt="Honghu.jl logo" width="300"></p>
 
-The name is 鸿鹄 (hóng hú): a great swan-like bird that flies high and far, and in classical Chinese an image of lofty ambition.
+The name is 鸿鹄 (hóng hú): a great swan-like bird that flies high and far, and in classical Chinese an image of lofty ambition. The code is named for what it aims at.
 
-A three-dimensional radiation-hydrodynamics code in pure Julia. Three standard libraries, OrdinaryDiffEq, SciMLBase and BracketingNonlinearSolve: OrdinaryDiffEq for the matter-radiation coupling's error-controlled reference solver, the other two for its default root-finder and the interface it is called through. Plotting is a weak dependency that activates only if you load Plots.
+**Three-dimensional radiation hydrodynamics in pure Julia: simple enough to learn from, fast enough to run on a laptop, and good enough to invent new methods with.**
 
-Honghu solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — on a uniform Cartesian grid. It follows the algorithms of [Quokka](https://github.com/quokka-astro/quokka) (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024).
+Honghu solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — in one, two or three dimensions on a uniform Cartesian grid. It uses the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024), written out so that a student can read them and a developer can change them.
 
 Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
@@ -14,6 +14,18 @@ Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a 
 |:---:|:---:|
 | ![Kelvin-Helmholtz](docs/figures/kh.gif) | ![shadow](docs/figures/shadow.gif) |
 | $256^2$, PPM + SSPRK3 | a beam striking an opaque clump; colour is $\log_{10}E_r$ over ten decades |
+
+## Why Honghu
+
+- **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) (Zingale 2014; Harpole et al. 2019) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, and radiation hydrodynamics with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
+- **Fast on a laptop.** Hydrodynamics runs at 12.6 million cell updates per second at $64^3$ with 8 threads on a laptop (Apple M5 Max), about one-eighth of the throughput of Quokka on a single NVIDIA V100 GPU; radiation hydrodynamics at 6.9 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance).
+- **The algorithms of a production code.** HLLC with Batten wave speeds, Rider's correction and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; the M1 system with an HLL solver; and the IMEX PD-ARS scheme for stiff matter-radiation coupling. These are Quokka's methods, and every kernel is written so that it transliterates to Quokka's C++ and back. What you learn here is what production codes do.
+- **Where new methods are born.** Honghu is the reference implementation of the adaptive reduced speed of light approximation (He, Krumholz & Wibking, in preparation), with a stability bound that is exact for the scheme. Its matter-radiation coupling reduces each cell's implicit step to one equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where the Newton formulation Quokka uses fails on 75. Dust-gas thermal coupling is one equation too. Ideas proven here go into Quokka, and a fix found here went into SciML's BracketingNonlinearSolve.
+- **Verified, not only tested.** 1442 tests: exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks down to the Zel'dovich spike, measured convergence orders, and invariants that must hold exactly — conservation, direction isotropy, positivity. Every figure on this page is redrawn by the scripts in `docs/`. See [Verification](#verification).
+- **Reproducible research.** One script, `examples/irsla_paper.jl`, reproduces every number and data file of the numerical tests in the adaptive reduced speed of light paper.
+- **Built to be extended.** A new equation of state, opacity law, Riemann solver, reconstruction, coupling solver or speed-of-light limiter is a new type and a few methods. Julia's multiple dispatch compiles it into the same allocation-free kernels, with no change to the core. See [Extending](#extending).
+- **Light to install.** Three standard libraries and three packages; plotting loads only when you load Plots. Julia 1.10, the long-term-support release, and newer, tested on both in CI.
+- **Documentation for people and for AI agents.** Every page of the [documentation](https://chongchonghe.github.io/Honghu.jl/) is published as HTML and as Markdown, all pages come as one file, and an `llms.txt` index points coding agents at them.
 
 ## What it solves
 
@@ -223,25 +235,25 @@ The test suite (`julia --project=. -t 4 test/runtests.jl`, 1217 tests, ~70 s) ch
 
 ## Performance
 
-`julia --project=. -t 8 test/benchmarks.jl` on Apple silicon, Julia 1.12, `Float64`:
+`julia --project=. -t 8 test/benchmarks.jl` on a laptop (Apple M5 Max), Julia 1.12, `Float64`, measured 2026-10-21:
 
 | | $32^3$ | $64^3$ |
 |:---|---:|---:|
-| Hydrodynamics | 9.8 Mcell-updates/s | 13.1 Mcell-updates/s |
-| Radiation-hydrodynamics | 5.3 Mcell-updates/s | 6.9 Mcell-updates/s |
+| Hydrodynamics | 9.2 Mcell-updates/s | 12.6 Mcell-updates/s |
+| Radiation-hydrodynamics | 5.1 Mcell-updates/s | 6.9 Mcell-updates/s |
 
 Per-kernel breakdown at $64^3$, one sweep or one pass each:
 
 | kernel | ns/cell |
 |:---|---:|
-| `cons2prim` | 0.26 |
-| reconstruct, PLM | 1.39 |
-| reconstruct, PPM | 2.71 |
-| HLLC sweep | 2.78 |
-| HLL radiation sweep | 1.98 |
-| implicit matter coupling | 21.9 |
+| `cons2prim` | 0.23 |
+| reconstruct, PLM | 1.37 |
+| reconstruct, PPM | 2.69 |
+| HLLC sweep | 2.61 |
+| HLL radiation sweep | 2.48 |
+| implicit matter coupling | 22.6 |
 
-The implicit coupling dominates a radiation step, as it should: it is a Newton solve per cell. Allocation per step is flat in the grid size (138 KiB for hydrodynamics, 250 KiB with radiation, all of it threading overhead), and `test/test_performance.jl` asserts that every hot kernel stays below 8 bytes per cell — a regression test for a boxing bug that once cost 12 kB per cell.
+The implicit coupling dominates a radiation step, as it should: it is a Newton solve per cell. Allocation per step is flat in the grid size (152 KiB for hydrodynamics, 284 KiB with radiation, all of it threading overhead), and `test/test_performance.jl` asserts that every hot kernel stays below 8 bytes per cell — a regression test for a boxing bug that once cost 12 kB per cell.
 
 **Memory.** Buffers scale as roughly `72 * ncells * 8` bytes when grey radiation is enabled, `35 * ncells * 8` without, where `ncells` includes ghost cells. A $128^3$ radiation-hydrodynamics run needs about 1.4 GB; pure hydrodynamics at $128^3$ needs about 0.7 GB. Every radiation buffer is `4 * ngroups` components wide, so the radiation share of that figure — about half of it in a grey run — scales with the number of frequency groups.
 
@@ -445,6 +457,7 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 - Chu et al. (2019), *JCP* 389, 62 — IMEX PD-ARS
 - Vaytet et al. (2011), *JQSRT* 112, 1323 — multigroup M1, and the frequency-dependent Marshak wave
 - Wibking & Krumholz (2022), *MNRAS* 512, 1430; He, Wibking & Krumholz (2024), *MNRAS* 531, 3906 — Quokka
+- Zingale (2014), *Astronomy and Computing* 6, 52; Harpole et al. (2019), *JOSS* 4, 1265 — pyro
 
 ## Contributing, support and citing
 
