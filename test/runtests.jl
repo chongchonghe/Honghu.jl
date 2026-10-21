@@ -28,6 +28,7 @@ import BracketingNonlinearSolve
     include("test_extensions.jl")
     include("test_compare.jl")
     include("test_performance.jl")
+    include("test_metadata.jl")
 end
 
 # `test_coupling_adaptive.jl` used to run in a subprocess, and only when
