@@ -2,7 +2,7 @@
 
 <p align="center"><img src="docs/figures/honghu-logo.png" alt="Honghu.jl logo" width="300"></p>
 
-The name is 鸿鹄 (hóng hú): a great swan-like bird that flies high and far, and in classical Chinese an image of lofty ambition. The code is named for what it aims at.
+Honghu is named after 鸿鹄 (hóng hú), an ancient Chinese term for the large, high-flying swan.
 
 **Three-dimensional radiation hydrodynamics in pure Julia: simple enough to learn from, fast enough to run on a laptop, and good enough to invent new methods with.**
 
