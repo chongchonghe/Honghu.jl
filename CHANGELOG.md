@@ -4,6 +4,10 @@ All notable changes to Honghu.jl are recorded here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Documentation
+
+- The Zenodo concept DOI, `10.5281/zenodo.23569081`, in `CITATION.cff` and as a badge in the README.
+
 ## [0.1.0] - 2026-10-23
 
 The first public release.

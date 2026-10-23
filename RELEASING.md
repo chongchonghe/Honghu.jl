@@ -40,8 +40,7 @@ These steps need the maintainer's own accounts.
 
 Zenodo issues two DOIs: one for the version just archived, and a *concept DOI* that always resolves to the latest version. Cite the concept DOI unless a specific version matters.
 
-1. Add the concept DOI to `CITATION.cff` (`doi: 10.5281/zenodo.NNNNNNN`), so that GitHub's "Cite this repository" and every later Zenodo record carry it.
-2. Add a DOI badge to the top of `README.md`. Zenodo's record page shows the Markdown for it.
+Done after v0.1.0 (2026-10-23), whose record is <https://zenodo.org/records/23569082> (version DOI `10.5281/zenodo.23569082`): the concept DOI, `10.5281/zenodo.23569081`, is in `CITATION.cff` as `doi` and in a badge at the top of `README.md`. Zenodo ignores `doi` when it reads `CITATION.cff` (`cffconvert -f zenodo` drops it), so it does not clash with the new DOI each release gets. Nothing needs to change for later releases.
 
 ## If Honghu is registered in Julia's General registry
 

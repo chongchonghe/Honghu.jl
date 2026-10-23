@@ -1,5 +1,7 @@
 # Honghu.jl
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23569081.svg)](https://doi.org/10.5281/zenodo.23569081)
+
 <p align="center"><img src="docs/figures/honghu-logo.png" alt="Honghu.jl logo" width="300"></p>
 
 Honghu is named after 鸿鹄 (hóng hú), an ancient Chinese term for the large, high-flying swan.
@@ -463,7 +465,7 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 
 Questions, bug reports and feature requests are welcome on the [issue tracker](https://github.com/chongchonghe/Honghu.jl/issues). [CONTRIBUTING.md](https://github.com/chongchonghe/Honghu.jl/blob/main/CONTRIBUTING.md) explains how to report a problem, how to propose a change, and how to run the tests and the documentation build. Everyone taking part is expected to follow the [code of conduct](https://github.com/chongchonghe/Honghu.jl/blob/main/CODE_OF_CONDUCT.md). Honghu is maintained by its author, who reads every issue and decides what is merged.
 
-If you use Honghu in your research, please cite it. [CITATION.cff](https://github.com/chongchonghe/Honghu.jl/blob/main/CITATION.cff) holds the metadata, and GitHub's "Cite this repository" button formats it.
+If you use Honghu in your research, please cite it. Every release is archived on Zenodo, and the DOI [10.5281/zenodo.23569081](https://doi.org/10.5281/zenodo.23569081) always resolves to the latest version; each version also has its own DOI, listed on that page. [CITATION.cff](https://github.com/chongchonghe/Honghu.jl/blob/main/CITATION.cff) holds the metadata, and GitHub's "Cite this repository" button formats it.
 
 ## License
 
