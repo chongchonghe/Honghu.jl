@@ -620,7 +620,7 @@ function update_chiF!(chiF::AbstractArray{T,4}, U::AbstractArray{T,4}, eos::Abst
 end
 
 """
-    update_chat!(chat, U, R, eos, phys, grid, floors, dt)
+    update_chat!(chat, U, R, eos, phys, grid, floors, dt; update_momentum = true)
 
 Fill the per-cell, per-group reduced speed of light `chat[g, i, j, k]` from the
 current state, over the *whole* array including ghost cells.
@@ -630,17 +630,21 @@ sides of every interface, including the ones bounding the domain; the limiter is
 purely local, so filling them costs one extra loop and no communication. `U` and
 `R` must already have had their own ghost cells filled.
 
+`update_momentum = false`, as for a run without hydrodynamics, means that the
+coupling freezes the gas momentum: the gas then has no inertia to share with the
+radiation, and the momentum block of [`StabilityBound`](@ref) loses its cap `K_F`.
+
 A [`ConstantChat`](@ref) limiter -- the default -- dispatches to a no-op: the
 array was filled with `phys.chat` when the simulation was built and cannot
 change.
 """
-@inline update_chat!(chat, U, R, eos, phys, g, floors, dt) =
-    _fill_chat!(chat, phys.chat_limiter, U, R, eos, phys, g, floors, dt)
+@inline update_chat!(chat, U, R, eos, phys, g, floors, dt; update_momentum::Bool=true) =
+    _fill_chat!(chat, phys.chat_limiter, U, R, eos, phys, g, floors, dt, update_momentum)
 
 @inline _fill_chat!(chat::AbstractArray{T,4}, ::ConstantChat, U::AbstractArray{T,4},
                     R::AbstractArray{T,4}, eos::AbstractEOS,
                     phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
-                    floors::Floors{T}, dt::T) where {NG,M,T} = chat
+                    floors::Floors{T}, dt::T, ::Bool) where {NG,M,T} = chat
 
 # The gas temperature of cell (i, j, k), with the same floors the coupling uses.
 @inline function _cell_temperature(U::AbstractArray{T,4}, eos, i, j, k,
@@ -666,10 +670,42 @@ end
             flux_mean_opacity(op, rho, Tgas))
 end
 
+"""
+    _radiation_inertia(cl, R, i, j, k, c, rho, ng) -> (1 + T_max) E / (rho c^2)
+
+The ratio of the radiation to the gas inertia that caps the damping of the
+momentum block in [`StabilityBound`](@ref): `E` and the flux summed over the
+`ng` groups, as for the heat capacity, and `T_max` the largest diagonal element
+of the Eddington tensor of that total, the most restrictive momentum channel.
+"""
+@inline function _radiation_inertia(cl::AbstractClosure, R::AbstractArray{T,4}, i, j, k,
+                                    c::T, rho::T, ng::Integer) where {T}
+    er = zero(T)
+    fx = zero(T)
+    fy = zero(T)
+    fz = zero(T)
+    @inbounds for gr in 1:ng
+        b = gbase(gr)
+        er += R[b+IERAD, i, j, k]
+        fx += R[b+IFRX, i, j, k]
+        fy += R[b+IFRY, i, j, k]
+        fz += R[b+IFRZ, i, j, k]
+    end
+    er > 0 || return zero(T)
+    ce = c * er
+    fx, fy, fz = fx / ce, fy / ce, fz / ce
+    tmax = one(T)                  # an inadmissible state gets the largest value
+    if fx * fx + fy * fy + fz * fz < 1
+        t = eddington_tensor(cl, fx, fy, fz)
+        tmax = max(t[1, 1], t[2, 2], t[3, 3])
+    end
+    return (1 + tmax) * er / (rho * c * c)
+end
+
 function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
                      U::AbstractArray{T,4}, R::AbstractArray{T,4}, eos::AbstractEOS,
                      phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
-                     floors::Floors{T}, dt::T) where {NG,M,T}
+                     floors::Floors{T}, dt::T, update_momentum::Bool) where {NG,M,T}
     n1, n2, n3 = g.dims
     c = phys.c
     phi0 = phys.chat / c
@@ -693,12 +729,13 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
             # sets how much damping the coupling can supply (see StabilityBound).
             hcap = 4 * arad * Tgas^3 / heat_capacity(eos, rho, Tgas)
             kappa = group_opacities(op, groups, rho, Tgas)
+            rinert = update_momentum ? _radiation_inertia(cl, R, i, j, k, c, rho, NG) : zero(T)
             if NG == 1 || per_group(lim)
                 for gr in 1:NG
                     kP, kE, kF = _limiter_opacities(op, groups, kappa, rho, Tgas, gr)
                     w = LocalCell(cdt, _signal_sum(cl, R, i, j, k, gr, c, inv3),
                                   rho * kE, rho * kF, kE > 0 ? hcap * kP / kE : zero(T),
-                                  dxmin)
+                                  dxmin, rinert)
                     chat[gr, i, j, k] = c * chat_factor(lim, phi0, w)
                 end
             else
@@ -709,7 +746,7 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
                     kP, kE, kF = _limiter_opacities(op, groups, kappa, rho, Tgas, gr)
                     w = LocalCell(cdt, _signal_sum(cl, R, i, j, k, gr, c, inv3),
                                   rho * kE, rho * kF, kE > 0 ? hcap * kP / kE : zero(T),
-                                  dxmin)
+                                  dxmin, rinert)
                     phi = min(phi, chat_factor(lim, phi0, w))
                 end
                 for gr in 1:NG

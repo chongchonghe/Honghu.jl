@@ -52,6 +52,27 @@ cell1d(cdt, tau; sig=ISO, hrat=0.0) = LocalCell(cdt, sig, tau, tau, hrat, 1.0)
         @test chat_factor(StabilityBound(beta=0.5), phi0, cell1d(cdt, 1e8)) == 1
     end
 
+    @testset "... keeps the inertia cap K_F of the momentum block" begin
+        # A thick cell in which the transport and the damping of the momentum block
+        # nearly cancel (He, Krumholz & Wibking): at phi = 1, c dt sum(sigma/dx) = 9000,
+        # q_E = 2e5, K = 20, q_F = 17998.2 and K_F = 9.0e-5. Dropping K_F changes the
+        # damping by only 5e-5 of itself but the bound by 0.4 > 1 - beta: without it
+        # the rule picks phi = 1, where the momentum block is unstable.
+        KF, qF = 8.9991e-5, 17998.2
+        astar(q) = 2 * (2 + q + KF) / (2 + KF)     # the momentum block's boundary in a
+        lim = StabilityBound()
+        @test chat_factor(lim, 1e-4, LocalCell(1.0, 9000.0, 2e5, qF, 1e-4, 1.0)) == 1
+        @test 2 * 9000 > astar(qF)                 # ... and phi = 1 is unstable
+        phi = chat_factor(lim, 1e-4, LocalCell(1.0, 9000.0, 2e5, qF, 1e-4, 1.0, KF / qF))
+        @test phi * (9000 - qF / (2 + KF)) ≈ 0.9 rtol = 1e-12
+        @test 2phi * 9000 < astar(phi * qF)        # the phi it picks is stable
+        # the inertia ratio (1 + T_max) E / (rho c^2) of an isotropic cell is 4E / (3 rho c^2)
+        R = zeros(Honghu.NRAD, 1, 1, 1)
+        R[gbase(1)+IERAD, 1, 1, 1] = 2.0
+        @test Honghu._radiation_inertia(Honghu.LevermoreClosure(), R, 1, 1, 1, 3.0, 0.5, 1) ≈
+              (4 / 3) * 2.0 / (0.5 * 9.0) rtol = 1e-12
+    end
+
     @testset "... reduces to the CFL bound of the closure's signal speed" begin
         lim = StabilityBound(beta=1.0)
         for sig in (ISO, 0.5, 1.0)

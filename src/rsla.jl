@@ -47,7 +47,7 @@ Three are provided:
 abstract type AbstractChatLimiter end
 
 """
-    LocalCell(cdt, sdx, chiE, chiF, hrat, dxmin)
+    LocalCell(cdt, sdx, chiE, chiF, hrat, dxmin, rinert = 0)
 
 What a limiter may read about one cell and one group, all local:
 
@@ -60,7 +60,11 @@ What a limiter may read about one cell and one group, all local:
   - `hrat`  : `4 a_rad T^3 kappa_P/kappa_E / (rho c_v)`, the ratio of the
     radiation to the gas heat capacity, weighted by how strongly the cell emits
     relative to how strongly it absorbs (see [`StabilityBound`](@ref));
-  - `dxmin` : the smallest active cell width, which only the fitting form reads.
+  - `dxmin` : the smallest active cell width, which only the fitting form reads;
+  - `rinert`: `(1 + T_max) E / (rho c^2)`, the ratio of the radiation to the gas
+    inertia that caps the damping of the momentum block, with `E` the radiation
+    energy density of all groups and `T_max` the largest diagonal element of
+    their Eddington tensor (see [`StabilityBound`](@ref)). Zero drops the cap.
 """
 struct LocalCell{T<:AbstractFloat}
     cdt::T
@@ -69,7 +73,11 @@ struct LocalCell{T<:AbstractFloat}
     chiF::T
     hrat::T
     dxmin::T
+    rinert::T
 end
+
+LocalCell(cdt::T, sdx::T, chiE::T, chiF::T, hrat::T, dxmin::T) where {T<:AbstractFloat} =
+    LocalCell(cdt, sdx, chiE, chiF, hrat, dxmin, zero(T))
 
 """
     ConstantChat()
@@ -99,10 +107,11 @@ dissipation and the coupling splits into an energy block `(T, E)` and a momentum
 block `(v, F)`. Each block is a 2×2 problem with a closed-form boundary:
 
     phi c dt [ sum_d sigma_d/dx_d - chi_E / (2 + K) ] <= 1,
-    phi c dt [ sum_d sigma_d/dx_d - chi_F / 2       ] <= 1,
+    phi c dt [ sum_d sigma_d/dx_d - chi_F / (2 + K_F) ] <= 1,
 
 with `K = hrat * c dt * chi_E = 4 a_rad T^3 kappa_P c dt / c_v`, which is the
-substep divided by the gas cooling time at the *true* speed of light.
+substep divided by the gas cooling time at the *true* speed of light, and
+`K_F = rinert * c dt * chi_F` its analogue for the momentum.
 
   - The first term is the transport amplification: the checkerboard is amplified
     by `2 phi c dt sum_d sigma_d/dx_d - 1` in each explicit stage.
@@ -112,8 +121,11 @@ substep divided by the gas cooling time at the *true* speed of light.
     exchanges its heat with the radiation within a step (`K >> 2`) the damping
     saturates at `1/(hrat c dt)`: the radiation cannot be damped faster than the
     gas can absorb what it deposits.
-  - The momentum block has the same form with `K` replaced by the ratio of
-    radiation to gas *inertia*, which is smaller by `(a/c)^2` and dropped.
+  - The momentum block has the same form with `K` replaced by `K_F`, set by the
+    ratio of radiation to gas *inertia*. It is smaller than `K` by about
+    `(a/c)^2`, but it is kept: the bound is a difference of two large terms
+    when the cell is thick, and dropping even a small `K_F` can then select an
+    unstable `phi` (He, Krumholz & Wibking, Sec. 3.2).
 
 Both are *exact* for this scheme, not estimates: they agree with the full
 five-variable amplification matrix to the precision of a bisection, for any
@@ -276,7 +288,8 @@ function chat_factor end
 """
     stability_denominator(cell) -> D
 
-`D = max(sdx - chiE/(2 + K), sdx - chiF/2)` with `K = hrat cdt chiE`, so that
+`D = max(sdx - chiE/(2 + K), sdx - chiF/(2 + KF))` with `K = hrat cdt chiE` and
+`KF = rinert cdt chiF`, so that
 the bound of [`StabilityBound`](@ref) is `phi cdt D <= 1`. `D <= 0` means no
 bound.
 """
@@ -285,7 +298,7 @@ bound.
     # `K` overflows to Inf in a cell whose gas has no heat capacity to speak of;
     # the limit of chiE/(2 + K) is then zero, which is what IEEE gives anyway.
     dE = w.sdx - w.chiE / (2 + K)
-    dF = w.sdx - w.chiF / 2
+    dF = w.sdx - w.chiF / (2 + w.rinert * w.cdt * w.chiF)
     return max(dE, dF)
 end
 

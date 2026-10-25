@@ -679,7 +679,8 @@ function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
     # boundary sweep and keeps the ordering here independent of what it does.
     fill_ghosts!(U, sim.boundaries, g, t; momentum_blocks=1)
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
-    update_chat!(sim.rw.chat, U, R, sim.eos, sim.radiation, g, sim.floors, dt)
+    update_chat!(sim.rw.chat, U, R, sim.eos, sim.radiation, g, sim.floors, dt;
+                 update_momentum=sim.hydro_enabled)
     return nothing
 end
 
