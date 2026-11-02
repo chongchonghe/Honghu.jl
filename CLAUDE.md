@@ -34,7 +34,7 @@ Prefer building example figures out of `plotstate` / `plotpanels` rather than ra
 
 ## Releases
 
-`RELEASING.md` is the procedure. Zenodo archives every published GitHub release and takes its metadata from `CITATION.cff`, so the version is written in both `Project.toml` and `CITATION.cff`, and `CHANGELOG.md` needs a section for it; `test/test_metadata.jl` fails if any of the three disagree. Record each user-visible change in the changelog's newest section as it is made, not at release time.
+`RELEASING.md` is the procedure. Zenodo archives every published GitHub release, takes its metadata from `CITATION.cff` and its version from the tag, so the version is written in `Project.toml`, `CITATION.cff` and the tag alike, and `CHANGELOG.md` needs a section for it; `test/test_metadata.jl` fails if the three files disagree. Record each user-visible change in the changelog's newest section as it is made, not at release time.
 
 ## Dependencies
 
@@ -265,7 +265,7 @@ Any change here must keep two tests passing: `matter_coupling` at `kappa = 1e9`,
 
 `chat` is a field, not a number: `sim.rw.chat[g, i, j, k]`, one value per cell and per group. `RadiationPhysics` carries a `chat_limiter` that sets it. `ConstantChat()`, the default, is the standard RSLA and a measured no-op, down to the ghost fills. `StabilityBound()` is the adaptive reduced speed of light approximation (ARSA) of He, Krumholz & Wibking, "An Adaptive Reduced Speed of Light Approximation" (J. Comput. Phys., in preparation), and this code is its reference implementation; the code and the example names still call it IRSLA. Every cell and group runs at the largest `phi = chat/c` that the PD-ARS step supports stably at the time step of the standard RSLA, `phi = min(1, max(phi0, beta / (c dt Lambda)))`, with `Lambda` the `stability_denominator`. `OpticalDepthFit` is the earlier two-parameter fitting form; it carries no stability bound and is kept to reproduce old results.
 
-`examples/irsla_paper.jl` produces every number and data file of the paper's Sec. 5, one section at a time, and `examples/linear_waves_rhd.jl` the linear-wave test; `test/test_rsla.jl` pins each point below. `docs/rsla-findings.md` holds the measurements in two parts: *Standard RSLA* (S1–S4) for the global reduction on its own, and *ARSA* (A1–A9), where A1 is the method as `b287f03` left it and A2–A9 are the findings, measured with the earlier limiter, that led there. `git log irsla-variable-chat-stage2` has the reasoning commit by commit.
+`examples/irsla_paper.jl` produces every number and data file of the paper's Sec. 5, one section at a time, and `examples/linear_waves_rhd.jl` the linear-wave test; `test/test_rsla.jl` pins each point below. `docs/rsla-findings.md` holds the measurements in two parts: *Standard RSLA* (S1–S4) for the global reduction on its own, and *ARSA* (A1–A9), where A1 is the method as `b287f03` left it and A2–A9 are the findings, measured with the earlier limiter, that led there. `git log archive/irsla-variable-chat-stage2` has the reasoning commit by commit; the branch is deleted, and the tag, also on GitHub, keeps its 21 commits.
 
 Things about it that are not obvious from the code:
 

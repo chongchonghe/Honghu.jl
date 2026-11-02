@@ -1,6 +1,8 @@
-# The version a release is published under is written in three places, and
-# Zenodo takes it from CITATION.cff rather than from the tag: the three must
-# agree, or the archived record carries the wrong version. RELEASING.md is the
+# The version of a release is written in Project.toml, CITATION.cff and the
+# changelog, and again in the tag. Zenodo records the tag name as the version
+# (v0.1.0 was archived as `v0.1.0`), while GitHub's "Cite this repository" reads
+# CITATION.cff: the files must agree, so that the package, the citation GitHub
+# offers and the archived record all name one version. RELEASING.md is the
 # procedure this guards.
 
 using TOML

@@ -1,6 +1,6 @@
 # Releasing Honghu.jl
 
-A release is a published GitHub release with a tag `vX.Y.Z`. Zenodo archives every published release of the repository automatically, gives it a DOI, and takes the record's metadata (title, author, description, keywords, license, version) from `CITATION.cff`. There is no `.zenodo.json`; Zenodo would use it instead of `CITATION.cff` if there were, and it is needed only for funding, Zenodo communities or related identifiers.
+A release is a published GitHub release with a tag `vX.Y.Z`. Zenodo archives every published release of the repository automatically, gives it a DOI, takes the record's metadata (title, author, description, keywords, license) from `CITATION.cff`, and records the tag name as its version: v0.1.0 was archived as `v0.1.0`. The tag must therefore match the version in `Project.toml` and `CITATION.cff`. There is no `.zenodo.json`; Zenodo would use it instead of `CITATION.cff` if there were, and it is needed only for funding, Zenodo communities or related identifiers.
 
 ## One-time setup
 
