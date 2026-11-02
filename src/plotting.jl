@@ -33,10 +33,13 @@ A multigroup run also lists `:Erad_1`, `:Fx_1`, ... one set per group. A grey
 run does not: with one group those names are accepted but they name the same
 array as `:Erad`, `:Fx`, ..., and advertising both would suggest a distinction
 that is not there.
+
+A run with mass scalars also lists `:X_1`, ..., `:X_ns`, the mass fraction of
+each scalar.
 """
 function available_fields(sim::Simulation)
     hydro = (:density, :vx, :vy, :vz, :speed, :pressure, :temperature,
-             :internal_energy, :mach)
+             :internal_energy, :mach, ntuple(s -> Symbol(:X_, s), sim.nscalars)...)
     has_radiation(sim) || return hydro
     rad = (:Erad, :Fx, :Fy, :Fz, :Trad, :reduced_flux)
     ng = ngroups(sim.radiation)
@@ -68,7 +71,8 @@ together with a label suitable for an axis or colour bar.
 See [`available_fields`](@ref) for the accepted names. `:Erad`, `:Fx`, `:Fy`,
 `:Fz` and `:reduced_flux` are summed over the frequency groups, so they mean the
 same thing in a grey run and a multigroup one; a trailing group number picks one
-group out, as in `field(sim, :Erad_2)`.
+group out, as in `field(sim, :Erad_2)`. `:X_s` is the mass fraction
+`rho X_s / rho` of mass scalar `s`, not the conserved density.
 
 ```julia
 rho, lbl = field(sim, :density)
@@ -90,6 +94,14 @@ function field(sim::Simulation{T}, name::Symbol) where {T}
     sg = _group_suffix(name)
     if sg !== nothing
         base, gr = sg
+        if base === :X
+            # The mass fraction, read straight from the conserved rows: the
+            # primitives carry rho X_s, not X_s.
+            1 <= gr <= sim.nscalars ||
+                throw(ArgumentError("field $name asks for scalar $gr of $(sim.nscalars)"))
+            return sim.U[scalar_index(gr), ir, jr, kr] ./ sim.U[IRHO, ir, jr, kr],
+                   "mass fraction $gr"
+        end
         i = findfirst(v -> first(v) === base, _RAD_VARS)
         if i !== nothing
             _require_radiation(sim, name)

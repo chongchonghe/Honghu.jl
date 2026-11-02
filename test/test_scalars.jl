@@ -106,3 +106,50 @@ end
     # a scalar clip is a positivity repair like any other, so `nrepaired` sees it
     @test nrepaired(sim) == sim.diag.floors_scalar
 end
+
+@testset "mass scalars: output, fields, checkpoints" begin
+    sim = Simulation(n=(8, 4, 1), nscalars=2)
+    set_initial_conditions!((x, y, z) -> (rho=1 + x, p=1.0, X=(x, 1 - x)), sim)
+    U0 = copy(sim.U)
+    @test (:X_1, :X_2) ⊆ available_fields(sim)
+    X1, lbl = field(sim, :X_1)
+    @test lbl == "mass fraction 1"
+    @test X1[3, 2, 1] ≈ coordinates(sim.grid, 1)[3]
+    @test_throws ArgumentError field(sim, :X_3)
+    @test_throws ArgumentError field(sim, :X_0)
+    @test_throws ArgumentError field(Simulation(n=(8, 4, 1)), :X_1)
+    @test size(primitives(sim), 1) == Honghu.NHYDRO + 2
+    gas_temperature(sim); conserved_totals(sim); field(sim, :density)
+    @test sim.U == U0                                   # reading does not perturb
+
+    # the file holds the mass fraction, not rho X_s
+    mf = only(f for f in Honghu.output_fields(sim) if f[1] == "mass_fraction_1")
+    @test dropdims(mf[3]; dims=1) ≈ X1
+
+    mktempdir() do dir
+        fn = write_vtk(sim, joinpath(dir, "s"))
+        @test occursin("Name=\"mass_fraction_2\"", read(fn, String))
+
+        cp = save_checkpoint(sim, joinpath(dir, "c"))
+        sim.U .= 0
+        load_checkpoint!(sim, cp)
+        @test sim.U == U0
+        other = Simulation(n=(8, 4, 1), nscalars=1)
+        @test_throws ErrorException load_checkpoint!(other, cp)
+
+        # a version-1 file (no variable counts) still loads into a scalar-free simulation
+        plain = Simulation(n=(8, 4, 1))
+        set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0), plain)
+        v1 = joinpath(dir, "old.honghu")
+        open(v1, "w") do f
+            write(f, b"HONGHU\x00\x01", Int64(8))
+            foreach(d -> write(f, Int64(plain.grid.n[d])), 1:3)
+            foreach(d -> write(f, Int64(plain.grid.ng[d])), 1:3)
+            write(f, 0.0, 0.0, Int64(0), Int64(0), plain.U)
+        end
+        Uplain = copy(plain.U); plain.U .= 0
+        load_checkpoint!(plain, v1)
+        @test plain.U == Uplain
+        @test_throws ErrorException load_checkpoint!(sim, v1)
+    end
+end

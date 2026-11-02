@@ -8,6 +8,7 @@ All notable changes to Honghu.jl are recorded here. The format follows [Keep a C
 
 - Passive mass scalars: `Simulation(nscalars = n)` stores the conserved densities $\rho X_s$ as extra rows of `sim.U`, `set_initial_conditions!` reads their mass fractions from the key `X`, and `conserved_totals(sim).scalars` is the mass of each. A `Reflecting` wall flips only the normal momentum, never a scalar row, and a `Fixed` or `FunctionBC` hydro boundary must give `NHYDRO + nscalars` values.
 - Mass scalars are advected: each $\rho X_s$ is reconstructed with the gas and carried by the Riemann mass flux with the upwind mass fraction, so a uniform $X_s$ stays uniform to round-off and a contact discontinuity stays monotone. The density floor keeps the mass fraction of the cell, and `enforce_scalar_floors!` clips a negative $\rho X_s$ to zero and counts it in `sim.diag.floors_scalar`, which `nrepaired(sim)` includes. `cons2prim!`, `hydro_fluxes!` and `enforce_floors!` take an optional trailing `nscalars`; a run without scalars is bit for bit unchanged.
+- Mass scalars in the output: `available_fields` lists `:X_1`, ..., `:X_ns`, and `field(sim, :X_s)` returns the mass fraction $\rho X_s/\rho$; `write_vtk` writes it as `mass_fraction_s`. Checkpoints are format 2: the magic is `HONGHU\x00\x02` and the row counts of `U` and `R` follow the radiation flag, so `load_checkpoint!` refuses a file whose number of hydro or radiation variables differs from the simulation's. Format 1 and Hydro3D files still load, into a simulation with `nscalars == 0` only.
 
 ### Documentation
 
