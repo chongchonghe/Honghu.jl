@@ -69,7 +69,7 @@ iteration to converge before it can take a step.
     the integrator's own default, which calls OpenBLAS: OpenBLAS takes a global lock
     to allocate its buffers on every call, so a threaded chemistry step ran slower
     than a single-threaded one (a 24^3 step took 85 ms on one thread and 184 ms on
-    four, against 72 ms and 20 ms with this one). An algorithm you pass keeps its own
+    four, against 74 ms and 20 ms with this one). An algorithm you pass keeps its own
     default; give it `linsolve = SimpleLUFactorization()` (from LinearSolve, which you
     load yourself) to get the same.
   - `reltol` : the relative tolerance. The default `1e-2` is deliberately loose,

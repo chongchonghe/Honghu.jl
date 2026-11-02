@@ -72,7 +72,7 @@ using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenb
 # `blas_memory_alloc` takes a global lock on every call: with four threads the
 # chemistry step ran 2.2 times slower than with one. Measured on a 24^3 step, the
 # default takes 85 ms on one thread and 184 ms on four; `GenericLUFactorization` takes
-# 76 and 176 ms (its solve is still `dgetrs`); this one takes 72 and 20 ms.
+# 76 and 176 ms (its solve is still `dgetrs`); this one takes 74 and 20 ms.
 using LinearSolve: SimpleLUFactorization
 
 # `BracketedCoupling` hands its one scalar equation to a bracketing root-finder

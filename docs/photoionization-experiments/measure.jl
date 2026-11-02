@@ -98,9 +98,9 @@ end
 
 # --- 2. the two integrators on Test 2 ---------------------------------------------
 
-# Mean of `f` over the cells whose centre is in each of `nb` equal bins of radius from the
-# source to the box side. Cells beyond that radius (the corners) are left out.
-function radial_means(sim, fields; nb=16, centered=false)
+# Mean of each of `fields` over the cells whose centre is in each of `nb` equal bins of radius
+# from the source to the box side (the octant of the tests: the source is at the origin). Cells beyond that radius (the corners) are left out.
+function radial_means(sim, fields; nb=16)
     g = sim.grid
     L = P._ILIEV_L
     xs = [coordinates(g, d) for d in 1:3]
@@ -278,6 +278,14 @@ function part_chat()
         rS = P.stromgren_radius_analytic(500 * MYR)
         emitf("  wall %.1f s, %d radiation substeps, %d chemistry failures; at 500 Myr the radius of the recombination volume 8 sum(x^2) dV is %.4f kpc (%+.2f%% against the chat = c curve)",
               wall, d.rad_substeps, d.chem_failures, rrec / KPC, 100 * (rrec / rS - 1))
+        # Where the gap between sum(x) and sum(x^2), which is sum(x (1 - x)), comes from: the
+        # cells behind the front (x > 0.9, whose neutral fraction is small but not zero) or the
+        # cells of the front itself. A smooth profile has no sharp line between the two.
+        gap = x .* (1 .- x)
+        inner = x .> 0.9
+        emitf("  at 500 Myr: %d of %d cells have 0.1 < x < 0.9; the mean neutral fraction of the cells with x > 0.5 is %.3f; %.0f%% of sum(x (1 - x)) comes from the cells with x > 0.9",
+              count(v -> 0.1 < v < 0.9, x), length(x), sum(1 .- x[x.>0.5]) / count(>(0.5), x),
+              100 * sum(gap[inner]) / sum(gap))
     end
 end
 

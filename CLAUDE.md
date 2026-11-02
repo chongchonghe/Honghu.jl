@@ -9,12 +9,12 @@ Honghu is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler e
 ## Commands
 
 ```bash
-julia --project=. -t 4 test/runtests.jl             # full suite, ~80 s
+julia --project=. -t 4 test/runtests.jl             # full suite, ~95 s
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw docs/figures/
 julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a figure)
 julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]  # every number of the ARSA paper's Sec. 5
 julia --project=. -t 8 examples/stromgren_sphere.jl [1|2] [n] [octant]  # Iliev et al. (2006) Test 1 or 2, centred 64^3 by default
-julia --project=. -t 8 docs/photoionization-experiments/measure.jl  # every number of docs/photoionization-findings.md
+julia --project=. -t 8 docs/photoionization-experiments/measure.jl  # the tables of docs/photoionization-findings.md, parts 1 to 3 (writes measure.txt)
 julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
 julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
 julia --project=. docs/make.jl                      # build the docs site into docs/_site (needs quarto)
@@ -137,7 +137,7 @@ allocation takes one global lock on every call, so the threads of the chemistry
 step queued behind it: one `24^3` step took 85 ms on one thread and 184 ms on four,
 2.2 times *slower*. `GenericLUFactorization` does not help, because its solve is
 still `dgetrs` (76 and 176 ms). LinearSolve's `SimpleLUFactorization`, a dense LU
-written in Julia, takes 72 and 20 ms with the same step counts and the same answer
+written in Julia, takes 74 and 20 ms with the same step counts and the same answer
 (four cells from cold neutral to hot ionized agree to `7e-9` or better).
 It was already inside OrdinaryDiffEq's closure, so it adds no package; it is
 named in `[deps]` because `src/Honghu.jl` calls it. `AdaptiveCoupling`'s default
