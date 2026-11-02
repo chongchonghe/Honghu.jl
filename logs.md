@@ -282,3 +282,15 @@ SciML/NonlinearSolve.jl#1340 put Brent's method, with the minimum step and one e
 So `BracketedCoupling(root_finder = Brent())` is the default, BracketingNonlinearSolve moved from `[extras]` to `[deps]` with compat 1.12.8, and `src/rootfind.jl` is deleted. `test/test_rootfind.jl` now checks the two properties on the library's `Brent`, and `docs/coupling-new-method.md` §5.6 records the switch.
 
 1442 tests, about 75 s.
+
+## Follow-up: v0.1.0, released and archived on Zenodo (2026-10-23)
+
+> Prepare the code for publication to Zenodo, go as far as possible, and publish v0.1.0.
+
+What a release now needs is in the repository. `CHANGELOG.md` follows Keep a Changelog. `RELEASING.md` holds the one-time Zenodo setup, the steps of each release and what to do after the first. `test/test_metadata.jl` fails if `Project.toml` and `CITATION.cff` disagree on the version, or if the changelog has no section for it. Zenodo's GitHub integration reads its metadata from `CITATION.cff` (title, author, description, keywords, license), checked before the release with `cffconvert --validate` and previewed with `cffconvert -f zenodo`; no `.zenodo.json` is needed until there is funding or a Zenodo community to record. The author's ORCID, 0000-0002-2332-8178, went into `CITATION.cff` once Zenodo was linked to GitHub and the repository enabled there, which only the maintainer can do.
+
+The release itself: the changelog section was dated 2026-10-23 with a new `Unreleased` section above it, committed as `a2ec09e` ("chore: release v0.1.0"), and published as https://github.com/chongchonghe/Honghu.jl/releases/tag/v0.1.0 once CI passed on that commit (the test suite on Julia 1.10 and 1.12, and the documentation build). The first `gh release create` failed with HTTP 422, because `--target` had been given an abbreviated commit hash; GitHub takes a branch name or the full hash, and `RELEASING.md` uses `--target main`.
+
+Zenodo archived it within minutes as https://zenodo.org/records/23569082, with version DOI `10.5281/zenodo.23569082` and concept DOI `10.5281/zenodo.23569081`, and with the title, the author's ANU affiliation and ORCID, the description, the keywords and the MIT license as `CITATION.cff` gives them. Two things differ from what was expected. The record's version is `v0.1.0`, the tag name, and not the `0.1.0` written in `CITATION.cff`, so the version Zenodo shows comes from the tag; `test/test_metadata.jl` and `RELEASING.md` say it comes from `CITATION.cff`, which this record contradicts. And its publication date is 2026-10-22, the UTC date of the release.
+
+Afterwards (`3dc9a8f`) the concept DOI went into `CITATION.cff` as `doi`, which GitHub's "Cite this repository" reads and Zenodo ignores, so it cannot clash with the next version's DOI; and into a badge and a citing sentence at the top of the README, which is also the front page of the documentation site. Not done yet: registration in Julia's General registry, and the TagBot and CompatHelper workflows that go with it.
