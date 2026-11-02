@@ -113,9 +113,9 @@ struct HydroWorkspace{T<:AbstractFloat}
     U0::Array{T,4}
 end
 
-function HydroWorkspace(g::CartesianGrid{T}) where {T}
-    HydroWorkspace(allocate(g, NHYDRO), allocate(g, NHYDRO), allocate(g, NHYDRO),
-                   allocate(g, NHYDRO), allocate(g, NHYDRO), allocate(g, NHYDRO))
+function HydroWorkspace(g::CartesianGrid{T}, nvar::Integer=NHYDRO) where {T}
+    HydroWorkspace(allocate(g, nvar), allocate(g, nvar), allocate(g, nvar),
+                   allocate(g, nvar), allocate(g, nvar), allocate(g, nvar))
 end
 
 """
@@ -143,10 +143,10 @@ struct RadiationWorkspace{T<:AbstractFloat}
 end
 
 function RadiationWorkspace(g::CartesianGrid{T}, nrad::Integer=NRAD,
-                            ng::Integer=nrad ÷ NRAD) where {T}
+                            ng::Integer=nrad ÷ NRAD, nvar_gas::Integer=NHYDRO) where {T}
     RadiationWorkspace(allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
                        allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
-                       allocate(g, NHYDRO), allocate(g, ng), allocate(g, ng))
+                       allocate(g, nvar_gas), allocate(g, ng), allocate(g, ng))
 end
 
 """
@@ -174,6 +174,11 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     `dt/2` before the advance and `dt/2` after it, mutating `sim.U` and `sim.R`
     in place. See [`SourceOrder`](@ref).
   - `floors = Floors()` : positivity floors.
+  - `nscalars = 0` : number of passive mass scalars, stored as the conserved
+    `rho * X_s` in rows `NHYDRO + 1 : NHYDRO + nscalars` of `sim.U` (see
+    [`scalar_index`](@ref)) and set from the key `X` of
+    [`set_initial_conditions!`](@ref). With the default, the state is exactly
+    the five hydro variables.
 
 # Numerics
   - `reconstruction = PPM()` : [`PCM`](@ref), [`PLM`](@ref) or [`PPM`](@ref).
@@ -218,6 +223,7 @@ mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
     const cfl_radiation::T
     const max_radiation_substeps::Int
     const hydro_enabled::Bool
+    const nscalars::Int
     const U::Array{T,4}
     const R::Array{T,4}
     const hw::HydroWorkspace{T}
@@ -243,17 +249,20 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     radiation_boundaries::Boundaries=boundaries,
                     cfl=0.4, cfl_radiation=0.3,
                     max_radiation_substeps::Integer=10,
+                    nscalars::Integer=0,
                     T::Type{<:AbstractFloat}=Float64)
     hydro || radiation !== nothing ||
         throw(ArgumentError("nothing to evolve: enable hydro, radiation, or both"))
+    nscalars >= 0 || throw(ArgumentError("nscalars must be non-negative, got $nscalars"))
     ng = max(required_ghosts(reconstruction),
              radiation === nothing ? 0 : required_ghosts(radiation_reconstruction))
     grid = CartesianGrid(; n, xlo, xhi, nghost=ng, T)
-    U = allocate(grid, NHYDRO)
+    nvar = NHYDRO + nscalars
+    U = allocate(grid, nvar)
     nrad = radiation === nothing ? 0 : nradvars(radiation)
     Rarr = radiation === nothing ? Array{T,4}(undef, 0, 0, 0, 0) : allocate(grid, nrad)
     rw = radiation === nothing ? nothing :
-         RadiationWorkspace(grid, nrad, ngroups(radiation))
+         RadiationWorkspace(grid, nrad, ngroups(radiation), nvar)
     # The limiter only ever raises `chat` above this floor, and `ConstantChat`
     # leaves it here for the whole run.
     rw === nothing || fill!(rw.chat, T(radiation.chat))
@@ -261,8 +270,8 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     Simulation(grid, eos, radiation, reconstruction, radiation_reconstruction,
                riemann, integrator, boundaries,
                radiation_boundaries, source, strang_sources, fl, T(cfl), T(cfl_radiation),
-               Int(max_radiation_substeps), hydro, U, Rarr,
-               HydroWorkspace(grid), rw, Diagnostics(), zero(T), zero(T), 0)
+               Int(max_radiation_substeps), hydro, Int(nscalars), U, Rarr,
+               HydroWorkspace(grid, nvar), rw, Diagnostics(), zero(T), zero(T), 0)
 end
 
 """
@@ -271,6 +280,15 @@ end
 Whether the radiation module is enabled (a compile-time property of the type).
 """
 @inline has_radiation(::Simulation{T,E,RP}) where {T,E,RP} = RP !== Nothing
+
+"""
+    nhydrovars(sim) -> Int
+
+Length of the gas state vector, `NHYDRO + sim.nscalars`: the five hydro
+variables followed by one conserved density `rho * X_s` per mass scalar. It is
+the first dimension of `sim.U` and of the hydro scratch arrays.
+"""
+@inline nhydrovars(sim::Simulation) = NHYDRO + sim.nscalars
 
 Base.eltype(::Simulation{T}) where {T} = T
 
@@ -302,6 +320,26 @@ end
 @inline _field(nt::NamedTuple, ::Val{K}, default) where {K} =
     haskey(nt, K) ? getfield(nt, K) : default
 
+# The conserved scalar densities `rho * X_s` of one cell. `X === nothing` is the
+# key left out of the initial condition. The zeros are written rather than assumed
+# so that setting the initial conditions a second time resets the scalars too.
+function _set_scalars!(U::Array{T,4}, ns::Int, ::Nothing, rho, i, j, k) where {T}
+    for s in 1:ns
+        U[scalar_index(s), i, j, k] = zero(T)
+    end
+    return nothing
+end
+
+function _set_scalars!(U::Array{T,4}, ns::Int, X, rho, i, j, k) where {T}
+    length(X) == ns ||
+        throw(ArgumentError("initial condition gave $(length(X)) mass fractions `X` " *
+                            "but the simulation has nscalars = $ns"))
+    for s in 1:ns
+        U[scalar_index(s), i, j, k] = rho * T(X[s])
+    end
+    return nothing
+end
+
 """
     set_initial_conditions!(f, sim)
 
@@ -317,6 +355,7 @@ Recognised keys:
 | `vx`, `vy`, `vz`   | velocity                               | `0` |
 | `Erad` or `Trad`   | radiation energy density, or radiation temperature | gas temperature |
 | `Fx`, `Fy`, `Fz`   | radiation flux                         | `0` |
+| `X`                | mass fractions of the passive scalars: a tuple or vector of `sim.nscalars` numbers | all `0` |
 
 Ghost cells are filled from the boundary conditions afterwards, so `f` is only
 called on interior cells.
@@ -327,6 +366,12 @@ radiation temperature `Erad` implies, so a multigroup run starts in equilibrium
 rather than with everything piled into group 1. A multigroup problem therefore
 needs no group-aware initial condition of its own; a [`Fixed`](@ref) radiation
 boundary still does, since nothing splits a boundary state.
+
+`X` holds mass *fractions*, as the problem is posed; the state stores the
+conserved density `rho * X_s`. Its length must be `sim.nscalars`, and a
+different length is an `ArgumentError` rather than a scalar quietly left at
+zero. Leaving `X` out sets every fraction to zero, which is also what a
+`Simulation` without scalars wants.
 
 ```julia
 set_initial_conditions!(sim) do x, y, z
@@ -353,6 +398,7 @@ function set_initial_conditions!(f::F, sim::Simulation{T}) where {F,T}
         w = SVec(rho, T(_field(s, Val(:vx), z0)), T(_field(s, Val(:vy), z0)),
                  T(_field(s, Val(:vz), z0)), p)
         setstate!(U, prim2cons(eos, w), i, j, k)
+        _set_scalars!(U, sim.nscalars, _field(s, Val(:X), nothing), rho, i, j, k)
 
         if has_radiation(sim)
             phys = sim.radiation
@@ -385,7 +431,7 @@ function set_initial_conditions!(f::F, sim::Simulation{T}) where {F,T}
     end
     # Ghosts first: `enforce_state!` sweeps the whole array, and until the
     # boundary conditions have run the ghost cells hold uninitialised memory.
-    fill_ghosts!(U, sim.boundaries, g, sim.t)
+    fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
     has_radiation(sim) && fill_ghosts!(sim.R, sim.radiation_boundaries, g, sim.t)
     enforce_state!(sim)
     return sim
@@ -411,7 +457,7 @@ directional sweep per active dimension.
 """
 function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
     g = sim.grid
-    fill_ghosts!(U, sim.boundaries, g, sim.t)
+    fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
     sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors)
     cons2prim!(sim.hw.prim, U, sim.eos, g)
     fill!(dU, zero(T))
@@ -486,7 +532,7 @@ end
 function _stage_chat!(sim::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Array{T,4},
                       dt::T, t::T) where {T}
     sim.radiation.wavespeed_correction || return nothing
-    fill_ghosts!(U, sim.boundaries, sim.grid, t)
+    fill_ghosts!(U, sim.boundaries, sim.grid, t; momentum_blocks=1)
     update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
     return nothing
 end
@@ -495,7 +541,7 @@ end
 # from the state that stage transports.
 function _stage_chiF!(sim::Simulation{T}, U::Array{T,4}, t::T) where {T}
     sim.radiation.wavespeed_correction || return nothing
-    fill_ghosts!(U, sim.boundaries, sim.grid, t)
+    fill_ghosts!(U, sim.boundaries, sim.grid, t; momentum_blocks=1)
     update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
     return nothing
 end
@@ -507,7 +553,7 @@ function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
     # step has a value on both sides of every interface bounding the domain.
     # `rad_rhs!` fills `R`'s ghosts again a moment later, which costs one
     # boundary sweep and keeps the ordering here independent of what it does.
-    fill_ghosts!(U, sim.boundaries, g, t)
+    fill_ghosts!(U, sim.boundaries, g, t; momentum_blocks=1)
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
     update_chat!(sim.rw.chat, U, R, sim.eos, sim.radiation, g, sim.floors, dt)
     return nothing
@@ -850,9 +896,11 @@ end
     conserved_totals(sim)
 
 Volume integrals of the conserved quantities over the interior, returned as a
-`NamedTuple` `(mass, momentum, energy_gas, energy_rad, energy_total)`. Useful as
-a conservation check; note that the total energy is only conserved exactly when
-every boundary is periodic or reflecting and there are no sources.
+`NamedTuple` `(mass, momentum, energy_gas, energy_rad, energy_total, scalars)`.
+`scalars` is a vector with the mass of each passive scalar, `sum(rho X_s) dV`,
+and is empty without scalars. Useful as a conservation check; note that the
+total energy is only conserved exactly when every boundary is periodic or
+reflecting and there are no sources.
 """
 function conserved_totals(sim::Simulation{T}) where {T}
     g = sim.grid
@@ -863,12 +911,16 @@ function conserved_totals(sim::Simulation{T}) where {T}
     pz = zero(T)
     egas = zero(T)
     erad = zero(T)
+    scalars = zeros(T, sim.nscalars)
     @inbounds for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
         mass += sim.U[IRHO, i, j, k]
         px += sim.U[IMX, i, j, k]
         py += sim.U[IMY, i, j, k]
         pz += sim.U[IMZ, i, j, k]
         egas += sim.U[IEGAS, i, j, k]
+        for s in 1:sim.nscalars
+            scalars[s] += sim.U[scalar_index(s), i, j, k]
+        end
         if has_radiation(sim)
             for gr in 1:ngroups(sim.radiation)
                 erad += sim.R[gbase(gr)+IERAD, i, j, k]
@@ -877,7 +929,7 @@ function conserved_totals(sim::Simulation{T}) where {T}
     end
     (mass=mass * dV, momentum=(px * dV, py * dV, pz * dV),
      energy_gas=egas * dV, energy_rad=erad * dV,
-     energy_total=(egas + erad) * dV)
+     energy_total=(egas + erad) * dV, scalars=scalars .* dV)
 end
 
 """

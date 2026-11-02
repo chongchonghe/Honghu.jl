@@ -4,6 +4,10 @@
 #   conserved   U = (rho, rho*vx, rho*vy, rho*vz, Etot)
 #   primitive   W = (rho, vx, vy, vz, p)
 #
+# Passive mass scalars follow the five hydro rows: a `Simulation(nscalars = n)`
+# stores the conserved `rho * X_s` as rows `NHYDRO + 1 : NHYDRO + n` of `U`, and
+# the state vector is `NHYDRO + n` long. See `scalar_index`.
+#
 # Radiation, M1: 4 variables *per frequency group*, groups stored contiguously,
 # so a state vector is `NRAD * ngroups` long. See `gbase` in radiation_system.jl.
 #   conserved   R = (Erad, Fx, Fy, Fz)
@@ -34,6 +38,16 @@ const IERAD = 1
 const IFRX = 2
 const IFRY = 3
 const IFRZ = 4
+
+"""
+    scalar_index(s) -> Int
+
+Row of `sim.U` holding the conserved density `rho * X_s` of mass scalar `s`
+(`s = 1, ..., sim.nscalars`): the scalars follow the `NHYDRO` hydro rows, as in
+Quokka's `scalar0_index`. Use it instead of writing `NHYDRO + s` so that the
+layout lives in one place.
+"""
+@inline scalar_index(s::Integer) = NHYDRO + Int(s)
 
 """
     cons2prim(eos, u::SVec{5}) -> SVec{5}

@@ -4,6 +4,10 @@ All notable changes to Honghu.jl are recorded here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- Passive mass scalars: `Simulation(nscalars = n)` stores the conserved densities $\rho X_s$ as extra rows of `sim.U`, `set_initial_conditions!` reads their mass fractions from the key `X`, and `conserved_totals(sim).scalars` is the mass of each. A `Reflecting` wall flips only the normal momentum, never a scalar row, and a `Fixed` or `FunctionBC` hydro boundary must give `NHYDRO + nscalars` values.
+
 ### Documentation
 
 - The Zenodo concept DOI, `10.5281/zenodo.23569081`, in `CITATION.cff` and as a badge in the README.

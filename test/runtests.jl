@@ -17,6 +17,7 @@ import BracketingNonlinearSolve
     include("test_reconstruction.jl")
     include("test_riemann.jl")
     include("test_hydro.jl")
+    include("test_scalars.jl")
     include("test_radiation.jl")
     include("test_rootfind.jl")
     include("test_radiation_multigroup.jl")
