@@ -8,6 +8,7 @@ project:
   render:
     - index.qmd
     - reference/*.qmd
+    - photochemistry.md
     - coupling-new-method.md
     - coupling-new-method-dust.md
     - coupling-findings.md
@@ -37,6 +38,11 @@ website:
           - reference/output.qmd
           - reference/problems.qmd
           - reference/utilities.qmd
+      # One guide per physics module: its physics, numerical method and code design,
+      # linking into the module's reference page.
+      - text: Physics
+        menu:
+          - photochemistry.md
       - text: Notes
         menu:
           - coupling-new-method.md

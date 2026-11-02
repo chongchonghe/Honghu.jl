@@ -8,7 +8,8 @@ This page explains how the documentation site of Honghu.jl is made, where each p
 |:---|:---|:---|
 | Home page | `README.md` | copied to `docs/index.qmd` by `docs/make.jl`, with a few links rewritten |
 | Reference | the docstrings in `src/` | written to `docs/reference/*.qmd` by `docs/make.jl` |
-| Notes | `docs/*.md`: the five technical notes and this page | rendered as they are |
+| Physics guides | `docs/*.md` listed in the Physics menu: one per physics module, such as `photochemistry.md` | rendered as they are |
+| Notes | `docs/*.md` listed in the Notes menu: the technical notes and this page | rendered as they are |
 | Figures | `docs/figures/` | made by `docs/make_figures.jl` and `docs/make_animations.jl`, except the logo images `honghu-*.png`, which no script makes |
 
 Every page is published twice, from the same source and in the same build: as HTML, and as Markdown. The Markdown copy of `x.html` is `x.md` in the same folder, and the line "Markdown: this page" at the top of each HTML page links to it. The copy is the page's source itself. The only change is that links to other pages point at their `.md` copies instead of their `.qmd` sources. Two more files sit at the site root: `honghu-docs.md`, which holds all pages in one file in navigation order, and `llms.txt`, an index of the Markdown pages in the llms.txt format. Both exist so that a person or a coding agent can read the whole documentation as plain text. Each page links to its own copy and to the bundle; `llms.txt` is not linked from the pages, because it is the same site-wide index everywhere and agents look for it at `/llms.txt` by convention.
@@ -76,6 +77,10 @@ The notes are plain Markdown files in `docs/` that also read well on GitHub. To 
 The build checks that every name in `NOTES` and every reference page also appears in `docs/_quarto.yml`. If you miss step 3, the build fails instead of leaving the page off the site.
 
 To link from one note to another, use a relative link to its `.md` file, such as `[the findings](rsla-findings.md)`. Quarto turns it into a link to the HTML page, and the Markdown copy keeps it, where it points at the other copy. Images go in `docs/figures/` and are linked as `figures/name.png`. A link to a file that is not on the site, such as a script in `examples/`, must be a full GitHub URL.
+
+### A physics guide
+
+A physics guide is a note that explains one physics module from the ground up: the physics it solves, its numerical method, and the design of its code. `docs/photochemistry.md` is the first. It is added like any other note, except that step 3 puts it in the Physics menu instead of the Notes menu, and `NOTES` lists the guides before the notes. A guide does not repeat what the docstrings say. It links into the module's reference page instead, with a link to the generated page and the anchor of the entry, such as `[HydrogenOTSA](reference/chemistry.qmd#HydrogenOTSA)` (see the end of [What fails the build](#what-fails-the-build) for how anchors are formed). Those pages exist only after a build, so the links resolve on the site and in its Markdown copies, but not in GitHub's view of the repository. The link check of the build catches a wrong page or anchor.
 
 ### The navigation and the look
 

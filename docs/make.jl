@@ -48,8 +48,10 @@ const PAGES = [
     "utilities" => ("Utilities and constants", ["staticvec.jl", "constants.jl"]),
 ]
 
-# Hand-written pages, in navigation order after the reference.
-const NOTES = ["coupling-new-method.md", "coupling-new-method-dust.md",
+# Hand-written pages, in navigation order after the reference: the physics guides
+# first, then the notes.
+const NOTES = ["photochemistry.md",
+               "coupling-new-method.md", "coupling-new-method-dust.md",
                "coupling-findings.md", "rsla-findings.md", "photoionization-findings.md",
                "documentation.md"]
 

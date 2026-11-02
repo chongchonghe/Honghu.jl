@@ -10,7 +10,7 @@ Honghu is named after 鸿鹄 (hóng hú), an ancient Chinese term for the large,
 
 Honghu solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — in one, two or three dimensions on a uniform Cartesian grid. It uses the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024), written out so that a student can read them and a developer can change them.
 
-Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
+Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, a guide to the physics, numerics and code design of each physics module (so far photochemistry), and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
 ## Why Honghu
 
