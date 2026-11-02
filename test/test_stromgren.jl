@@ -1,7 +1,9 @@
 # Iliev et al. (2006) Stromgren Tests 1 and 2, in the corner-source octant geometry of the
-# paper, at a resolution and a reduced speed of light that fit in a test. Test 1 has an exact
-# reference at every reduced speed of light (the front equation of Shapiro et al. 2006), so
-# its radius is checked against that; Test 2 has no analytic solution and gets shape checks.
+# paper, at a resolution and a reduced speed of light that fit in a test. Test 1 is compared
+# with the front equation of Shapiro et al. (2006) at the reduced speed of light. That
+# reference is approximate, not exact: it counts the photons in flight as Ndot R / chat and
+# ignores their depletion by recombinations inside R. Test 2 has no analytic solution and
+# gets shape checks.
 
 const PC = Honghu.CGS
 _median(v) = (s = sort(vec(v)); s[cld(length(s), 2)])
@@ -11,15 +13,21 @@ _median(v) = (s = sort(vec(v)); s[cld(length(s), 2)])
     @test P.stromgren_radius_finite_c(2trec; chat=PC.c_light) ≈ P.stromgren_radius_analytic(2trec) rtol = 1e-3
     @test P.stromgren_radius_analytic(500e6 * PC.year) / (1e3 * PC.parsec) ≈ 5.36 rtol = 2e-3
 
-    # Measured with this code: the radius is above the finite-chat reference by 2.68%, 2.68%
-    # and 2.86% at 0.5, 1 and 2 t_rec, so the bound is 1.5 times the worst of them. It is not
-    # a time-step error: with `cfl_radiation` 0.3, 0.1 and 0.03 the three numbers do not move
-    # in the third digit. It falls slowly with resolution (n = 12, 16, 24 give 3.8%, 2.7%,
-    # 2.1% at 0.5 t_rec and 3.0%, 2.9%, 2.7% at 2 t_rec) and grows as chat falls (1.3% to 1.9%
-    # at chat = 1e-3 c, and 24% at 0.5 t_rec at 1e-4 c, where the front outruns the light at
-    # first). So it is a property of the spatial scheme at this resolution, not of the step;
-    # which part of it (the Gaussian source, the HLL transport, the unresolved front) was not
-    # taken apart.
+    # Measured with this code: the radius is above the finite-chat reference of Shapiro et al.
+    # (2006) by 2.68%, 2.68% and 2.86% at 0.5, 1 and 2 t_rec, so the bound is about 1.5 times
+    # the worst of them (0.045 is 1.57 times). It is not a time-step error: with
+    # `cfl_radiation` 0.3, 0.1 and 0.03 the three numbers do not move in the third digit. It
+    # falls slowly with resolution (n = 12, 16, 24 give 3.8%, 2.7%, 2.1% at 0.5 t_rec and
+    # 3.0%, 2.9%, 2.7% at 2 t_rec) and grows as chat falls (1.3% to 1.9% at chat = 1e-3 c, and
+    # 24% at 0.5 t_rec at 1e-4 c, where the front outruns the light at first).
+    # The reference is itself approximate (see the header), and I did not take the difference
+    # apart. The causes not examined, the first one the most likely to matter: (1) the
+    # reference's in-flight term Ndot R / chat ignores the depletion of those photons by
+    # recombinations inside R; a reviewer's estimate with a sharp-front in-flight term
+    # (Ndot - 4 pi R^3 alpha_B n^2 / 3) / chat, kept out of the code, moves R by +1.5% to
+    # +1.9% at chat = 3e-4 c and +0.6% at 1e-3 c, the sign and the chat trend measured here;
+    # that is a candidate, not a finding; (2) the Gaussian source against the point source
+    # of the reference; (3) the diffusion of the HLL transport; (4) the unresolved front.
     sim, _ = P.stromgren_iliev(test=1, n=16, chat_factor=3e-4)
     for tt in (0.5trec, 1.0trec, 2.0trec)
         run!(sim, tmax=tt, verbose=false)
@@ -36,7 +44,7 @@ _median(v) = (s = sort(vec(v)); s[cld(length(s), 2)])
     end
     inside = (xHI[1] .< 0.1) .& (xHI[2] .< 0.1)
     @test count(inside) > 20
-    @test abs(_median(xHI[1][inside] ./ xHI[2][inside]) - 1) < 0.1
+    @test abs(_median(xHI[1][inside] ./ xHI[2][inside]) - 1) < 0.02      # measured 0.002
 end
 
 @testset "Stromgren sphere: Iliev Test 2 (qualitative)" begin

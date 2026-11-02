@@ -39,19 +39,21 @@ integrator; the other keywords go to [`Simulation`](@ref). `tmax` is 500 Myr, th
 paper's runs.
 
 From the paper: the box side `L = 6.6` kpc, the hydrogen density `n_H = 1e-3` cm^-3, the
-photon rate `Ndot = 5e48` s^-1, the corner source with reflecting walls on the three low
-faces, and the two tests below. Test 1 is monochromatic at 13.6 eV, with the gas held at
-`1e4` K, the recombination coefficient `alpha_B = 2.59e-13` cm^3 s^-1 and an initial
-ionization fraction `1.2e-3`. Test 2 starts neutral and cold (`100` K), and lets the gas
-heat and cool. The paper's source in Test 2 is a `1e5` K blackbody.
+photon rate `Ndot = 5e48` s^-1, the source in the corner of the box with reflecting walls on
+the three low faces (the octant `[0, L]^3` of a sphere about the source), and the two tests
+below. Test 1 is monochromatic at 13.6 eV, with the gas held at `1e4` K, the recombination
+coefficient `alpha_B = 2.59e-13` cm^3 s^-1 and an initial ionization fraction `1.2e-3`.
+Test 2 starts neutral and cold (`100` K), and lets the gas heat and cool. The paper's source
+in Test 2 is a `1e5` K blackbody.
 
 Choices that the paper does not make, and that are ours:
 
   - **One band for Test 2.** The blackbody is replaced by a single band with
-    `sigma = 1.63e-18` cm^2 and `photon_energy = 29.65 eV`, a mean photon energy and a
-    photon-averaged cross-section of the ionizing photons of a `1e5` K blackbody (the values
-    of the plan; a cross-section `~ nu^-3` gives 29.6 eV and 1.5e-18 cm^2), and the
-    network's default heating of `photon_energy - 13.6 eV` per ionization. That overheats
+    `sigma = 1.63e-18` cm^2 and `photon_energy = 29.65 eV`. These are the project's values
+    for the `1e5` K blackbody, the number-weighted mean energy of the ionizing photons and
+    their photon-number-averaged cross-section, and not numbers the paper prescribes (a
+    cross-section `~ nu^-3` gives 29.6 eV and 1.5e-18 cm^2). The band has the network's
+    default heating of `photon_energy - 13.6 eV` per ionization. That overheats
     the gas compared with the real spectrum (see [`HydrogenOTSA`](@ref)), so the Test 2
     temperature behind the front is too high, and the paper prescribes no rates (each code
     used its own), so the result is checked for its shape and not against data. The network
@@ -59,23 +61,25 @@ Choices that the paper does not make, and that are ours:
   - **Test 1 in the network.** `isothermal = 1e4`, `heating_energy = 0`, a constant
     `alpha_B`, and `collisional_ionization = false`, which keeps the background ionization
     at `1.2e-3` instead of letting `1e4` K gas ionize itself.
-  - **The octant.** With `centered = false` (the default) the box is the octant
-    `[0, L]^3` of the paper, with [`Reflecting`](@ref) walls on the low faces, [`Outflow`](@ref)
-    on the high ones, and `Ndot / 8` emitted; `centered = true` is the whole sphere in
-    `[-L, L]^3`, `Outflow` everywhere, and `Ndot` emitted, at eight times the cells for the
-    same cell size.
+  - **The photon rate of the octant.** With `centered = false` (the default) the box is the
+    paper's octant `[0, L]^3`, with [`Reflecting`](@ref) walls on the low faces and
+    [`Outflow`](@ref) on the high ones. Emitting `Ndot / 8` into it, so that the full sphere
+    would receive `Ndot`, is our choice (it is also Quokka's). `centered = true` is the whole
+    sphere in `[-L, L]^3`, `Outflow` everywhere, and `Ndot` emitted, at eight times the cells
+    for the same cell size.
   - **The source.** A Gaussian at the origin of width `1.5 dx`, cut at `2.5` widths, whose
     rate is normalised so that the cells receive exactly `Ndot / 8` (or `Ndot`) photons per
-    second. The width and the cut are Quokka's (`testStromgrenSphere.cpp`).
+    second. The width and the cut are Quokka's (`testStromgrenSphere.cpp`), not the paper's.
   - **The radiation.** One group, zero opacity, `beta_order = 0` and a constant reduced
     speed of light, as a chemistry run requires. The initial radiation energy is zero: the
     default `a_r T^4` would put about `1e12` ionizing photons per cm^3 in the box.
 
 The front is measured by [`ionized_radius`](@ref) and compared with
 [`stromgren_radius_analytic`](@ref) (`chat = c`) or [`stromgren_radius_finite_c`](@ref) (a
-reduced speed of light). At `n = 16` and `chat_factor = 3e-4` the Test 1 radius is within
-3% of the finite-`chat` reference from 0.5 to 2 recombination times, and the error grows as
-`chat_factor` falls (`test/test_stromgren.jl` has the numbers).
+reduced speed of light, an approximate reference). At `n = 16` and `chat_factor = 3e-4` the
+Test 1 radius is within 3% of the finite-`chat` reference from 0.5 to 2 recombination times,
+and the difference grows as `chat_factor` falls (`test/test_stromgren.jl` has the numbers and
+the causes not yet examined).
 
 ```julia
 sim, tmax = stromgren_iliev(test = 1, n = 32, chat_factor = 3e-4)
@@ -164,13 +168,14 @@ from the front equation of Shapiro et al. (2006),
 
     dR/dt = (Ndot - 4 pi R^3 alpha_B n^2 / 3) / (Ndot / chat + 4 pi R^2 n),
 
-integrated from `R = 0` with fourth-order Runge-Kutta. It starts with 256 steps and doubles
+which is approximate: its term `Ndot / chat` counts the photons in flight as `Ndot R / chat`
+and ignores how many of them recombinations inside `R` have used up. It is integrated from `R = 0` with fourth-order Runge-Kutta. It starts with 256 steps and doubles
 the number of steps until two successive radii differ by less than `1e-6` of the result, as
 the `integrate_radius` of Quokka's `testStromgrenSphere.cpp` does, and throws an error if
 that has not happened after 12 doublings. With `chat` the speed of light it approaches
-[`stromgren_radius_analytic`](@ref), and it is the exact reference for a run with a reduced
-speed of light, because [`stromgren_iliev`](@ref) reduces the speed of the photons and
-keeps the chemistry unchanged. `t` is in seconds and the radius in cm.
+[`stromgren_radius_analytic`](@ref), and it is the reference of Shapiro et al. (2006) for a
+run with a reduced speed of light, which [`stromgren_iliev`](@ref) reduces in the photon
+equation while it keeps the chemistry unchanged. `t` is in seconds and the radius in cm.
 """
 function stromgren_radius_finite_c(t; chat, Ndot=_ILIEV_NDOT, n=_ILIEV_NH, alpha_B=_ILIEV_ALPHA_B)
     t <= 0 && return 0.0
