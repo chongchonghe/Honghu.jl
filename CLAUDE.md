@@ -15,7 +15,7 @@ julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a f
 julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]  # every number of the ARSA paper's Sec. 5
 julia --project=. -t 8 examples/stromgren_sphere.jl [1|2] [n] [octant]  # Iliev et al. (2006) Test 1 or 2, centred 64^3 by default
 julia --project=. -t 8 docs/photoionization-experiments/measure.jl  # the tables of docs/photoionization-findings.md, parts 1 to 3 (writes measure.txt)
-julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
+julia --project=. -t auto docs/make_figures.jl      # regenerate README and guide figures (names select some)
 julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
 julia --project=. docs/make.jl                      # build the docs site into docs/_site (needs quarto)
 julia --project=. -t 8 test/benchmarks.jl           # timing table (BenchmarkTools)
@@ -34,7 +34,7 @@ Prefer building example figures out of `plotstate` / `plotpanels` rather than ra
 
 `docs/make.jl` writes one reference page per group of source files (its `PAGES` table) from the docstrings, uses the README as the front page and the hand-written pages in `docs/` listed in its `NOTES` as further pages, renders them with Quarto, and publishes every page twice: as HTML and as its own source, `<page>.md`, with `honghu-docs.md` bundling them all. CI deploys it to GitHub Pages from `main`. The build is strict, and three things fail it: a `[`name`](@ref)` whose target has no docstring, a file in `src/` with a docstring but no entry in `PAGES`, and any relative link or anchor in the output that does not resolve. So a new source file needs a line in `PAGES`, and a cross-reference to an undocumented name needs the docstring, not the brackets removed. `docs/documentation.md` (also a page on the site) explains how the system works and how to update each kind of page.
 
-Each physics module gets a **physics guide**, a hand-written page in the site's Physics menu that starts with the governing equations and then gives the numerical method at the level of techniques (operator splitting, the method of lines, error-controlled integrators), and links into the module's generated reference page rather than repeating the docstrings. Which file or type does what, and implementation details, belong to the reference, not to the guide. `docs/photochemistry.md` is the first and the model for the rest. When a module's physics or algorithm changes, its guide changes in the same commit.
+Each physics module gets a **physics guide**, a hand-written page in the site's Physics menu that starts with the governing equations and then gives the numerical method at the level of techniques (operator splitting, the method of lines, error-controlled integrators), and links into the module's generated reference page rather than repeating the docstrings. Which file or type does what, and implementation details, belong to the reference, not to the guide. `docs/photochemistry.md` is the first and the model for the rest. Its Test problems section documents each problem with the template in `docs/documentation.md` ("A test problem": a setup table of physics, domain, initial and boundary conditions, source, evolution, reference and how to run it, then a figure and an error table), and every figure and number there is made by a function in `docs/make_figures.jl`. When a module's physics or algorithm changes, its guide changes in the same commit.
 
 ## Releases
 

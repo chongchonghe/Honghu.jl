@@ -82,6 +82,35 @@ To link from one note to another, use a relative link to its `.md` file, such as
 
 A physics guide is a note that explains one physics module from the ground up. It starts with the governing equations, then gives the numerical method at the level of techniques (operator splitting, the method of lines, the time integrators and why they were chosen), and ends with the module's limitations. Which file or type does what, and the details of an implementation, belong to the reference page, not to the guide. `docs/photochemistry.md` is the first. It is added like any other note, except that step 3 puts it in the Physics menu instead of the Notes menu, and `NOTES` lists the guides before the notes. A guide does not repeat what the docstrings say. It links into the module's reference page instead, with a link to the generated page and the anchor of the entry, such as `[HydrogenOTSA](reference/chemistry.qmd#HydrogenOTSA)` (see the end of [What fails the build](#what-fails-the-build) for how anchors are formed). Those pages exist only after a build, so the links resolve on the site and in its Markdown copies, but not in GitHub's view of the repository. The link check of the build catches a wrong page or anchor.
 
+### A test problem
+
+Each test problem is documented in the Test problems section of its physics guide, as one subsection in this form:
+
+````markdown
+### N.M Name of the problem
+
+One or two sentences: what the problem tests, and what it is compared against.
+
+| Setup | |
+|:---|:---|
+| Physics | the modules that are on (hydrodynamics, radiation transport, photochemistry, passive scalars, ...) and their options |
+| Domain | the box and the resolution |
+| Initial condition | ... |
+| Boundary conditions | ... |
+| Source | if there is one |
+| Evolution | the start and end times, the Courant numbers, the reduced speed of light, the integrators |
+| Reference | the analytic, published or converged solution, or "none" |
+| Run | the problem function and its arguments |
+
+![What the figure shows.](figures/name.png)
+
+| an error table at a few times or resolutions |
+
+A few sentences on what the results show.
+````
+
+A problem that differs little from the one before it may write "as ..., but ..." in a row. Every figure and every number in the table is made by a function in `docs/make_figures.jl`, which runs only the figures named on its command line (`docs/make_figures.jl stromgren`) and prints the numbers it plots, so that both can be made again.
+
 ### The navigation and the look
 
 `docs/_quarto.yml` holds the navbar, the menus and the theme, and names the navbar icon and the favicon. It is written by hand and no script regenerates it.

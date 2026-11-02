@@ -166,17 +166,70 @@ It failed in 10% of a 2592-cell stress grid and nowhere in the Iliev tests. On T
 
 The local problem is defined once, by a *network* ([`AbstractNetwork`](reference/chemistry.qmd#AbstractNetwork)): species, bands, $S(u)$, its exact Jacobian, and the scales of the unknowns. It is solved by an *integrator* ([`AbstractChemSolver`](reference/chemistry.qmd#AbstractChemSolver)) that reads only those. The two integrators thus solve exactly the same problem, and a new network (say, hydrogen and helium with three bands) or a new integrator can be added without touching the other. What is not a term of the local ODE (the emission, the flux attenuation, keeping the stored state admissible) is done around the solve, not in $S$.
 
-## 4. Verification
+## 4. Test problems
 
-The tests check properties rather than tuned numbers:
+Both tests are from Iliev et al. (2006): an ionizing source switched on in uniform, static, neutral hydrogen. The figures and the numbers in the tables are made by `julia --project=. -t auto docs/make_figures.jl stromgren`, which takes about 9 minutes on 8 threads.
+
+### 4.1 Iliev Test 1: isothermal H II region
+
+The front radius has an analytic solution (section 1.8), so this test measures the accuracy of the transport, the chemistry and the reduced speed of light together.
+
+| Setup | |
+|:---|:---|
+| Physics | radiation transport (M1, one ionizing band); photochemistry ([`HydrogenOTSA`](reference/chemistry.qmd#HydrogenOTSA)), isothermal at $10^4$ K, $\alpha_B = 2.59\times10^{-13}$ cm$^3$ s$^{-1}$, no collisional ionization; hydrodynamics off |
+| Domain | the octant $[0, 6.6\ {\rm kpc}]^3$ with the source at the origin, $32^3$ cells ($\Delta x = 206$ pc) |
+| Initial condition | $n_{\rm H} = 10^{-3}$ cm$^{-3}$, $T = 10^4$ K, $x = 1.2\times10^{-3}$, $N_\gamma = 0$, $\mathbf F_\gamma = 0$ |
+| Boundary conditions | reflecting on the three faces through the source, outflow on the other three |
+| Source | $\dot N = 5\times10^{48}$ s$^{-1}$ ($\dot N/8$ into the octant), monochromatic at 13.6 eV with $\sigma = 6.3\times10^{-18}$ cm$^2$, spread over a Gaussian of width $1.5\,\Delta x$ |
+| Evolution | $t = 0$ to 500 Myr; $\hat c = 10^{-3}c$; radiation Courant number 0.3; `RosenbrockChem`, relative tolerance $10^{-2}$ |
+| Reference | $r_I(t)$ for $\hat c = c$, and the finite-$\hat c$ front of Shapiro et al. (2006) |
+| Run | [`stromgren_iliev`](reference/problems.qmd#stromgren_iliev)`(test = 1, n = 32, chat_factor = 1e-3)` |
+
+![Iliev Test 1: the ionized radius against the two references (left), and the spherically averaged neutral fraction (right).](figures/stromgren_test1.png)
+
+| $t$ (Myr) | $r_I$ (kpc) | finite $\hat c$ (kpc) | error | $\hat c = c$ (kpc) | error |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 1.769 | 1.749 | +1.2% | 2.309 | −23.4% |
+| 30 | 2.903 | 2.880 | +0.8% | 3.243 | −10.5% |
+| 100 | 4.318 | 4.266 | +1.2% | 4.441 | −2.8% |
+| 200 | 5.011 | 4.934 | +1.6% | 5.017 | −0.1% |
+| 500 | 5.488 | 5.352 | +2.5% | 5.363 | +2.3% |
+
+The front follows the finite-$\hat c$ solution to within 2.5% at all times. Early on it lags the $\hat c = c$ curve, because many of the photons are still in flight at $\hat c$, and it catches up as the front slows. The excess of about 2.5% at late times does not depend on $\hat c$ ([findings, section 3](photoionization-findings.md#the-reduced-speed-of-light-on-test-1)). The run had no failed chemistry solves.
+
+### 4.2 Iliev Test 2: H II region with heating and cooling
+
+The gas starts cold and is heated by the photoionizations. There is no analytic solution, and the result is checked for its shape.
+
+| Setup | |
+|:---|:---|
+| Physics | as Test 1, but with the energy equation: photoheating and cooling (section 1.4), $\alpha_B(T)$ and collisional ionization |
+| Domain, boundary conditions, evolution | as Test 1 |
+| Initial condition | as Test 1, but $T = 100$ K and $x = 0$ |
+| Source | as Test 1, but a $10^5$ K blackbody as one band: $\varepsilon = 29.65$ eV, $\sigma = 1.63\times10^{-18}$ cm$^2$, $\varepsilon_{\rm heat} = 16.05$ eV |
+| Reference | none; the Test 1 solutions are shown for scale |
+| Run | [`stromgren_iliev`](reference/problems.qmd#stromgren_iliev)`(test = 2, n = 32, chat_factor = 1e-3)` |
+
+![Iliev Test 2: the ionized radius (left), and the spherically averaged neutral fraction (middle) and temperature (right).](figures/stromgren_test2.png)
+
+| $t$ (Myr) | 10 | 30 | 100 | 200 | 500 |
+|:---|---:|---:|---:|---:|---:|
+| $r_I$ (kpc) | 1.764 | 2.938 | 4.468 | 5.296 | 5.978 |
+| median $T$ where $x > 0.9$ (K) | 19100 | 16200 | 14300 | 13700 | 13700 |
+
+The ionized gas is heated to about $1.4\times10^4$ K and the neutral gas ahead of the front stays at 100 K. Hot gas recombines more slowly ($\alpha_B \propto T^{-0.7}$), so the front ends about 11% beyond the Test 1 radius. By 500 Myr it reaches the outer faces of the box, so the last radius is a lower bound. The single band overheats the ionized gas by about 10% (section 1.4), so these temperatures are not those of a full spectrum. The run had no failed chemistry solves.
+
+## 5. Verification
+
+The unit tests check properties rather than tuned numbers:
 
 - the Jacobian against a 256-bit finite difference, and the rate coefficients against hand-computed values;
 - the photon budget and the energy of section 1.7, to $10^{-10}$ in a cell and $10^{-8}$ in a whole run;
 - the ionization equilibrium, and that it does not depend on $\hat c$;
 - conservation of hydrogen and $\sum_s X_s = 1$ in moving gas;
-- on Iliev's Test 1, the front within 4.5% of the finite-$\hat c$ solution at $16^3$; on Test 2, a growing front with hot gas behind it and cold gas ahead.
+- Iliev's Test 1 at $16^3$, within 4.5% of the finite-$\hat c$ solution, and Test 2, a growing front with hot gas behind it and cold gas ahead.
 
-## 5. Limitations
+## 6. Limitations
 
 - **Hydrogen only, one band, on the spot.** The model extends to more species and bands, but only one band and one source band are implemented, and diffuse recombination radiation is not followed.
 - **No radiation pressure** (`beta_order = 0`).
