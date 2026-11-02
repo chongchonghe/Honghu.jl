@@ -79,6 +79,7 @@ function Base.show(io::IO, d::Diagnostics)
     print(io, "Diagnostics(steps = ", d.steps)
     d.rad_substeps > 0 && print(io, ", rad_substeps = ", d.rad_substeps)
     print(io, ", floors = ", d.floors_hydro, " gas / ", d.floors_rad, " rad")
+    d.floors_scalar > 0 && print(io, " / ", d.floors_scalar, " scalar")
     if d.newton_cells > 0
         @printf(io, ", newton = %.2f mean / %d max", d.newton_iterations / d.newton_cells,
                 d.newton_max)
@@ -771,11 +772,12 @@ end
 """
     nrepaired(sim) -> Int
 
-Total cell updates that hit a positivity floor, gas and radiation together.
+Total cell updates that hit a positivity floor: gas, radiation and mass scalars
+together.
 Zero is the invariant worth asserting in a test: a scheme that needs no help
 from the floors is one whose positivity you have actually verified.
 """
-nrepaired(sim::Simulation) = sim.diag.floors_hydro + sim.diag.floors_rad
+nrepaired(sim::Simulation) = sim.diag.floors_hydro + sim.diag.floors_rad + sim.diag.floors_scalar
 
 """
     enforce_state!(sim) -> Int

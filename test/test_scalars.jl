@@ -103,4 +103,6 @@ end
     # the sweep covers the ghost cells, which copy the negative edge
     @test sim.diag.floors_scalar == 4 + sim.grid.ng[1]
     @test sim.diag.floors_hydro == 0
+    # a scalar clip is a positivity repair like any other, so `nrepaired` sees it
+    @test nrepaired(sim) == sim.diag.floors_scalar
 end

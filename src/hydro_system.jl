@@ -195,10 +195,18 @@ already been applied.
 The `nscalars` mass scalars are carried by the Riemann mass flux `F_rho`: the
 flux of `rho X_s` is `F_rho` times the mass fraction of the upwind side, taken
 from the reconstructed `rho X_s / rho` on that side (or from the cell-centred
-state if that side fell back). So a uniform `X_s` stays uniform to round-off
-whatever the solver does, because the flux of `rho X_s` and `F_rho` move
-together, and `X_s` cannot leave the range of the upwind values. The solvers
-themselves do not know about scalars.
+state if that side fell back). So a uniform `X_s` is advected exactly, to
+round-off, whatever the solver does, because the flux of `rho X_s` and `F_rho`
+move together. The face fraction is a ratio of two separately limited
+reconstructions, so `X_s` can overshoot where `rho` and `X_s` jump together;
+[`enforce_scalar_floors!`](@ref) repairs a negative result.
+
+The solvers themselves do not know about scalars. Quokka's HLLC and LLF instead
+carry them as extra conserved components inside the solver (`HLLC.hpp:123-129`,
+`LLF.hpp:26-33`). For HLLC that is the same thing as the mass flux times the
+upwind `X_s`. For LLF it is a deliberate departure: it keeps the
+[`riemann_flux`](@ref) contract of five components, and it is less diffusive
+for the scalar than LLF's own dissipation term would be.
 
 The carbuncle inputs `du` and `dw` are computed for every solver, not gated on
 whether the chosen one consumes them. Quokka does the same
