@@ -170,3 +170,190 @@ Honghu.chem_scales!(s, u, ::ScaledChain, cell) = (fill!(s, cell.rho); nothing)
         @test run(w, scale) == fresh(scale)
     end
 end
+
+const CGS = Honghu.CGS
+hstate(nH, x, T, N) = [nH * (1 - x), nH * x, 1.5 * CGS.k_B * nH * (1 + x) * T, N]
+# A central difference in 256-bit arithmetic. In Float64 the step of 1e-6 u_j costs the
+# difference of rec - ion, whose two terms differ by 1e7 in a weakly ionized cell, about
+# three digits of the column of e, and the check would measure round-off, not the Jacobian.
+function fd_jacobian(net, u, cell)
+    n = length(u); J = zeros(n, n); fp = zeros(BigFloat, n); fm = zeros(BigFloat, n)
+    for j in 1:n
+        h = 1e-6 * abs(big(u[j])); up = big.(u); um = big.(u); up[j] += h; um[j] -= h
+        Honghu.chem_rhs!(fp, up, net, cell); Honghu.chem_rhs!(fm, um, net, cell)
+        J[:, j] = Float64.((fp - fm) / 2h)
+    end
+    J
+end
+invariants(u, phi, eps) = (u[1] + u[2], u[2] + u[4] / phi,
+                           u[3] + Honghu.CHI_H * u[2] + eps * u[4] / phi)
+
+@testset "chemistry: hydrogen network" begin
+    c = CGS.c_light
+    eps = 29.65 * CGS.eV
+    net = HydrogenOTSA(sigma=1.63e-18, photon_energy=eps)
+    cell = Honghu.ChemCell(1e-3 * CGS.m_H, c, 1e-3c, 1e12)
+
+    # exact Jacobian, row by row, at three states (150 K, not 100 K: the
+    # recombination cooling switches on at 100 K and a difference across it is noise)
+    for u in (hstate(1e-3, 0.01, 150.0, 1e-4), hstate(1e-3, 0.5, 8e3, 1e-5),
+              hstate(1e-3, 0.999, 2e4, 1e-6))
+        J = zeros(4, 4); Honghu.chem_jacobian!(J, u, net, cell)
+        Jfd = fd_jacobian(net, u, cell)
+        for i in 1:4
+            @test isapprox(J[i, :], Jfd[i, :]; rtol=1e-5)
+        end
+    end
+
+    # photoionization alone conserves three linear invariants exactly
+    pure = HydrogenOTSA(sigma=1.63e-18, photon_energy=eps, alpha0=0.0,
+                        collisional_ionization=false, cooling=false)
+    for s in (RosenbrockChem(), BackwardEulerChem())
+        w = Honghu.chem_workspace(s, pure, Float64)
+        u = hstate(1e-3, 0.01, 100.0, 1e-4); I0 = invariants(u, 1e-3, eps)
+        @test Honghu.solve_chemistry!(w, s, pure, Honghu.ChemCell(1e-3 * CGS.m_H, c, 1e-3c, 1e13), u).converged
+        @test all(isapprox.(invariants(u, 1e-3, eps), I0; rtol=1e-10))
+        @test u[2] > 1e-5                                  # it did ionize
+    end
+
+    # a dark, fully neutral, cold cell does not move
+    for s in (RosenbrockChem(), BackwardEulerChem())
+        w = Honghu.chem_workspace(s, net, Float64)
+        u = hstate(1e-3, 0.0, 100.0, 0.0); u0 = copy(u)
+        @test Honghu.solve_chemistry!(w, s, net, cell, u).converged
+        @test all(isfinite, u)
+        @test u ≈ u0 rtol = 1e-12
+    end
+
+    # a photon density at the radiation floor stays non-negative
+    for s in (RosenbrockChem(), BackwardEulerChem())
+        w = Honghu.chem_workspace(s, net, Float64)
+        u = hstate(1e-3, 1e-6, 100.0, 1e-40)
+        Honghu.solve_chemistry!(w, s, net, cell, u)
+        @test u[2] >= 0 && u[4] >= 0
+    end
+
+    # isothermal mode: e is not evolved; the energy written back follows n_tot
+    iso = HydrogenOTSA(sigma=6.3e-18, photon_energy=13.6 * CGS.eV, isothermal=1e4)
+    w = Honghu.chem_workspace(RosenbrockChem(), iso, Float64)
+    u = hstate(1e-3, 0.01, 1e4, 1e-4); e0 = u[3]
+    Honghu.solve_chemistry!(w, RosenbrockChem(), iso, cell, u)
+    @test u[3] ≈ e0 rtol = 1e-12
+    @test Honghu.chem_internal_energy(iso, u) ≈ 1.5 * CGS.k_B * (u[1] + 2u[2]) * 1e4
+
+    # ionization equilibrium x^2/(1-x) = Gamma/(alpha n) = 0.5 gives x = 0.5. A tiny
+    # chat keeps N fixed while the gas sees c sigma N.
+    eq = HydrogenOTSA(sigma=6.3e-18, photon_energy=13.6 * CGS.eV, isothermal=1e4,
+                      alpha0=2.59e-13, alpha_exp=0.0, collisional_ionization=false)
+    N = 0.5 * 2.59e-13 * 1.0 / (c * 6.3e-18)
+    ceq = Honghu.ChemCell(CGS.m_H, c, 1e-14c, 1e4 / 2.59e-13)
+    for s in (RosenbrockChem(reltol=1e-6), BackwardEulerChem())
+        w = Honghu.chem_workspace(s, eq, Float64)
+        u = hstate(1.0, 0.01, 1e4, N)
+        Honghu.solve_chemistry!(w, s, eq, ceq, u)
+        @test u[2] / (u[1] + u[2]) ≈ 0.5 rtol = 1e-3
+    end
+
+    # the two integrators agree at a small step. Backward Euler is first order, and its
+    # energy, which is the integral of a heating rate that falls as the gas ionizes, is
+    # low by 2.1e-3 at dt = 1e9, 1.05e-3 at 5e8 and 4.2e-4 here, in step with dt; the
+    # adaptive integrator is the reference.
+    small = Honghu.ChemCell(1e-3 * CGS.m_H, c, 1e-3c, 2e8)
+    ua = hstate(1e-3, 0.01, 100.0, 1e-4); ub = copy(ua)
+    Honghu.solve_chemistry!(Honghu.chem_workspace(RosenbrockChem(reltol=1e-8), net, Float64),
+                            RosenbrockChem(reltol=1e-8), net, small, ua)
+    Honghu.solve_chemistry!(Honghu.chem_workspace(BackwardEulerChem(), net, Float64),
+                            BackwardEulerChem(), net, small, ub)
+    @test ua[2] ≈ ub[2] rtol = 1e-3
+    @test ua[3] ≈ ub[3] rtol = 1e-3
+end
+
+# Entry by entry, in units of f per relative change of u_j so that the columns, which differ
+# by 1e19 between e and n, are comparable: 1e-7 of the entry, and an entry that is below 1e-10
+# of the largest in its row may be anything, because Float64 underflows where the 256-bit
+# difference does not (a Boltzmann factor of exp(-1000) is 0 in one and 1e-440 in the other).
+function jacobian_matches(J, Jfd, u)
+    S, Sfd = J .* abs.(u'), Jfd .* abs.(u')
+    all(1:size(J, 1)) do i
+        floor = 1e-10 * max(maximum(abs, S[i, :]), maximum(abs, Sfd[i, :]))
+        all(abs(S[i, j] - Sfd[i, j]) <= 1e-7 * max(abs(S[i, j]), abs(Sfd[i, j])) + floor
+            for j in axes(J, 2))
+    end
+end
+
+@testset "chemistry: hydrogen Jacobian in every mode" begin
+    c = CGS.c_light
+    cell = Honghu.ChemCell(1e-3 * CGS.m_H, c, 1e-3c, 1e12)
+    kw = (sigma=1.63e-18, photon_energy=29.65 * CGS.eV)
+    nets = (HydrogenOTSA(; kw...),
+            HydrogenOTSA(; kw..., cooling=false),
+            HydrogenOTSA(; kw..., collisional_ionization=false),
+            HydrogenOTSA(; kw..., alpha_exp=0.0, heating_energy=1e-11),
+            HydrogenOTSA(; kw..., isothermal=1e4),
+            HydrogenOTSA(; kw..., Tmin=500.0))
+    # 150 K and 2e4 K are on either side of the recombination-cooling switch and of the
+    # excitation and ionization onsets; 3e5 K is where free-free and excitation compete
+    for net in nets, u in (hstate(1e-3, 0.01, 150.0, 1e-4), hstate(1e-3, 0.5, 8e3, 1e-5),
+                           hstate(1e-3, 0.999, 2e4, 1e-6), hstate(1e-3, 0.9, 3e5, 1e-7),
+                           hstate(1e-3, 0.3, 300.0, 1e-5))
+        J = zeros(4, 4); Honghu.chem_jacobian!(J, u, net, cell)
+        Jfd = fd_jacobian(net, u, cell)
+        @test jacobian_matches(J, Jfd, u)
+    end
+
+    # the energy row of an isothermal network is zero, in the rate and in the Jacobian
+    iso = HydrogenOTSA(; kw..., isothermal=1e4)
+    u = hstate(1e-3, 0.5, 8e3, 1e-5)
+    du = zeros(4); J = zeros(4, 4)
+    Honghu.chem_rhs!(du, u, iso, cell); Honghu.chem_jacobian!(J, u, iso, cell)
+    @test du[3] == 0 && all(==(0), J[3, :])
+
+    # a negative n_H0, n_H+ or N counts as zero in every rate, and its column vanishes
+    net = nets[1]
+    for j in (1, 2, 4)
+        u = hstate(1e-3, 0.5, 8e3, 1e-5); u[j] = -1e-9
+        v = copy(u); v[j] = -3e-9
+        du, dv = zeros(4), zeros(4)
+        Honghu.chem_rhs!(du, u, net, cell); Honghu.chem_rhs!(dv, v, net, cell)
+        @test du == dv
+        J = zeros(4, 4); Honghu.chem_jacobian!(J, u, net, cell)
+        @test all(==(0), J[:, j])
+        @test jacobian_matches(J, fd_jacobian(net, u, cell), u)
+    end
+end
+
+@testset "chemistry: hydrogen network interface" begin
+    net = HydrogenOTSA(sigma=1.63e-18, photon_energy=29.65 * CGS.eV)
+    @test Honghu.nspecies(net) == 2 && Honghu.nbands(net) == 1
+    @test Honghu.nunknowns(net) == 4 && Honghu.ienergy(net) == 3 && Honghu.iband(net, 1) == 4
+    @test Honghu.species_mass(net, 1) == Honghu.species_mass(net, 2) == CGS.m_H
+    @test Honghu.band_group(net, 1) == 1
+    @test Honghu.band_photon_energy(net, 1) == 29.65 * CGS.eV
+    @test net.heating_energy ≈ 29.65 * CGS.eV - 13.6 * CGS.eV
+    @test HydrogenOTSA(sigma=1, photon_energy=2, heating_energy=1, group=3).group == 3
+
+    # electrons count: a fully ionized gas has twice the particles of a neutral one
+    n = [3e-4, 7e-4]
+    e = Honghu.network_eint(net, n, 1e4)
+    @test e ≈ 1.5 * CGS.k_B * (3e-4 + 2 * 7e-4) * 1e4
+    @test Honghu.network_temperature(net, n, e) ≈ 1e4
+    @test Honghu.chem_internal_energy(net, [1.0, 2.0, 3.0, 4.0]) == 3.0
+
+    @test Honghu.initial_mass_fractions(net, (rho=1.0,)) == (1.0, 0.0)
+    X = Honghu.initial_mass_fractions(net, (x_HII=0.25,))
+    @test X == (0.75, 0.25) && sum(X) == 1
+
+    sc = zeros(4)
+    Honghu.chem_scales!(sc, hstate(1e-3, 0.5, 8e3, 1e-5), net, Honghu.ChemCell(1e-3 * CGS.m_H, 1.0, 1e-3, 1.0))
+    @test all(>(0), sc) && sc[1] == sc[2] == 1e-3 && sc[4] ≈ 1e-6
+
+    # backward Euler allocates nothing on this network either: no boxed Union field, no
+    # tuple of rates that escapes
+    b = BackwardEulerChem(); w = Honghu.chem_workspace(b, net, Float64)
+    for iso in (nothing, 1e4)
+        nt = HydrogenOTSA(sigma=1.63e-18, photon_energy=29.65 * CGS.eV, isothermal=iso)
+        wt = Honghu.chem_workspace(b, nt, Float64)
+        @test be_bytes(wt, b, nt, Honghu.ChemCell(1e-3 * CGS.m_H, CGS.c_light, 1e-3 * CGS.c_light, 1e9),
+                       hstate(1e-3, 0.01, 100.0, 1e-4)) == 0
+    end
+end

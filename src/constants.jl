@@ -33,5 +33,7 @@ const parsec = 3.0856775814913673e18
 const au = 1.495978707e13
 "Year [s]"
 const year = 3.1556952e7
+"Electron volt [erg]"
+const eV = 1.602176634e-12
 
 end # module CGS
