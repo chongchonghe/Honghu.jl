@@ -563,22 +563,19 @@ cellsum(sim, f) = sum(f(i, j, k) for k in sim.grid.lo[3]:sim.grid.hi[3],
     @test sum(conserved_totals(hs).scalars) ≈ m0 rtol = 1e-12
     ir, jr, kr = hs.grid.lo[1]:hs.grid.hi[1], hs.grid.lo[2]:hs.grid.hi[2], hs.grid.lo[3]:hs.grid.hi[3]
 
-    # X_H0 + X_HII = 1 per cell. The burn keeps it exactly, whatever the cell holds: n_H0 + n_H+ is
-    # an invariant of the network. The advection does not, in a run with PLM or PPM, because
-    # they reconstruct rho X_s of each species on its own and the limiters are not linear (the sum
-    # drifts by a few percent with hydro alone and no chemistry), so the check with hydro is
-    # under PCM, where the interface values add up.
+    # X_H0 + X_HII = 1 per cell, with the default PPM. Each rho X_s is reconstructed and limited on
+    # its own, so the advection alone lets the sum drift from rho by a few percent; a simulation with
+    # chemistry renormalises the species to add up to rho (`enforce_scalar_floors!`).
+    @test maximum(abs.((hs.U[6, ir, jr, kr] .+ hs.U[7, ir, jr, kr]) ./ hs.U[1, ir, jr, kr] .- 1)) < 1e-12
+
+    # and the burn keeps it exactly, whatever the cell holds: n_H0 + n_H+ is an invariant of the
+    # network, so this part does not depend on the renormalisation
     S0 = hs.U[6, ir, jr, kr] .+ hs.U[7, ir, jr, kr]
     X0 = hs.U[7, ir, jr, kr]
     stats = Honghu.chemistry_step!(hs, 1e13, hs.t)
     @test stats.cells == 512 && stats.failures == 0
     @test maximum(abs.(hs.U[6, ir, jr, kr] .+ hs.U[7, ir, jr, kr] .- S0) ./ S0) < 1e-12
     @test maximum(abs.(hs.U[7, ir, jr, kr] .- X0) ./ S0) > 1e-2         # and the burn did something
-    hp = chem_box(net=net, n=8, side=8e18, hydro=true, reconstruction=PCM(),
-                  ic=(x, y, z) -> (rho=1e-3 * CGS.m_H * (1 + 0.5sinpi(2x / 8e18)), vx=1e6,
-                                   T=100.0, x_HII=0.5 + 0.4sinpi(2x / 8e18), Erad=0.0))
-    run!(hp, tmax=1e20, maxsteps=10, verbose=false)
-    @test maximum(abs.((hp.U[6, ir, jr, kr] .+ hp.U[7, ir, jr, kr]) ./ hp.U[1, ir, jr, kr] .- 1)) < 1e-12
 
     # reading does not perturb, and the temperature is the network's
     U0 = copy(hs.U)
@@ -602,6 +599,18 @@ end
     plain = Simulation(n=(4, 1, 1), radiation=rad)
     @test_throws ArgumentError Honghu.chemistry_step!(plain, 1.0, 0.0)
     @test plain.cw === nothing
+
+    # a `T` key goes through the network's equation of state: the temperature read back is the one
+    # that was set, which `network_eint` and `network_temperature` agreeing with each other
+    # could not show if both were wrong the same way
+    for x_HII in (0.0, 0.5, 1.0)
+        r = chem_box(net=net, n=4, ic=(x, y, z) -> (rho=1e-3 * CGS.m_H, T=100.0, x_HII=x_HII, Erad=0.0))
+        @test all(isapprox.(gas_temperature(r), 100.0; rtol=1e-12))
+    end
+
+    # chemistry needs a monatomic gas: the network's T = e / (3/2 k_B n) is that of gamma = 5/3
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), radiation=rad, eos=IdealGas(gamma=1.4),
+                                          chemistry=Photochemistry(net))
 
     # one workspace per interior row, each its own
     s = chem_box(net=net, n=4, ic=(x, y, z) -> (rho=1e-3 * CGS.m_H, T=100.0, Erad=0.0))

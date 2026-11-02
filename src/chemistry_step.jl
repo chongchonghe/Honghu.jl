@@ -39,6 +39,8 @@ carries `nspecies(network)` mass scalars, one per species, as `rho X_s`.
     into the first band of the network at the cell centre, or `nothing` for no source.
     It is evaluated once per cell and per radiation substep, with `t` the *start* of the
     substep. A point source on the grid is a narrow Gaussian normalised to the photon rate.
+    It is called from several threads at once, one per row of cells, so it must be thread-safe:
+    no shared mutable state, no caching in a global, no unsynchronised counters.
 
 The chemistry step runs after each IMEX radiation substep, over the substep's length,
 and does four things in every cell: it adds `phi q dt` to the photon density `N` of the
@@ -52,9 +54,16 @@ network's gas-side rates use `c` and its photon loss uses `chat`, so the budget
 A simulation with chemistry has these requirements, and refuses to be built without them
 (an `ArgumentError`): radiation is enabled, the chat limiter is [`ConstantChat`](@ref),
 `beta_order = 0`, the group of each band has zero thermal opacity (so the matter-radiation
-coupling leaves it alone and only the network changes its energy), and `nscalars` is 0 or
-`nspecies(network)`. The network's rates are in CGS, so the run must be in CGS units.
-Momentum deposited by the absorbed photons is not modelled.
+coupling leaves it alone and only the network changes its energy), `nscalars` is 0 or
+`nspecies(network)`, and the equation of state has `adiabatic_index(eos) = 5/3`, because
+the network's temperature `e / (3/2 k_B n)` is that of a monatomic gas and another gamma would
+give the hydrodynamics a pressure inconsistent with it. The network's rates are in CGS, so
+the run must be in CGS units. Momentum deposited by the absorbed photons is not modelled.
+
+The species are the mass scalars of the simulation, and they are renormalised to add up to the
+gas density after every hydrodynamic stage and at the end of every step
+([`enforce_scalar_floors!`](@ref)): each `rho X_s` is reconstructed on its own, so with PLM or
+PPM the species fluxes do not add up to the mass flux and the sum would drift from `rho`.
 
 ```julia
 net = HydrogenOTSA(sigma = 1.63e-18, photon_energy = 29.65 * Honghu.CGS.eV)

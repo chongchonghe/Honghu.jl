@@ -88,22 +88,36 @@ function enforce_floors!(U::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGr
 end
 
 """
-    enforce_scalar_floors!(U, grid, nscalars) -> Int
+    enforce_scalar_floors!(U, grid, nscalars, renormalise = false) -> Int
 
 Set every negative or NaN mass-scalar density `rho X_s` to zero, over the whole
 array, ghost cells included, and return the number of cells changed. A scalar is
 a mass fraction and cannot be negative; a small negative value is what
-reconstruction leaves behind at a sharp front. There is no renormalisation, so
-`sum_s X_s` is not forced to one: the scalars here are passive and independent,
-and the clip only has to keep them admissible. The count goes to
+reconstruction leaves behind at a sharp front. The count goes to
 `Diagnostics.floors_scalar`, kept apart from the gas floors because a scalar
 clip says nothing about the gas.
+
+With `renormalise = false`, the default, there is nothing more: the scalars are
+passive and independent, and `sum_s X_s` is not forced to one.
+
+With `renormalise = true` the scalars of a cell are then multiplied by
+`rho / sum_s rho X_s`, wherever that sum and `rho` are positive, so that the mass
+fractions add up to one. A simulation with a chemistry network passes `true`,
+because its scalars are the species of one gas and must add up to `rho`. Each
+`rho X_s` is reconstructed and limited on its own, so the species fluxes do not
+add up to the mass flux, and the sum drifts from `rho` by a few percent in ten
+steps of a run with PLM or PPM (3.7% for PPM on a density wave; PCM keeps it). This
+is Quokka's cure, the renormalisation in the mass-scalar part of `EnforceLimits`
+(`hydro_system.hpp`, after the density floor). The conservative alternative, a
+consistent multi-fluid advection (CMA, Plewa & Mueller 1999), makes the species
+fluxes add up to the mass flux by construction; it is not implemented. The
+renormalisation is not a repair and is not counted.
 
 Separate from [`enforce_floors!`](@ref) so that a run without scalars never
 reaches it.
 """
 function enforce_scalar_floors!(U::AbstractArray{T,4}, g::CartesianGrid{T},
-                                nscalars::Integer) where {T}
+                                nscalars::Integer, renormalise::Bool=false) where {T}
     nscalars > 0 || return 0
     n1, n2, n3 = g.dims
     nbad = Threads.Atomic{Int}(0)
@@ -119,6 +133,19 @@ function enforce_scalar_floors!(U::AbstractArray{T,4}, g::CartesianGrid{T},
                 end
             end
             changed && (bad += 1)
+            if renormalise
+                local tot = zero(T)
+                for s in 1:nscalars
+                    tot += U[scalar_index(s), i, j, k]
+                end
+                local rho = U[IRHO, i, j, k]
+                if tot > zero(T) && rho > zero(T) && tot != rho
+                    local f = rho / tot
+                    for s in 1:nscalars
+                        U[scalar_index(s), i, j, k] *= f
+                    end
+                end
+            end
         end
         bad > 0 && Threads.atomic_add!(nbad, bad)
     end

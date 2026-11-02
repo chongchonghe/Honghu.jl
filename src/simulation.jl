@@ -208,9 +208,11 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     network, with its ionizing photons, inside every radiation substep. It sets
     `nscalars` to the number of species (an explicit `nscalars` must equal it)
     and needs radiation with the default [`ConstantChat`](@ref) limiter,
-    `beta_order = 0` and zero thermal opacity in the band's group, or the
-    constructor throws an `ArgumentError`. One chemistry workspace is built per
-    row of cells, `n[2] * n[3]` of them.
+    `beta_order = 0` and zero thermal opacity in the band's group, and an `eos` with
+    `adiabatic_index(eos) == 5/3`, or the constructor throws an `ArgumentError`.
+    One chemistry workspace is built per row of cells, `n[2] * n[3]` of them.
+    The species scalars are renormalised to add up to `rho` after every update
+    (see [`enforce_scalar_floors!`](@ref)).
 
 # Numerics
   - `reconstruction = PPM()` : [`PCM`](@ref), [`PLM`](@ref) or [`PPM`](@ref).
@@ -289,7 +291,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     hydro || radiation !== nothing ||
         throw(ArgumentError("nothing to evolve: enable hydro, radiation, or both"))
     nscalars >= 0 || throw(ArgumentError("nscalars must be non-negative, got $nscalars"))
-    chemistry === nothing || _check_chemistry(chemistry, radiation, nscalars, T)
+    chemistry === nothing || _check_chemistry(chemistry, radiation, eos, nscalars, T)
     nscalars = chemistry === nothing ? Int(nscalars) : nspecies(chemistry.network)
     ng = max(required_ghosts(reconstruction),
              radiation === nothing ? 0 : required_ghosts(radiation_reconstruction))
@@ -319,13 +321,18 @@ end
 # radiation to carry the photons, a limiter and a coupling that leave the band alone, and a
 # mass scalar per species. Each is an error rather than a quiet wrong answer, because a
 # run that breaks one of them is not slightly off, it is another problem.
-function _check_chemistry(chem, radiation, nscalars, ::Type{T}) where {T}
+function _check_chemistry(chem, radiation, eos, nscalars, ::Type{T}) where {T}
     chem isa Photochemistry ||
         throw(ArgumentError("`chemistry` must be a Photochemistry, got $(typeof(chem))"))
     net = chem.network
     nscalars in (0, nspecies(net)) ||
         throw(ArgumentError("chemistry carries one mass scalar per species ($(nspecies(net))), " *
                             "but nscalars = $nscalars"))
+    # The network's temperature is `e / (3/2 k_B n)`, a monatomic gas. A different gamma
+    # makes the hydro pressure `(gamma - 1) e` inconsistent with it.
+    isapprox(adiabatic_index(eos), 5 / 3; rtol=1e-6) ||
+        throw(ArgumentError("chemistry assumes a monatomic gas, adiabatic_index(eos) = 5/3, " *
+                            "got $(adiabatic_index(eos))"))
     radiation === nothing &&
         throw(ArgumentError("chemistry needs radiation: pass `radiation = RadiationPhysics(...)`"))
     radiation.chat_limiter isa ConstantChat ||
@@ -562,7 +569,7 @@ function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
     g = sim.grid
     fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
     sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars)
-    sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars)
+    sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars, sim.chemistry !== nothing)
     cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars)
     fill!(dU, zero(T))
     g.active[1] && _hydro_sweep!(dU, sim, Val(1))
@@ -905,7 +912,7 @@ function enforce_state!(sim::Simulation)
     # Also with hydro off: a Strang source or the initial conditions can still
     # leave a scalar negative, and the scalars are not the gas's to repair.
     if sim.nscalars > 0
-        m = enforce_scalar_floors!(sim.U, sim.grid, sim.nscalars)
+        m = enforce_scalar_floors!(sim.U, sim.grid, sim.nscalars, sim.chemistry !== nothing)
         sim.diag.floors_scalar += m
         n += m
     end

@@ -153,3 +153,26 @@ end
         @test_throws ErrorException load_checkpoint!(sim, v1)
     end
 end
+
+@testset "mass scalars: renormalisation is for chemistry only" begin
+    s = Simulation(n=(4, 1, 1), nscalars=2)
+    set_initial_conditions!((x, y, z) -> (rho=2.0, p=1.0, X=(0.3, 0.5)), s)     # sum X = 0.8
+    i = s.grid.lo[1]
+    U = s.U
+    # the default leaves passive scalars alone
+    @test Honghu.enforce_scalar_floors!(U, s.grid, 2) == 0
+    @test U[6, i, 1, 1] + U[7, i, 1, 1] ≈ 1.6
+    # renormalising makes them add up to rho, keeps their ratio, and is not a repair
+    @test Honghu.enforce_scalar_floors!(U, s.grid, 2, true) == 0
+    @test U[6, i, 1, 1] + U[7, i, 1, 1] ≈ 2.0 rtol = 1e-15
+    @test U[6, i, 1, 1] / U[7, i, 1, 1] ≈ 0.3 / 0.5 rtol = 1e-15
+    # a negative one is clipped and counted first, then the rest add up to rho
+    U[6, i+1, 1, 1] = -0.1
+    @test Honghu.enforce_scalar_floors!(U, s.grid, 2, true) == 1
+    @test U[6, i+1, 1, 1] == 0
+    @test U[7, i+1, 1, 1] ≈ 2.0 rtol = 1e-15
+    # a cell with nothing to scale, or no mass, is left as it is
+    U[6, i+2, 1, 1] = U[7, i+2, 1, 1] = 0
+    @test Honghu.enforce_scalar_floors!(U, s.grid, 2, true) == 0
+    @test U[6, i+2, 1, 1] == 0 && U[7, i+2, 1, 1] == 0
+end

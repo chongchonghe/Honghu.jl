@@ -66,6 +66,15 @@ using LinearAlgebra: lu!, ldiv!
 using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23,
                       init, solve!, reinit!, SciMLLogging
 
+# `RosenbrockChem` solves the 4x4 linear systems of its integrator with LinearSolve's
+# `SimpleLUFactorization`, a dense LU written in Julia, and nothing else is used from
+# the package. The default factorisation and its solve call OpenBLAS, whose
+# `blas_memory_alloc` takes a global lock on every call: with four threads the
+# chemistry step ran 2.2 times slower than with one. Measured on a 24^3 step, the
+# default takes 85 ms on one thread and 184 ms on four; `GenericLUFactorization` takes
+# 76 and 176 ms (its solve is still `dgetrs`); this one takes 72 and 20 ms.
+using LinearSolve: SimpleLUFactorization
+
 # `BracketedCoupling` hands its one scalar equation to a bracketing root-finder
 # through SciMLBase's interface, and `Brent` is the default one. `solve` is
 # `CommonSolve.solve`, the same function the line above imports, so it is not

@@ -51,7 +51,8 @@ struct RosenbrockWork{I,P,T<:AbstractFloat}
 end
 
 """
-    RosenbrockChem(; alg = Rosenbrock23(), reltol = 1e-2, abstol = 1e-8)
+    RosenbrockChem(; alg = Rosenbrock23(linsolve = SimpleLUFactorization()),
+                   reltol = 1e-2, abstol = 1e-8)
 
 Integrate the chemistry of each cell over the step with an adaptive, error-controlled
 stiff ODE integrator from OrdinaryDiffEq. This is the default chemistry integrator.
@@ -63,7 +64,14 @@ iteration to converge before it can take a step.
     and `FBDF()` come with the package, and anything from a sub-package you load
     yourself does too. An explicit method will stall. It is handed the network's
     exact Jacobian and an exact `df/dt = 0`, so it never differentiates the
-    right-hand side numerically.
+    right-hand side numerically. The default solves its linear systems with
+    LinearSolve's `SimpleLUFactorization`, a dense LU written in Julia, and not with
+    the integrator's own default, which calls OpenBLAS: OpenBLAS takes a global lock
+    to allocate its buffers on every call, so a threaded chemistry step ran slower
+    than a single-threaded one (a 24^3 step took 85 ms on one thread and 184 ms on
+    four, against 72 ms and 20 ms with this one). An algorithm you pass keeps its own
+    default; give it `linsolve = SimpleLUFactorization()` (from LinearSolve, which you
+    load yourself) to get the same.
   - `reltol` : the relative tolerance. The default `1e-2` is deliberately loose,
     as for [`AdaptiveCoupling`](@ref).
   - `abstol` : the absolute tolerance, as a **fraction of [`chem_scales!`](@ref)**: the
@@ -89,7 +97,7 @@ struct RosenbrockChem{A,T<:AbstractFloat} <: AbstractChemSolver
     abstol::T
 end
 
-RosenbrockChem(; alg=Rosenbrock23(), reltol=1e-2, abstol=1e-8) =
+RosenbrockChem(; alg=Rosenbrock23(linsolve=SimpleLUFactorization()), reltol=1e-2, abstol=1e-8) =
     RosenbrockChem(alg, promote(float(reltol), float(abstol))...)
 
 function chem_workspace(s::RosenbrockChem, net::AbstractNetwork, ::Type{T}) where {T<:AbstractFloat}

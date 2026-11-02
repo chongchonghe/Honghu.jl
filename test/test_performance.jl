@@ -65,6 +65,7 @@ end
                                                     sim.riemann, Val(1), g, 2), sim) < LIMIT
     @test bytes_per_cell(() -> Honghu.enforce_floors!(sim.U, sim.eos, g, sim.floors, 2), sim) < LIMIT
     @test bytes_per_cell(() -> Honghu.enforce_scalar_floors!(sim.U, g, 2), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.enforce_scalar_floors!(sim.U, g, 2, true), sim) < LIMIT
 end
 
 @testset "radiation kernels do not allocate per cell" begin
