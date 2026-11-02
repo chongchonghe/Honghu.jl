@@ -40,7 +40,7 @@ end
 #
 #   * the subprocess was there because `using OrdinaryDiffEq` in this session
 #     would have shadowed `step!`, which every other file here calls unqualified.
-#     `Honghu.jl` imports six names rather than the package, so there is nothing
+#     `Honghu.jl` imports its names one by one rather than the package, so there is nothing
 #     left to collide with.
 #   * the skip was there because the package was a weak dependency. It is a hard
 #     one now, and a test that quietly skips itself when a *required* dependency
