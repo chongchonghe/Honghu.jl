@@ -53,17 +53,22 @@ network's gas-side rates use `c` and its photon loss uses `chat`, so the budget
 
 A simulation with chemistry has these requirements, and refuses to be built without them
 (an `ArgumentError`): radiation is enabled, the chat limiter is [`ConstantChat`](@ref),
-`beta_order = 0`, the group of each band has zero thermal opacity (so the matter-radiation
-coupling leaves it alone and only the network changes its energy), `nscalars` is 0 or
+`beta_order = 0`, every group has zero thermal opacity (the matter-radiation coupling takes
+the gas temperature from the constant-mean-molecular-weight equation of state, which ignores
+the species and differs from the network's temperature by up to a factor of 2 in ionized gas,
+so a group with opacity would drive the gas to the wrong temperature; with none, only the
+network changes the gas energy), `nscalars` is 0 or
 `nspecies(network)`, and the equation of state has `adiabatic_index(eos) = 5/3`, because
 the network's temperature `e / (3/2 k_B n)` is that of a monatomic gas and another gamma would
 give the hydrodynamics a pressure inconsistent with it. The network's rates are in CGS, so
 the run must be in CGS units. Momentum deposited by the absorbed photons is not modelled.
 
 The species are the mass scalars of the simulation, and they are renormalised to add up to the
-gas density after every hydrodynamic stage and at the end of every step
-([`enforce_scalar_floors!`](@ref)): each `rho X_s` is reconstructed on its own, so with PLM or
-PPM the species fluxes do not add up to the mass flux and the sum would drift from `rho`.
+gas density on entry to every hydrodynamic right-hand side (the start of each Runge-Kutta stage), at the
+start of the radiation advance, where the burn reads them, and at the end of every step ([`enforce_scalar_floors!`](@ref)): each `rho X_s` is reconstructed on its own, so
+with PLM or PPM the species fluxes do not add up to the mass flux and the sum would drift from
+`rho`. The last Runge-Kutta combine is not followed by a right-hand side, which is why the
+radiation advance renormalises once more before the chemistry runs.
 
 ```julia
 net = HydrogenOTSA(sigma = 1.63e-18, photon_energy = 29.65 * Honghu.CGS.eV)

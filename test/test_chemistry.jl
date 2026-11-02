@@ -499,6 +499,19 @@ end
 cellsum(sim, f) = sum(f(i, j, k) for k in sim.grid.lo[3]:sim.grid.hi[3],
                       j in sim.grid.lo[2]:sim.grid.hi[2], i in sim.grid.lo[1]:sim.grid.hi[1])
 
+# A solver that does not integrate anything and records what the chemistry is handed: the
+# worst departure of the species mass from the cell's `rho`, over the cells it saw. It is the
+# way to see the state the burn starts from, which no accessor after the step can show (the
+# step ends by renormalising the scalars whatever the burn was given).
+struct SpeciesSumProbe <: Honghu.AbstractChemSolver end
+Honghu.chem_workspace(::SpeciesSumProbe, net, ::Type{T}) where {T} = Ref(zero(T))
+function Honghu.solve_chemistry!(w::Ref, ::SpeciesSumProbe, net, cell, u)
+    m = sum(u[s] * Honghu.species_mass(net, s) for s in 1:Honghu.nspecies(net))
+    w[] = max(w[], abs(m / cell.rho - 1))
+    return Honghu.ChemStats(0, true)
+end
+probe_worst(sim) = maximum(row.w[] for row in sim.cw)
+
 @testset "photochemistry in a simulation" begin
     eps = 29.65 * CGS.eV
     net = HydrogenOTSA(sigma=1.63e-18, photon_energy=eps)
@@ -568,6 +581,28 @@ cellsum(sim, f) = sum(f(i, j, k) for k in sim.grid.lo[3]:sim.grid.hi[3],
     # chemistry renormalises the species to add up to rho (`enforce_scalar_floors!`).
     @test maximum(abs.((hs.U[6, ir, jr, kr] .+ hs.U[7, ir, jr, kr]) ./ hs.U[1, ir, jr, kr] .- 1)) < 1e-12
 
+    # The burn must be handed the renormalised species, not just leave them so. The last
+    # Runge-Kutta combine of the hydro step is neither floored nor renormalised, so without
+    # the renormalisation at the start of `advance_radiation!` the chemistry reads species
+    # that add up to rho only to the percent (a density wave and a step in X, PPM).
+    ps = chem_box(net=net, n=8, side=8e18, hydro=true, solver=SpeciesSumProbe(),
+                  ic=(x, y, z) -> (rho=1e-3 * CGS.m_H * (1 + 0.5sinpi(2x / 8e18)), vx=1e6,
+                                   T=100.0, x_HII=x < 4e18 ? 0.1 : 0.9, Erad=0.0))
+    for _ in 1:3
+        foreach(row -> row.w[] = 0.0, ps.cw)
+        step!(ps)
+        @test probe_worst(ps) < 1e-12
+    end
+    # a negative species is clipped (and counted) before the burn sees it, not clamped after it
+    i0 = ps.grid.lo[1]
+    ps.U[6, i0, i0, i0] = -1e-30
+    n0 = ps.diag.floors_scalar
+    foreach(row -> row.w[] = 0.0, ps.cw)
+    Honghu.advance_radiation!(ps, 1e9)
+    @test ps.diag.floors_scalar == n0 + 1 && probe_worst(ps) < 1e-12
+    ir0, jr0, kr0 = ps.grid.lo[1]:ps.grid.hi[1], ps.grid.lo[2]:ps.grid.hi[2], ps.grid.lo[3]:ps.grid.hi[3]
+    @test maximum(abs.((ps.U[6, ir0, jr0, kr0] .+ ps.U[7, ir0, jr0, kr0]) ./ ps.U[1, ir0, jr0, kr0] .- 1)) < 1e-12
+
     # and the burn keeps it exactly, whatever the cell holds: n_H0 + n_H+ is an invariant of the
     # network, so this part does not depend on the renormalisation
     S0 = hs.U[6, ir, jr, kr] .+ hs.U[7, ir, jr, kr]
@@ -596,6 +631,18 @@ end
     @test_throws ArgumentError Simulation(n=(4, 1, 1), radiation=rad,
                                           chemistry=Photochemistry(HydrogenOTSA(group=2, sigma=1.63e-18, photon_energy=eps)))
     @test_throws ArgumentError Simulation(n=(4, 1, 1), radiation=rad, chemistry=:hydrogen)
+    # thermal opacity in any group is refused, not only in the band's: another group's
+    # coupling takes the gas temperature from the constant-mu equation of state, which
+    # ignores the species. Two groups, the band in the first.
+    two(op) = RadiationPhysics(c=CGS.c_light, a_rad=CGS.a_rad, k_B=CGS.k_B, beta_order=0,
+                               groups=RadiationGroups([1.0, 2.0, 3.0]), opacity=op)
+    pc2 = Photochemistry(net)
+    @test Simulation(n=(4, 1, 1), radiation=two(FrequencyOpacity((nu, rho, T) -> 0.0)),
+                     chemistry=pc2) isa Simulation
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), chemistry=pc2,
+        radiation=two(FrequencyOpacity((nu, rho, T) -> nu > 2.0 ? 1.0 : 0.0)))   # other group only
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), chemistry=pc2,
+        radiation=two(FrequencyOpacity((nu, rho, T) -> nu < 2.0 ? 1.0 : 0.0)))   # the band's group
     plain = Simulation(n=(4, 1, 1), radiation=rad)
     @test_throws ArgumentError Honghu.chemistry_step!(plain, 1.0, 0.0)
     @test plain.cw === nothing

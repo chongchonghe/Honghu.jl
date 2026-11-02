@@ -178,10 +178,14 @@ Project one radiation state onto the admissible set of the M1 closure: energy
 density at or above the floor, and reduced flux `|F|/(cE)` strictly below one
 (the flux is rescaled, preserving its direction). Also returns the reduced flux
 components, which the caller usually wants anyway.
+
+`repaired` is true only when the state changed: an energy density exactly at the
+floor is admissible and is not counted. A cell that holds the floor, as the dark
+cells of a photoionization run do, would otherwise be a "repair" in every call.
 """
 @inline function amend_rad(er::T, Fx::T, Fy::T, Fz::T, c::T, erad_floor::T) where {T}
     repaired = false
-    if !(er > erad_floor)
+    if !(er >= erad_floor)
         er = erad_floor
         repaired = true
     end

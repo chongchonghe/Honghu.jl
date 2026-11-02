@@ -70,8 +70,8 @@ iteration to converge before it can take a step.
     to allocate its buffers on every call, so a threaded chemistry step ran slower
     than a single-threaded one (a 24^3 step took 85 ms on one thread and 184 ms on
     four, against 74 ms and 20 ms with this one). An algorithm you pass keeps its own
-    default; give it `linsolve = SimpleLUFactorization()` (from LinearSolve, which you
-    load yourself) to get the same.
+    default; give it `linsolve = Honghu.SimpleLUFactorization()` to get the same, which
+    needs no `using LinearSolve`.
   - `reltol` : the relative tolerance. The default `1e-2` is deliberately loose,
     as for [`AdaptiveCoupling`](@ref).
   - `abstol` : the absolute tolerance, as a **fraction of [`chem_scales!`](@ref)**: the
@@ -84,8 +84,10 @@ A cell that fails is reported through `ChemStats.converged`, which the grid
 driver counts and summarises, and a threaded run would otherwise print one long
 warning for every failing cell.
 
-It allocates about a kilobyte a call, all inside OrdinaryDiffEq. The workspace
-holds one reused integrator, so give each thread its own and never share one.
+It allocates, unlike [`BackwardEulerChem`](@ref): about 350 bytes per cell and call with
+the default algorithm (measured on a 16^3 box; `test/test_performance.jl` bounds it at
+2 kB), all inside OrdinaryDiffEq's `reinit!` and `solve!`. The workspace holds one reused
+integrator, so give each thread its own and never share one.
 
 ```julia
 solver = RosenbrockChem(alg = Rodas5P(), reltol = 1e-4)

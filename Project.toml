@@ -5,12 +5,15 @@ version = "0.1.0"
 
 # Three stdlibs and four packages from one tree.
 #
-# OrdinaryDiffEq supplies one of the three matter-radiation coupling solvers:
-# `AdaptiveCoupling`, the error-controlled reference. It is the only coupling
-# path that cannot use the scalar reduction the other two are built on -- the
-# group block is algebraically eliminable only after an implicit step has been
-# taken, not along an ODE trajectory -- so it is the only one that needs an
-# integrator, and the only one that allocates.
+# OrdinaryDiffEq supplies the integrator of two things. `RosenbrockChem`, the
+# default chemistry integrator, is one reused OrdinaryDiffEq integrator per
+# workspace, so every photoionization run calls it. `AdaptiveCoupling`, the
+# error-controlled reference of the three matter-radiation coupling solvers, is
+# the other. It is the only coupling path that cannot use the scalar reduction
+# the other two are built on -- the group block is algebraically eliminable only
+# after an implicit step has been taken, not along an ODE trajectory -- so it is
+# the only coupling solver that needs an integrator, and the only one that
+# allocates.
 #
 # SciMLBase supplies the interface `BracketedCoupling` hands its one scalar
 # equation through -- `IntervalNonlinearProblem` and `solve`.

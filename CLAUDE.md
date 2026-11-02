@@ -65,7 +65,9 @@ plotting stack.
 dependency, and the reasoning is worth keeping because it is what the tiers
 actually mean:
 
-- One solver needs it — `AdaptiveCoupling`, the error-controlled reference, and
+- Two things need it. `RosenbrockChem`, the default chemistry integrator, is one
+  reused OrdinaryDiffEq integrator per workspace, so every photoionization run
+  calls it. The other is `AdaptiveCoupling`, the error-controlled reference, and
   it is the only coupling path that *can* need it: the other two eliminate the
   group block algebraically, which is possible after an implicit step is taken
   and not along an ODE trajectory. A solver behind an extension boundary is one
@@ -239,7 +241,7 @@ The inner loops must stay allocation-free. Two traps have already bitten this co
 1. **Closures inside the cell loop box their captured variables.** An `ntuple(Val(3)) do a … end` in `source_terms.jl` captured Newton-loop variables that were assigned in several places, so Julia boxed them; every assignment then heap-allocated. That cost 406 MB and 200 ms per source step at 32³. Write such kernels out component by component instead.
 2. **Threaded reductions must not use `threadid()`.** `Threads.@threads` defaults to dynamic scheduling, so `threadid()` is not stable across a chunk. `reduce_max_jk` writes partial results to distinct slots keyed by the loop index instead.
 
-`test/test_performance.jl` guards both: it asserts that every hot kernel allocates under 8 bytes per interior cell, and that allocation per step does not grow with the grid. Those are the tests that would have caught the boxing bug, so extend them whenever you add a kernel.
+`test/test_performance.jl` guards both: it asserts that every hot kernel allocates under 8 bytes per interior cell, and that allocation per step does not grow with the grid. Those are the tests that would have caught the boxing bug, so extend them whenever you add a kernel. The one accepted exception is the default chemistry integrator: `chemistry_step!` with `RosenbrockChem` allocates about 350 bytes per cell inside OrdinaryDiffEq's `reinit!` and `solve!`, and the test only bounds it (under 2 kB per cell); with `BackwardEulerChem` it is held to the 8 bytes.
 
 When changing a hot kernel, check with
 
@@ -331,7 +333,7 @@ Two properties the tests pin, and that a change here must keep:
 `Simulation(; chemistry = Photochemistry(net; solver, emission))` evolves a network in every cell after each IMEX radiation substep (`chemistry_step.jl`), with the species stored as mass scalars `rho X_s` that are renormalised to sum to `rho`. The built-in network is `HydrogenOTSA`, the built-in problems are the Iliev et al. (2006) Stromgren tests (`Problems.stromgren_iliev`), and `docs/photoionization-findings.md` holds what was measured. Five things are not obvious from the code:
 
 - **The reduced speed of light is applied in three places, and all three are needed.** The gas side of the photoionization rate uses the speed of light, `c sigma n_H0 N`; the photon equation loses `chat sigma n_H0 N`; and the emission is multiplied by `phi = chat / c`. The conserved budget is then `n_H+ + N/phi`, "photons emitted equals `Ndot t`" holds for the integral of `N/phi` and not of `N`, and the ionization equilibrium does not depend on `chat`. Using `c` on the gas side with unscaled emission gives a Stromgren volume proportional to `1/phi`. Quokka stores `N_Q = N/phi` and takes `chat` in both rates, which is the same scheme.
-- **`ConstantChat` and `beta_order = 0` only.** `Simulation` refuses anything else, as it refuses a band whose group has thermal opacity and a gamma other than 5/3. The `StabilityBound` derivation has no photoabsorption term, so its bound does not cover this absorption, and the momentum that absorbed photons deposit is not modelled, which is what `beta_order > 0` would need.
+- **`ConstantChat` and `beta_order = 0` only.** `Simulation` refuses anything else, as it refuses thermal opacity in *any* group (not only the band's: the matter-radiation coupling takes the gas temperature from the constant-mu equation of state, which ignores the species and is off by up to a factor of 2 in ionized gas) and a gamma other than 5/3. The `StabilityBound` derivation has no photoabsorption term, so its bound does not cover this absorption, and the momentum that absorbed photons deposit is not modelled, which is what `beta_order > 0` would need.
 - **The flux is scaled, not integrated.** The ODE has no flux unknowns: absorption acts on a band's `N` and on its flux with the same linear rate, so after the solve each flux component is multiplied by `N_end / N_start` (Quokka's `SKIP_PHOTOCHEMFLUX`). That, the emission and the clamp at zero belong to the grid driver and are not terms of `chem_rhs!`; put any of them in the ODE and the two integrators stop solving the same problem. The emission is injected at the start of the substep, before the burn, so the step is first order: an opaque cell sits below its equilibrium ionization by about `alpha n x^2 dt / 2`.
 - **Set `Erad` in the initial conditions.** Its default is `a_r T^4`, which puts about `1e12` ionizing photons per cm^3 in a `1e4` K box. A photoionization problem passes `Erad = 0.0` (the floor makes it `1e-30`), as `stromgren_iliev` does.
 - **The default heating per ionization overheats.** `heating_energy = photon_energy - 13.6 eV` is Quokka's: 16.05 eV for the 29.65 eV band of Test 2, against about 6.3 eV for the optically thin `1e5` K blackbody. Measured on Test 2, 2.5 times the heating raises the temperature of the ionized gas by only 11% to 14% and the radius by 0.8% to 2.2%. A single band has no spectral hardening either, so the Test 2 temperature profile is checked for its shape and not against data.

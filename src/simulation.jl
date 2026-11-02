@@ -208,11 +208,14 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     network, with its ionizing photons, inside every radiation substep. It sets
     `nscalars` to the number of species (an explicit `nscalars` must equal it)
     and needs radiation with the default [`ConstantChat`](@ref) limiter,
-    `beta_order = 0` and zero thermal opacity in the band's group, and an `eos` with
+    `beta_order = 0` and zero thermal opacity in every group (the coupling would
+    take the gas temperature from the constant-mu equation of state, which
+    ignores the species), and an `eos` with
     `adiabatic_index(eos) == 5/3`, or the constructor throws an `ArgumentError`.
     One chemistry workspace is built per row of cells, `n[2] * n[3]` of them.
-    The species scalars are renormalised to add up to `rho` after every update
-    (see [`enforce_scalar_floors!`](@ref)).
+    The species scalars are renormalised to add up to `rho` at the start of
+    every radiation advance, in every hydrodynamic right-hand side and at the end
+    of every step (see [`enforce_scalar_floors!`](@ref)).
 
 # Numerics
   - `reconstruction = PPM()` : [`PCM`](@ref), [`PLM`](@ref) or [`PPM`](@ref).
@@ -347,9 +350,20 @@ function _check_chemistry(chem, radiation, eos, nscalars, ::Type{T}) where {T}
         1 <= gr <= ngroups(radiation) ||
             throw(ArgumentError("band $b of the network reads radiation group $gr, but the " *
                                 "simulation has $(ngroups(radiation))"))
-        group_opacities(radiation.opacity, radiation.groups, one(T), T(1e4))[gr] == 0 ||
-            throw(ArgumentError("the thermal opacity of group $gr, which band $b reads, must be " *
-                                "zero, so that only the network changes its energy"))
+    end
+    # Every group, not only the band's: the matter-radiation coupling of any group with
+    # opacity reads the gas temperature from the equation of state, `temperature(eos, ...)`,
+    # at a constant mean molecular weight, which ignores the species. In ionized gas that
+    # differs from the network's temperature by a factor of 2, so the coupling would heat
+    # and cool the gas to the wrong temperature.
+    kappa = group_opacities(radiation.opacity, radiation.groups, one(T), T(1e4))
+    for gr in 1:ngroups(radiation)
+        kappa[gr] == 0 ||
+            throw(ArgumentError("the thermal opacity of group $gr must be zero while chemistry is " *
+                                "on: the matter-radiation coupling takes the gas temperature from " *
+                                "the constant-mu equation of state, which ignores the species and " *
+                                "differs from the network's temperature by up to a factor of 2 in " *
+                                "ionized gas, so only the network may change the gas energy"))
     end
     return nothing
 end
@@ -735,8 +749,20 @@ end
 
 Subcycle the radiation subsystem over one hydro step, using as many IMEX
 substeps as the radiation CFL condition requires.
+
+With chemistry and hydrodynamics both on, the species scalars are clipped and
+renormalised to add up to `rho` once before the first substep, and the clip is
+counted in `Diagnostics.floors_scalar`. The last Runge-Kutta combine of the hydro
+step is neither floored nor renormalised, so without this the chemistry would read
+species whose masses add up to `rho` only to about a percent, or are negative, and
+its write-back (which clamps a negative species to zero) would create mass. The
+substeps leave `rho` and the scalars alone and the burn conserves the species
+total, so one call covers all of them.
 """
 function advance_radiation!(sim::Simulation{T}, dt::T) where {T}
+    if sim.chemistry !== nothing && sim.hydro_enabled
+        sim.diag.floors_scalar += enforce_scalar_floors!(sim.U, sim.grid, sim.nscalars, true)
+    end
     dtr = _rad_dt(sim)
     nsub = max(1, ceil(Int, dt / dtr))
     dts = dt / nsub

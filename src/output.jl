@@ -230,7 +230,8 @@ end
 
 Restore a simulation from a checkpoint written by [`save_checkpoint`](@ref).
 The grid, floating-point precision, presence of radiation, and the number of
-gas and radiation variables (hence of mass scalars) must match those of `sim`.
+gas and radiation variables (hence of mass scalars) must match those of `sim`,
+or it throws before touching `sim.t`, `sim.dt`, `sim.step` or the state.
 A checkpoint of format 1 and a `.h3d` checkpoint, written when the package was
 called Hydro3D, carry no variable counts, so they load only into a simulation
 with `nscalars == 0`.
@@ -248,9 +249,11 @@ function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
         for d in 1:3
             read(f, Int64) == g.ng[d] || error("checkpoint ghost width does not match the simulation")
         end
-        sim.t = T(read(f, Float64))
-        sim.dt = T(read(f, Float64))
-        sim.step = Int(read(f, Int64))
+        # Locals until every check has passed, so that a refused file leaves the clock as it
+        # was along with the state.
+        t = T(read(f, Float64))
+        dt = T(read(f, Float64))
+        step = Int(read(f, Int64))
         hasrad = read(f, Int64) == 1
         hasrad == has_radiation(sim) ||
             error("checkpoint radiation setting does not match the simulation")
@@ -266,6 +269,7 @@ function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
         end
         read!(f, sim.U)
         hasrad && read!(f, sim.R)
+        sim.t, sim.dt, sim.step = t, dt, step
     end
     return sim
 end

@@ -145,3 +145,19 @@ end
                                           Erad=1e-12), sim)
     @test bytes_per_cell(() -> Honghu.chemistry_step!(sim, 1e10, 0.0), sim) < 8.0
 end
+
+@testset "chemistry step with the default RosenbrockChem: allocation is bounded" begin
+    # The one hot path that is allowed to allocate per cell: the reused OrdinaryDiffEq
+    # integrator allocates inside `reinit!` and `solve!` (~350 B per cell measured on this
+    # box), where `BackwardEulerChem` above allocates nothing. The bound is an upper limit,
+    # so a boxed closure or an integrator rebuilt per cell (~8 kB) still fails it.
+    net = HydrogenOTSA(sigma=1.63e-18, photon_energy=29.65 * Honghu.CGS.eV)
+    rad = RadiationPhysics(c=Honghu.CGS.c_light, chat=1e-3 * Honghu.CGS.c_light,
+                           a_rad=Honghu.CGS.a_rad, k_B=Honghu.CGS.k_B,
+                           opacity=ConstantOpacity(0.0), beta_order=0)
+    sim = Simulation(n=(16, 16, 16), xhi=(1e21, 1e21, 1e21), hydro=false, radiation=rad,
+                     chemistry=Photochemistry(net))
+    set_initial_conditions!((x, y, z) -> (rho=1e-3 * Honghu.CGS.m_H, T=100.0, x_HII=0.01,
+                                          Erad=1e-12), sim)
+    @test bytes_per_cell(() -> Honghu.chemistry_step!(sim, 1e10, 0.0), sim) < 2048.0
+end

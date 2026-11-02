@@ -151,6 +151,27 @@ end
         load_checkpoint!(plain, v1)
         @test plain.U == Uplain
         @test_throws ErrorException load_checkpoint!(sim, v1)
+
+        # a refused file leaves the simulation as it was: the clock was read from the file
+        # and assigned before the variable counts were checked, so a refusal moved it. Each
+        # of the checks is covered, a size mismatch and a variable count mismatch (`other`
+        # has one scalar, `sim` two) alike.
+        sim.t, sim.dt, sim.step = 1.5, 0.25, 7
+        cp2 = save_checkpoint(sim, joinpath(dir, "c2"))
+        for victim in (Simulation(n=(8, 4, 1), nscalars=1), Simulation(n=(8, 2, 1), nscalars=2))
+            set_initial_conditions!((x, y, z) -> (rho=2.0, p=1.0, X=ntuple(_ -> 0.1, victim.nscalars)), victim)
+            victim.t, victim.dt, victim.step = 99.0, 9.0, 3
+            Uv = copy(victim.U)
+            @test_throws ErrorException load_checkpoint!(victim, cp2)
+            @test (victim.t, victim.dt, victim.step) == (99.0, 9.0, 3)
+            @test victim.U == Uv
+        end
+        # radiation setting mismatch, the last of the checks
+        rv = Simulation(n=(8, 4, 1), nscalars=2,
+                        radiation=RadiationPhysics(c=1.0, a_rad=1.0, opacity=ConstantOpacity(0.0)))
+        rv.t, rv.dt, rv.step = 99.0, 9.0, 3
+        @test_throws ErrorException load_checkpoint!(rv, cp2)
+        @test (rv.t, rv.dt, rv.step) == (99.0, 9.0, 3)
     end
 end
 

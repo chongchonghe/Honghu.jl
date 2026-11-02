@@ -182,6 +182,30 @@ end
     @test d.steps == 1 && d.newton_cells > 0
 end
 
+@testset "a radiation cell at the floor is not a repair" begin
+    # `er < floor` is a repair and `er == floor` is not: the state is the same before
+    # and after, so counting it said "unphysical" about every cell that simply holds the
+    # floor, as the dark cells of a photoionization run do, once per cell and per call.
+    ef = 1e-10
+    c = 1.0
+    below = Honghu.amend_rad(0.5ef, 0.0, 0.0, 0.0, c, ef)
+    at = Honghu.amend_rad(ef, 0.0, 0.0, 0.0, c, ef)
+    @test below[1] == ef && below[end]            # lifted to the floor, and counted
+    @test at[1] == ef && !at[end]                 # already there: unchanged, not counted
+    @test Honghu.amend_rad(NaN, 0.0, 0.0, 0.0, c, ef)[end]   # NaN still is one
+
+    sim = Simulation(n=(8, 1, 1), hydro=false,
+                     radiation=RadiationPhysics(c=1.0, chat=1.0, a_rad=1.0,
+                                                opacity=ConstantOpacity(0.0)),
+                     floors=Floors(erad=ef))
+    fill!(sim.R, 0)
+    sim.R[IERAD, :, :, :] .= ef
+    @test Honghu.amend_rad_state!(sim.R, sim.radiation, sim.grid, sim.floors) == 0
+    sim.R[IERAD, 4, 1, 1] = 0.5ef
+    @test Honghu.amend_rad_state!(sim.R, sim.radiation, sim.grid, sim.floors) == 1
+    @test all(==(ef), sim.R[IERAD, :, :, :])
+end
+
 @testset "Marshak wave" begin
     sim, tmax = P.marshak_wave(nx=128)
     run!(sim; tmax, verbose=false)
