@@ -266,7 +266,8 @@ abstract type AbstractChemSolver end
 
 What a chemistry solve reports for one cell: `steps`, the number of internal
 steps an adaptive integrator took or the number of Newton iterations a
-backward-Euler step took, and whether it `converged`. An unconverged cell is
+backward-Euler step took (zero if the state the step starts from already satisfies
+its equation), and whether it `converged`. An unconverged cell is
 reported, never hidden: the driver counts it in `Diagnostics`.
 """
 struct ChemStats

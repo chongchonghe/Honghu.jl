@@ -420,6 +420,21 @@ end
     @test u[1] + u[2] ≈ 1e-2 rtol = 1e-10
     @test u[2] > 5e-3                                   # mostly ionized
 
+    # A dark, mostly ionized cell at 1e4 K recombining over 2.6 recombination times, so a long
+    # step with cooling. The residual rises along the Newton direction before it falls: a
+    # search that takes a tiny step when no trial lowers it stalls here for all 50 iterations,
+    # the whole update converges in 10.
+    cellr = Honghu.ChemCell(1.0 * CGS.m_H, c, 1e-3c, 1e13)
+    u0r = hstate(1.0, 0.999, 1e4, 0.0)
+    ur = copy(u0r)
+    st = Honghu.solve_chemistry!(Honghu.chem_workspace(s, net, Float64), s, net, cellr, ur)
+    @test st.converged && st.steps < 20
+    fr = zeros(4); Honghu.chem_rhs!(fr, ur, net, cellr)
+    scr = zeros(4); Honghu.chem_scales!(scr, u0r, net, cellr)
+    @test maximum(abs.(ur .- u0r .- cellr.dt .* fr) ./ scr) < 1e-9
+    @test ur[1] + ur[2] ≈ 1.0 rtol = 1e-10
+    @test 0.3 < ur[2] < 0.6                              # recombined, but not to neutral
+
     # a dark neutral cold cell already satisfies the equation: no Newton iteration at all
     dark = Honghu.ChemCell(1e-3 * CGS.m_H, c, 1e-3c, 1e12)
     st = Honghu.solve_chemistry!(Honghu.chem_workspace(s, net, Float64), s, net, dark,

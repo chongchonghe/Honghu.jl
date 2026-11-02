@@ -156,15 +156,21 @@ iterate never carries a negative abundance into a rate. The Newton update is
 damped by a backtracking line search on the scaled residual, `max_i |G_i| / scale_i`:
 it tries the whole update, then a half, a quarter and so on up to 20 halvings, and
 keeps the first trial, clamped as above, whose residual is smaller than the
-current one (the last trial if none is). Undamped, a step across a front or a
-clamp makes Newton cycle, and the comparison would then measure that failure and
-not the time discretisation. It is still one backward-Euler step: the line search
-changes how the nonlinear equation of that step is solved, never the equation.
-It cannot help where the equation has no admissible root near the start state,
-for instance a growth term with `rate * dt > 1`, which backward Euler drives
-negative. If Newton does not converge in `max_iterations`, or meets a singular
-matrix or a non-finite update, the result says so in [`ChemStats`](@ref); it never
-reports a failed solve as a converged one.
+current one, or the whole update if none is. It is still one backward-Euler step:
+the line search changes how the nonlinear equation of that step is solved, never
+the equation.
+
+Newton can still fail, and it is the one-step equation and not the damping that is
+at fault. Three cases are known. (a) A stiff growth term, such as collisional
+ionization with `beta n_H0 dt > 1`: the backward-Euler root is positive, but the
+Newton direction from the old state points into the zero clamp, which a residual
+line search cannot cross. (b) Photoionization-front cells at `Gamma dt` of order
+`1e2` to `1e3`, where the temperature and the clamps interact inside the step.
+(c) A discontinuous rate, such as the 100 K switch of the recombination cooling,
+can make the iteration cycle across it. Every such cell is reported through
+`ChemStats.converged`, which the grid driver counts, and is never hidden; if Newton
+does not converge in `max_iterations`, or meets a singular matrix or a non-finite
+update, the result says so and `u` holds the last iterate.
 
   - `tol`            : stop when the largest Newton update, or the largest residual
     `G`, in units of [`chem_scales!`](@ref), is at most this. The scales are taken
@@ -248,10 +254,23 @@ end
 # current iterate to within round-off in anything a rate can see.
 const _BE_MAX_HALVINGS = 20
 
+# Put the trial `u + lambda du` in `w.ut`, clamped exactly as an iterate is (the energy may go
+# negative in a bad trial and recover; a number density or a photon count may not, because the
+# rates read it), its right-hand side in `w.ft`, and return its scaled residual.
+function _be_trial!(w::BackwardEulerWork{T}, u::Vector{T}, net::AbstractNetwork, cell::ChemCell{T},
+                    lambda::T) where {T}
+    ne = ienergy(net)
+    @inbounds for i in eachindex(u)
+        v = u[i] + lambda * w.du[i]
+        w.ut[i] = i == ne ? v : max(v, zero(T))
+    end
+    chem_rhs!(w.ft, w.ut, net, cell)
+    return _be_residual(w.ut, w.u0, w.ft, w.scale, cell.dt)
+end
+
 function solve_chemistry!(w::BackwardEulerWork{T}, s::BackwardEulerChem, net::AbstractNetwork,
                           cell::ChemCell{T}, u::Vector{T}) where {T}
     n = length(u)
-    ne = ienergy(net)
     dt = cell.dt
     copyto!(w.u0, u)
     chem_scales!(w.scale, u, net, cell)
@@ -275,22 +294,22 @@ function solve_chemistry!(w::BackwardEulerWork{T}, s::BackwardEulerChem, net::Ab
             worst = max(worst, abs(w.du[i]) / w.scale[i])
         end
         isfinite(worst) || return ChemStats(iter, false)
-        # Backtrack on the residual. The trial is clamped exactly as the iterate is: the
-        # energy may go negative in a bad trial and recover; a number density or a photon
-        # count may not, because the rates read it. If no trial lowers the residual the
-        # last one is taken, so the iteration still moves and `max_iterations` ends it.
+        # Backtrack on the residual. If no trial lowers it, take the whole Newton update, as an
+        # undamped iteration would: it is often the right move through a stretch where the
+        # residual rises before it falls, and stalling on a tiny step is worse. Either way the
+        # iteration moves, and `max_iterations` ends it.
         lambda = one(T)
         rt = r
-        for k in 0:_BE_MAX_HALVINGS
-            @inbounds for i in 1:n
-                v = u[i] + lambda * w.du[i]
-                w.ut[i] = i == ne ? v : max(v, zero(T))
+        found = false
+        for _ in 0:_BE_MAX_HALVINGS
+            rt = _be_trial!(w, u, net, cell, lambda)
+            if rt < r
+                found = true
+                break
             end
-            chem_rhs!(w.ft, w.ut, net, cell)
-            rt = _be_residual(w.ut, w.u0, w.ft, w.scale, dt)
-            (rt < r || k == _BE_MAX_HALVINGS) && break
             lambda /= 2
         end
+        found || (rt = _be_trial!(w, u, net, cell, one(T)))
         copyto!(u, w.ut)
         copyto!(w.f, w.ft)
         r = rt
