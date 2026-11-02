@@ -100,6 +100,7 @@ include("source_terms.jl")
 include("chemistry.jl")            # per-cell chemical network interface
 include("chemistry_solvers.jl")    # ... and the two in-tree integrators
 include("chemistry_hydrogen.jl")   # ... and the hydrogen OTSA network written against it
+include("chemistry_step.jl")       # ... and the grid driver that runs a network in a simulation
 include("integrators.jl")
 include("simulation.jl")
 include("output.jl")
@@ -126,6 +127,7 @@ export RadiationGroups, ngroups, planck_integral, planck_fractions
 export AbstractCoupling, BracketedCoupling, QuokkaCoupling, AdaptiveCoupling
 export AbstractDustModel, NoDust, BateKetoDust
 export AbstractNetwork, AbstractChemSolver, RosenbrockChem, BackwardEulerChem, HydrogenOTSA
+export Photochemistry
 export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit, per_group, flux_form
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 

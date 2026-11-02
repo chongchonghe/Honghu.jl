@@ -485,3 +485,183 @@ end
     end
     @test Honghu._hydrogen_alpha(off, 1e4)[1] == 2.63e-13
 end
+
+function chem_box(; nH=1e-3, phi=1e-2, side=1e21, n=4, net, emission=nothing, hydro=false,
+                  solver=RosenbrockChem(), ic, kw...)
+    rad = RadiationPhysics(c=CGS.c_light, chat=phi * CGS.c_light, a_rad=CGS.a_rad,
+                           k_B=CGS.k_B, opacity=ConstantOpacity(0.0), beta_order=0)
+    sim = Simulation(n=(n, n, n), xhi=(side, side, side), hydro=hydro, radiation=rad,
+                     boundaries=Boundaries(Periodic()), eos=IdealGas(cv=cv_from_mu(1.0, 5 / 3)),
+                     chemistry=Photochemistry(net; solver, emission); kw...)
+    set_initial_conditions!(ic, sim)
+    sim
+end
+cellsum(sim, f) = sum(f(i, j, k) for k in sim.grid.lo[3]:sim.grid.hi[3],
+                      j in sim.grid.lo[2]:sim.grid.hi[2], i in sim.grid.lo[1]:sim.grid.hi[1])
+
+@testset "photochemistry in a simulation" begin
+    eps = 29.65 * CGS.eV
+    net = HydrogenOTSA(sigma=1.63e-18, photon_energy=eps)
+    rad(; kw...) = RadiationPhysics(; c=CGS.c_light, a_rad=CGS.a_rad, k_B=CGS.k_B,
+                                    opacity=ConstantOpacity(0.0), beta_order=0, kw...)
+    pc = Photochemistry(net)
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), chemistry=pc)                    # no radiation
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), radiation=rad(chat_limiter=StabilityBound()), chemistry=pc)
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), radiation=rad(beta_order=1), chemistry=pc)
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), chemistry=pc, nscalars=3, radiation=rad())
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), chemistry=pc,
+        radiation=RadiationPhysics(c=CGS.c_light, a_rad=CGS.a_rad, opacity=ConstantOpacity(1.0), beta_order=0))
+
+    # photon budget and energy invariant on a periodic box with uniform emission
+    pure = HydrogenOTSA(sigma=1.63e-18, photon_energy=eps, alpha0=0.0,
+                        collisional_ionization=false, cooling=false)
+    q, phi = 1e-17, 1e-2
+    sim = chem_box(net=pure, phi=phi, emission=(x, y, z, t) -> q,
+                   ic=(x, y, z) -> (rho=1e-3 * CGS.m_H, T=100.0, x_HII=0.01, Erad=0.0))
+    U, R, mH = sim.U, sim.R, CGS.m_H
+    b0 = cellsum(sim, (i, j, k) -> U[7, i, j, k] / mH + R[1, i, j, k] / eps / phi)
+    e0 = cellsum(sim, (i, j, k) -> U[5, i, j, k] + Honghu.CHI_H * U[7, i, j, k] / mH + R[1, i, j, k] / phi)
+    run!(sim, tmax=1e20, maxsteps=5, verbose=false)
+    ncell = prod(sim.grid.n)
+    b1 = cellsum(sim, (i, j, k) -> U[7, i, j, k] / mH + R[1, i, j, k] / eps / phi)
+    e1 = cellsum(sim, (i, j, k) -> U[5, i, j, k] + Honghu.CHI_H * U[7, i, j, k] / mH + R[1, i, j, k] / phi)
+    @test b1 - b0 ≈ q * sim.t * ncell rtol = 1e-8
+    @test e1 - e0 ≈ eps * q * sim.t * ncell rtol = 1e-8
+    @test sim.diag.chem_cells > 0 && sim.diag.chem_failures == 0
+
+    # the equilibrium does not depend on chat: q = alpha x^2 n^2 gives x = 0.5. The emission is
+    # added to N before each burn, and in this opaque box the burn absorbs it all at once, so
+    # x sawtooths and its end-of-step value sits below 0.5 by about alpha n x^2 dt / 2: the scheme
+    # is first order in the step, and the step is set by chat (dt = cfl / (chat sum 1/dx)).
+    # So compare at the same step, `cfl_radiation` scaled with phi, where a wrong power of phi in
+    # the emission or the rates would move x by a large factor; and check that the bias goes
+    # away with the step.
+    iso = HydrogenOTSA(sigma=6.3e-18, photon_energy=13.6 * CGS.eV, isothermal=1e4,
+                       alpha0=2.59e-13, alpha_exp=0.0, collisional_ionization=false)
+    trec = 1 / 2.59e-13
+    xeq(f, cfl) = begin
+        s = chem_box(net=iso, nH=1.0, phi=f, side=2.3e21, cfl_radiation=cfl,
+                     emission=(x, y, z, t) -> 0.25 * 2.59e-13,
+                     ic=(x, y, z) -> (rho=CGS.m_H, T=1e4, x_HII=0.01, Erad=0.0))
+        run!(s, tmax=10trec, verbose=false)
+        @test s.diag.chem_failures == 0
+        i = s.grid.lo[1]
+        s.U[7, i, i, i] / s.U[1, i, i, i]
+    end
+    xa, xb, xc = xeq(1e-2, 0.3), xeq(1e-3, 0.03), xeq(1e-2, 0.03)    # a and b take the same step
+    @test xa ≈ xb rtol = 5e-3          # not equal: the photons live 1/(chat sigma n_H0) before absorption
+    @test xa ≈ 0.5 rtol = 3e-2
+    @test 0.5 - xc < (0.5 - xa) / 5                         # first order: the bias drops as dt
+    @test xc ≈ 0.5 rtol = 3e-3
+
+    # hydro on: hydrogen mass conserved
+    hs = chem_box(net=net, n=8, side=8e18, hydro=true,
+                  ic=(x, y, z) -> (rho=1e-3 * CGS.m_H * (1 + 0.5sinpi(2x / 8e18)), vx=1e6,
+                                   T=100.0, x_HII=0.5 + 0.4sinpi(2x / 8e18), Erad=0.0))
+    m0 = sum(conserved_totals(hs).scalars)
+    run!(hs, tmax=1e20, maxsteps=10, verbose=false)
+    @test sum(conserved_totals(hs).scalars) ≈ m0 rtol = 1e-12
+    ir, jr, kr = hs.grid.lo[1]:hs.grid.hi[1], hs.grid.lo[2]:hs.grid.hi[2], hs.grid.lo[3]:hs.grid.hi[3]
+
+    # X_H0 + X_HII = 1 per cell. The burn keeps it exactly, whatever the cell holds: n_H0 + n_H+ is
+    # an invariant of the network. The advection does not, in a run with PLM or PPM, because
+    # they reconstruct rho X_s of each species on its own and the limiters are not linear (the sum
+    # drifts by a few percent with hydro alone and no chemistry), so the check with hydro is
+    # under PCM, where the interface values add up.
+    S0 = hs.U[6, ir, jr, kr] .+ hs.U[7, ir, jr, kr]
+    X0 = hs.U[7, ir, jr, kr]
+    stats = Honghu.chemistry_step!(hs, 1e13, hs.t)
+    @test stats.cells == 512 && stats.failures == 0
+    @test maximum(abs.(hs.U[6, ir, jr, kr] .+ hs.U[7, ir, jr, kr] .- S0) ./ S0) < 1e-12
+    @test maximum(abs.(hs.U[7, ir, jr, kr] .- X0) ./ S0) > 1e-2         # and the burn did something
+    hp = chem_box(net=net, n=8, side=8e18, hydro=true, reconstruction=PCM(),
+                  ic=(x, y, z) -> (rho=1e-3 * CGS.m_H * (1 + 0.5sinpi(2x / 8e18)), vx=1e6,
+                                   T=100.0, x_HII=0.5 + 0.4sinpi(2x / 8e18), Erad=0.0))
+    run!(hp, tmax=1e20, maxsteps=10, verbose=false)
+    @test maximum(abs.((hp.U[6, ir, jr, kr] .+ hp.U[7, ir, jr, kr]) ./ hp.U[1, ir, jr, kr] .- 1)) < 1e-12
+
+    # reading does not perturb, and the temperature is the network's
+    U0 = copy(hs.U)
+    T = gas_temperature(hs); field(hs, :temperature); field(hs, :X_2); primitives(hs)
+    @test hs.U == U0
+    i = hs.grid.lo[1]
+    n = [hs.U[6, i, i, i], hs.U[7, i, i, i]] ./ CGS.m_H
+    @test T[1, 1, 1] ≈ Honghu.network_temperature(net, n, hs.U[5, i, i, i] -
+                       hs.U[2, i, i, i]^2 / (2hs.U[1, i, i, i]))
+end
+
+@testset "photochemistry: refusals and reporting" begin
+    eps = 29.65 * CGS.eV
+    net = HydrogenOTSA(sigma=1.63e-18, photon_energy=eps)
+    rad = RadiationPhysics(c=CGS.c_light, a_rad=CGS.a_rad, k_B=CGS.k_B,
+                           opacity=ConstantOpacity(0.0), beta_order=0)
+    # a band reading a group the simulation does not have
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), radiation=rad,
+                                          chemistry=Photochemistry(HydrogenOTSA(group=2, sigma=1.63e-18, photon_energy=eps)))
+    @test_throws ArgumentError Simulation(n=(4, 1, 1), radiation=rad, chemistry=:hydrogen)
+    plain = Simulation(n=(4, 1, 1), radiation=rad)
+    @test_throws ArgumentError Honghu.chemistry_step!(plain, 1.0, 0.0)
+    @test plain.cw === nothing
+
+    # one workspace per interior row, each its own
+    s = chem_box(net=net, n=4, ic=(x, y, z) -> (rho=1e-3 * CGS.m_H, T=100.0, Erad=0.0))
+    @test length(s.cw) == 16 && length(unique(objectid.(getfield.(s.cw, :u)))) == 16
+    @test s.nscalars == 2 && s.U[6, s.grid.lo[1], s.grid.lo[2], s.grid.lo[3]] == 1e-3 * CGS.m_H   # x_HII = 0
+
+    # the counts add and the worst case is a maximum
+    a, b = Honghu.ChemStepStats(10, 30, 5, 1), Honghu.ChemStepStats(10, 20, 7, 0)
+    @test a + b == Honghu.ChemStepStats(20, 50, 7, 1)
+
+    # a cell the solver cannot finish is counted, in the step and in the diagnostics, and the
+    # summary says so. One Newton iteration cannot solve a cell on an ionization front.
+    f = chem_box(net=net, phi=1e-3, side=1e21, solver=BackwardEulerChem(max_iterations=1),
+                 ic=(x, y, z) -> (rho=1e-2 * CGS.m_H, T=30.0, x_HII=0.0, Erad=1e-5 * eps))
+    st = Honghu.chemistry_step!(f, 1e13, 0.0)
+    @test st.cells == 64 && st.failures == 64 && st.steps == 64 && st.max_steps == 1
+    path, io = mktemp()
+    redirect_stdout(io) do
+        run!(f, tmax=1e13, maxsteps=1, verbose=true)
+    end
+    close(io)
+    out = read(path, String)
+    @test f.diag.chem_failures > 0 && f.diag.chem_cells == 64 * f.diag.rad_substeps
+    @test occursin("WARNING: the chemistry solve failed to converge in $(f.diag.chem_failures)", out)
+    @test occursin("photochemistry: 1.00 solver steps per cell, 1 worst case", out)
+    Honghu.reset_diagnostics!(f)
+    @test f.diag.chem_cells == f.diag.chem_steps == f.diag.chem_max == f.diag.chem_failures == 0
+end
+
+@testset "photochemistry: absorption scales the flux with the photon density" begin
+    eps = 29.65 * CGS.eV
+    net = HydrogenOTSA(sigma=1.63e-18, photon_energy=eps)
+    E0 = 1e-5 * eps                                    # N / phi = 1e-2 cm^-3 = n_H: about one photon per atom
+    s = chem_box(net=net, phi=1e-3, side=1e21, solver=BackwardEulerChem(),
+                 ic=(x, y, z) -> (rho=1e-2 * CGS.m_H, T=100.0, x_HII=0.01, Erad=E0, Fx=0.3 * CGS.c_light * E0))
+    i = s.grid.lo[1]
+    st = Honghu.chemistry_step!(s, 1e12, 0.0)           # chat sigma n_H0 dt = 0.5
+    @test st.failures == 0
+    E1, Fx1, Fy1, Fz1 = s.R[1, i, i, i], s.R[2, i, i, i], s.R[3, i, i, i], s.R[4, i, i, i]
+    @test E1 < 0.9 * E0                                # the burn absorbed photons
+    @test Fx1 / (CGS.c_light * E1) ≈ 0.3 rtol = 1e-12  # so the reduced flux is what it was
+    @test Fy1 == 0 && Fz1 == 0
+end
+
+@testset "photochemistry: a network with no bands runs through the driver" begin
+    # The driver reads a network only through the interface, so the test-only chain A -> B -> C
+    # (three species, no band) runs in a simulation unchanged, and the mass fractions follow the
+    # exact solution. With no band there is no photon to emit and no flux to scale.
+    net = ChainNet(1.0, 10.0)
+    rad = RadiationPhysics(c=1.0, a_rad=1.0, opacity=ConstantOpacity(0.0), beta_order=0)
+    sim = Simulation(n=(4, 1, 1), hydro=false, radiation=rad, boundaries=Boundaries(Periodic()),
+                     chemistry=Photochemistry(net; solver=RosenbrockChem(reltol=1e-9, abstol=1e-12)))
+    set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0, X=(1.0, 0.0, 0.0), Erad=1.0), sim)
+    E0 = copy(sim.R)
+    run!(sim, tmax=1.0, verbose=false)
+    i = sim.grid.lo[1]
+    X = sim.U[6:8, i, 1, 1] ./ sim.U[1, i, 1, 1]
+    @test sim.nscalars == 3 && sim.diag.chem_failures == 0 && sim.diag.chem_cells > 0
+    @test X[1] ≈ chain_exact(1.0, 1.0, 10.0)[1] rtol = 1e-6
+    @test X[2] ≈ chain_exact(1.0, 1.0, 10.0)[2] rtol = 1e-6
+    @test sum(X) ≈ 1 atol = 1e-12
+    @test sim.R == E0                                   # the radiation is not the chain's business
+end

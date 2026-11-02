@@ -132,3 +132,15 @@ end
     # 32^3 has 8x the cells; allocation must stay within a small constant factor
     @test b32 < 4 * b16 + 200_000
 end
+
+@testset "chemistry step does not allocate per cell (backward Euler)" begin
+    net = HydrogenOTSA(sigma=1.63e-18, photon_energy=29.65 * Honghu.CGS.eV)
+    rad = RadiationPhysics(c=Honghu.CGS.c_light, chat=1e-3 * Honghu.CGS.c_light,
+                           a_rad=Honghu.CGS.a_rad, k_B=Honghu.CGS.k_B,
+                           opacity=ConstantOpacity(0.0), beta_order=0)
+    sim = Simulation(n=(16, 16, 16), xhi=(1e21, 1e21, 1e21), hydro=false, radiation=rad,
+                     chemistry=Photochemistry(net; solver=BackwardEulerChem()))
+    set_initial_conditions!((x, y, z) -> (rho=1e-3 * Honghu.CGS.m_H, T=100.0, x_HII=0.01,
+                                          Erad=1e-12), sim)
+    @test bytes_per_cell(() -> Honghu.chemistry_step!(sim, 1e10, 0.0), sim) < 8.0
+end
