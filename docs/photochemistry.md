@@ -93,7 +93,7 @@ A recombination straight to the ground state emits a photon that can itself ioni
 
 ### 1.6 The reduced speed of light
 
-Light crosses an H II region in a few hundred years, and the region evolves over hundreds of millions of years. An explicit transport step limited by $c$ would be impractically short. The reduced speed of light approximation (RSLA; Gnedin & Abel 2001) transports the photons at $\hat c = \phi\,c$ with $\phi < 1$, which lengthens the transport step by $1/\phi$ (section 2.3).
+Light crosses an H II region in a few hundred years, and the region evolves over hundreds of millions of years. An explicit transport step limited by $c$ would be impractically short. The reduced speed of light approximation (RSLA; Gnedin & Abel 2001) transports the photons at $\hat c = \phi\,c$ with $\phi < 1$, which lengthens the transport step by $1/\phi$ (section 2.1).
 
 The equations of section 1.2 are the RSLA in Honghu's form: $\phi$ multiplies the time derivative of the radiation, and nothing on the gas side. Three consequences follow:
 
@@ -143,41 +143,27 @@ The equations of section 1 have three parts of very different character:
 
 - **Hydrodynamics,** with the advection of the species: hyperbolic, with signal speeds $|\mathbf v| + c_s$.
 - **Radiation transport:** hyperbolic, with signal speed $\hat c$, usually far larger than $|\mathbf v| + c_s$.
-- **The local source terms:** chemistry, heating and cooling, and the absorption and emission of photons. They couple the variables within a cell but not between cells, and they are stiff (section 2.4).
+- **The local source terms:** chemistry, heating and cooling, and the absorption and emission of photons. They couple the variables within a cell but not between cells, and they are stiff (section 2.3).
 
 Each part is advanced by the method that suits it, and the parts are combined by operator splitting. Over one step $\Delta t$, with $\mathcal H$, $\mathcal T$ and $\mathcal C$ the solution operators of the three parts,
 
 $$U^{n+1} = \Big[\mathcal C_{\Delta t_r}\,\mathcal T_{\Delta t_r}\Big]^{n_{\rm sub}}\,\mathcal H_{\Delta t}\,U^n , \qquad \Delta t_r = \Delta t/n_{\rm sub} .$$
 
-The hydrodynamics takes one step of $\Delta t$, and the radiation subcycles within it, because its own stable step is far shorter (section 2.3). In each radiation substep the photons are transported first, and the chemistry then acts on what the transport delivered, over the whole substep. This is the order of ATON and of Quokka's chemical bands. It is Lie splitting, so the splitting error is first order in the step.
+The hydrodynamics takes one step of $\Delta t$, and the radiation subcycles within it, because its stable step, set by the Courant condition at $\hat c$, is far shorter: $\Delta t_r \propto \Delta x/\hat c$. The reduced speed of light lengthens it by $1/\phi$, and that is what makes the problem affordable. The two transport operators are those of Honghu's hydrodynamics and radiation transport, and are not described here. In each radiation substep the photons are transported first, and the chemistry then acts on what the transport delivered, over the whole substep. This is the order of ATON and of Quokka's chemical bands. It is Lie splitting, so the splitting error is first order in the step.
+
+The chemistry step is one radiation substep. A smaller $\hat c$ therefore makes the gas-side rates (ionization, recombination and cooling) stiffer relative to the step, and the splitting error below larger.
 
 The emission is part of the chemistry operator: the photons a source emits during a substep are added to $N_\gamma$ at the start of it, and the chemistry then absorbs them. In an opaque cell that makes the gas ionize early in the substep and recombine for the rest of it, so the ionization fraction at the end of the substep lies below the equilibrium by about $\alpha_B n_{\rm H} x^2\,\Delta t_r/2$, with $x = n_{\rm H^+}/n_{\rm H}$. This is a first-order splitting error. In a uniform test with an exact equilibrium of $x = 0.5$, it gave $x = 0.4939$ for $\Delta t_r = 0.05\,t_{\rm rec}$ and $0.4450$ for $\Delta t_r = 0.5\,t_{\rm rec}$, and the error fell linearly as the substep was cut ([findings, section 5](photoionization-findings.md#two-choices-in-the-scheme-that-the-results-depend-on)). The photons that arrive by transport enter each substep the same way. A Strang splitting of the emission, half before and half after the chemistry, or the emission as a term of the local ODE, would raise the order; neither is implemented.
 
-### 2.2 Finite volumes and the method of lines
+### 2.2 Advection of the species
 
-The hyperbolic parts are discretized by finite volumes on a Cartesian grid, in the method of lines: space is discretized first, into a system of ODEs for the cell averages $\mathrm dU/\mathrm dt = L(U)$, and that system is then integrated in time.
-
-**The gas.** The primitive variables are reconstructed to the cell faces (piecewise constant, linear or parabolic), a Riemann solver (HLLC or local Lax-Friedrichs) gives the flux through each face, and the cell update is the flux divergence. The time integration is a strong-stability-preserving Runge-Kutta method (Shu & Osher 1988), third order by default.
-
-**The species.** The species are advected with the gas consistently. The mass flux $F_\rho$ through a face comes from the Riemann solver, and the flux of each species is that mass flux times the mass fraction on the side the mass comes from,
+The species are advected with the gas consistently. The mass flux $F_\rho$ through a cell face comes from the hydrodynamic Riemann solver, and the flux of each species is that mass flux times the mass fraction on the side the mass comes from,
 
 $$F_{\rho X_s} = F_\rho\,X_s^{\rm upwind} , \qquad X_s^{\rm upwind} = \frac{(\rho X_s)_{\rm face}}{\rho_{\rm face}} ,$$
 
 with each $\rho X_s$ reconstructed like the density. A uniform $X_s$ is therefore advected exactly, to round-off, in any flow. For the HLLC solver this flux is the same as treating $\rho X_s$ as extra conserved components inside the solver, as Quokka does; for the local Lax-Friedrichs solver it is less diffusive. The face values of the species are limited separately, so they do not add up to the face density, and the species fluxes do not add up to the mass flux: with second- and third-order reconstruction the sum $\sum_s X_s$ of a cell drifts from one, by $10^{-2}$ after ten steps of a coarse test. The species of each cell are therefore rescaled to add up to $\rho$ at the start of every Runge-Kutta stage, before the chemistry reads them, and at the end of every step, as Quokka does with its mass scalars. This conserves the total mass but not each species separately. Consistent multi-fluid advection (CMA; Plewa & Müller 1999), which normalises the face mass fractions so that the species fluxes add up to the mass flux, would conserve each species, and is not implemented.
 
-**The radiation.** The moments are evolved with an HLL Riemann solver, with wave-speed estimates from the M1 closure, and in time with the IMEX PD-ARS scheme (Chu et al. 2019), which treats the transport explicitly and the thermal matter-radiation coupling implicitly. The ionizing band has no thermal coupling, so for it the scheme is an explicit second-order strong-stability-preserving Runge-Kutta method.
-
-### 2.3 Time steps and subcycling
-
-Each explicit operator has its own stable step. The hydrodynamic step is limited by the Courant condition on $|\mathbf v| + c_s$, and the radiation step by the one on $\hat c$,
-
-$$\Delta t_r \leq \frac{C_r}{\hat c\sum_d 1/\Delta x_d} ,$$
-
-with Courant number $C_r = 0.3$ by default. The radiation therefore takes $n_{\rm sub} = \lceil \Delta t/\Delta t_r\rceil$ substeps per hydrodynamic step, and a cap on $n_{\rm sub}$ shortens the hydrodynamic step instead when the two scales are too far apart. With the gas at rest there is no hydrodynamic step, and each step is one radiation substep.
-
-The reduced speed of light lengthens $\Delta t_r$ by $1/\phi$, and that is what makes the problem affordable. It also lengthens the chemistry step, which is one substep. A smaller $\hat c$ therefore makes the gas-side rates, ionization, recombination and cooling, stiffer relative to the step, and the splitting error of section 2.1 larger.
-
-### 2.4 The local problem: an error-controlled stiff integrator
+### 2.3 The local problem: an error-controlled stiff integrator
 
 In every cell, for every substep, the chemistry operator integrates the local part of the equations,
 
@@ -200,13 +186,13 @@ On the Iliev tests the integrator takes about 15 internal steps per cell per sub
 
 **The flux.** The absorption attenuates the photon flux at the same rate as the photon density, and the chemistry adds no flux: emission is isotropic. So the flux is not integrated as further unknowns. It is multiplied by $N_\gamma^{\rm end}/N_\gamma^{\rm start}$, the factor by which the photon density fell over the substep, which is the exact attenuation factor of the flux. Quokka does the same with its `SKIP_PHOTOCHEMFLUX` option.
 
-### 2.5 The alternative: one backward-Euler step
+### 2.4 The alternative: one backward-Euler step
 
 The local problem can also be solved with a single implicit step over the whole substep. The backward-Euler step is the root of
 
 $$G(u) = u - u^n - \Delta t_r\,S(u) = 0 ,$$
 
-which Newton's method solves with the linear systems $(I - \Delta t_r J)\,\delta = -G(u)$. The Newton update is damped by a backtracking line search on the size of $G$, measured with the scales of section 2.4, and the species and photon densities are kept non-negative. It is first order in $\Delta t_r$, needs no error control, and costs about 0.1 µs per cell, 45 to 100 times less than the Rosenbrock integrator.
+which Newton's method solves with the linear systems $(I - \Delta t_r J)\,\delta = -G(u)$. The Newton update is damped by a backtracking line search on the size of $G$, measured with the scales of section 2.3, and the species and photon densities are kept non-negative. It is first order in $\Delta t_r$, needs no error control, and costs about 0.1 µs per cell, 45 to 100 times less than the Rosenbrock integrator.
 
 Its weakness is the nonlinear solve. A single backward-Euler step is an equation that Newton's method can fail to solve, in three situations that are known:
 
@@ -220,7 +206,7 @@ On a stress grid of 2592 cells it failed to converge in 10% of them, and on the 
 
 Two principles shape the module.
 
-**The physics is written once, and the numerics never restate it.** The local problem is defined by a *network* ([`AbstractNetwork`](reference/chemistry.qmd#AbstractNetwork)): its species, its bands, the source term $S(u)$ and its exact Jacobian, and the scales of its unknowns. It is solved by an *integrator* ([`AbstractChemSolver`](reference/chemistry.qmd#AbstractChemSolver)) that reads the network only through those. The two integrators of sections 2.4 and 2.5 therefore solve exactly the same problem, so a difference between their answers is a difference of method and nothing else. A new network, for instance hydrogen and helium with three bands, or a new integrator, can be added without changing the other. This is the pattern of Honghu's matter-radiation coupling, and the test suite runs a toy network with an exact solution through both integrators to keep the interface honest.
+**The physics is written once, and the numerics never restate it.** The local problem is defined by a *network* ([`AbstractNetwork`](reference/chemistry.qmd#AbstractNetwork)): its species, its bands, the source term $S(u)$ and its exact Jacobian, and the scales of its unknowns. It is solved by an *integrator* ([`AbstractChemSolver`](reference/chemistry.qmd#AbstractChemSolver)) that reads the network only through those. The two integrators of sections 2.3 and 2.4 therefore solve exactly the same problem, so a difference between their answers is a difference of method and nothing else. A new network, for instance hydrogen and helium with three bands, or a new integrator, can be added without changing the other. This is the pattern of Honghu's matter-radiation coupling, and the test suite runs a toy network with an exact solution through both integrators to keep the interface honest.
 
 **What is not a term of the local ODE stays out of it.** The emission is a source from outside the cell, the flux attenuation follows from the solution rather than being part of it, and keeping the stored state admissible is the grid's business. All three are done around the local solve, by the operator of section 2.1, and none is in $S(u)$. Putting any of them into $S$ would make the integrators solve different problems.
 
@@ -246,7 +232,6 @@ The model and the method have these limits, each of which a run must respect:
 
 - Aubert, D. & Teyssier, R. 2008, MNRAS, 387, 295: a radiative transfer scheme for cosmological reionization based on a local Eddington tensor (ATON).
 - Cen, R. 1992, ApJS, 78, 341: the collisional-excitation cooling of hydrogen.
-- Chu, R., Endeve, E., Hauck, C. D. & Mezzacappa, A. 2019, J. Comput. Phys., 389, 62: the IMEX PD-ARS scheme.
 - Gnedin, N. Y. & Abel, T. 2001, New Astron., 6, 437: the reduced speed of light approximation.
 - Iliev, I. T., et al. 2006, MNRAS, 371, 1057: the Cosmological Radiative Transfer Codes Comparison Project, Tests 1 and 2.
 - Katz, N., Weinberg, D. H. & Hernquist, L. 1996, ApJS, 105, 19: the form of the cooling rates (their Table 1).
@@ -255,5 +240,4 @@ The model and the method have these limits, each of which a run must respect:
 - Plewa, T. & Müller, E. 1999, A&A, 342, 179: consistent multi-fluid advection.
 - Shampine, L. F. & Reichelt, M. W. 1997, SIAM J. Sci. Comput., 18, 1: the MATLAB ODE suite and its `ode23s` method.
 - Shapiro, P. R., Iliev, I. T., Alvarez, M. A. & Scannapieco, E. 2006, ApJ, 648, 922: ionization fronts at a finite speed of light.
-- Shu, C.-W. & Osher, S. 1988, J. Comput. Phys., 77, 439: strong-stability-preserving Runge-Kutta methods.
 - Quokka's photoionization module: `docs/markdown/photoionization.md` and `src/networks/photoionization_H_caseB_handwritten/actual_rhs.H` in the Quokka repository.
