@@ -35,8 +35,9 @@ function _chem_tgrad!(dT, u, p::ChemParams, _)
 end
 
 # One integrator, created once and re-aimed at each cell with `reinit!`. Creating
-# one per cell costs about 19 us and 8 kB; reusing it costs about 11 us and
-# 1.2 kB, and the difference is the whole allocation and most of the time.
+# one per cell costs about 8 kB and 19 us; reusing it costs about 1 kB and 11 us
+# (design spec, section 5, measured on a three-unknown stiff cell), so the
+# difference is most of the allocation and a good part of the time.
 #
 # `abstol` is the integrator's *own* vector, not the one handed to `init`:
 # `init` copies it, so a reference kept to the original would be updated per cell
@@ -70,9 +71,13 @@ iteration to converge before it can take a step.
     any unit system and a species with a negligible share of the cell does not
     drive the step size to zero on its own relative error.
 
-It allocates, a few hundred bytes to a kilobyte a call on a three-species toy
-network, all inside OrdinaryDiffEq. The workspace holds one reused integrator,
-so give each thread its own and never share one.
+OrdinaryDiffEq's own warnings are switched off (`verbose = SciMLLogging.None()`).
+A cell that fails is reported through `ChemStats.converged`, which the grid
+driver counts and summarises, and a threaded run would otherwise print one long
+warning for every failing cell.
+
+It allocates about a kilobyte a call, all inside OrdinaryDiffEq. The workspace
+holds one reused integrator, so give each thread its own and never share one.
 
 ```julia
 solver = RosenbrockChem(alg = Rodas5P(), reltol = 1e-4)
@@ -97,7 +102,7 @@ function chem_workspace(s::RosenbrockChem, net::AbstractNetwork, ::Type{T}) wher
     # cell's answer does not depend on which cell came before it; the test of a
     # reused workspace pins that.
     integ = init(prob, s.alg; reltol=T(s.reltol), abstol=fill(T(s.abstol), n),
-                 save_everystep=false, dense=false)
+                 save_everystep=false, dense=false, verbose=SciMLLogging.None())
     return RosenbrockWork(integ, p, ones(T, n), integ.opts.abstol)
 end
 

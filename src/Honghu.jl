@@ -48,7 +48,7 @@ using Dates          # provenance timestamps only; a stdlib, not a package
 # a blanket `using` would make those definitions an error.
 using LinearAlgebra: lu!, ldiv!
 
-# Eight names, not the package, and for the same reason: OrdinaryDiffEq exports
+# Nine names, not the package, and for the same reason: OrdinaryDiffEq exports
 # `step!`, which this package also exports, so a blanket `using` would leave that
 # one name ambiguous for anyone with both in scope -- `step!(sim)` would have to
 # be spelled `Honghu.step!`. Naming what is used keeps `step!` this package's.
@@ -56,12 +56,15 @@ using LinearAlgebra: lu!, ldiv!
 # `AdaptiveCoupling` in `coupling_ode.jl` and `RosenbrockChem` in
 # `chemistry_solvers.jl` are the only things that need them: `Rosenbrock23` is
 # the default algorithm of both and the rest state the problem and read the
-# answer. `init`, `solve!` and `reinit!` are the last three, for the chemistry
-# integrator that is created once per workspace and re-aimed at each cell rather
-# than built anew. All eight come from the meta-package; the two sub-package
-# dependencies this file used to name went with `ImplicitEulerStepper`.
+# answer. `init`, `solve!` and `reinit!` are for the chemistry integrator that is
+# created once per workspace and re-aimed at each cell rather than built anew.
+# `SciMLLogging` is the module holding OrdinaryDiffEq's verbosity presets, and the
+# last name: `RosenbrockChem` passes `SciMLLogging.None()` so that a failing cell
+# is reported through its `ChemStats` and not by a warning per cell. All nine come
+# from the meta-package; the two sub-package dependencies this file used to name
+# went with `ImplicitEulerStepper`.
 using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23,
-                      init, solve!, reinit!
+                      init, solve!, reinit!, SciMLLogging
 
 # `BracketedCoupling` hands its one scalar equation to a bracketing root-finder
 # through SciMLBase's interface, and `Brent` is the default one. `solve` is
