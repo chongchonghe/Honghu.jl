@@ -20,7 +20,7 @@ All notable changes to Honghu.jl are recorded here. The format follows [Keep a C
 
 ### Changed
 
-- `amend_rad` counts a radiation cell as repaired only when the state changes: an energy density exactly at the floor is admissible and is no longer counted, where it was counted in every call. `nrepaired(sim)` and `Diagnostics.floors_rad` therefore report fewer hits, only the exactly-at-floor ones, which matters for a run whose dark cells hold the floor, as in photoionization (101,969 counts for 10,240 cell updates in 20 steps of Stromgren Test 1 at $n = 8$, which `run!` called unphysical, now 0). Such a cell's flux is no longer rewritten as $(F/cE)\,cE$ either, so runs with cells at the floor carrying a flux differ from before by rounding error in a flux many orders of magnitude below $cE$ (at most $8\times10^{-14}$ relative in that run, whose gas state is bit for bit the same); the non-photoionization runs of the regression baseline are bit for bit unchanged.
+- `amend_rad` counts a radiation cell as repaired only when the state was inadmissible: an energy density below the floor or NaN, or a flux that had to be rescaled. An energy density exactly at the floor is admissible and is no longer counted, where it was counted in every call. `nrepaired(sim)` and `Diagnostics.floors_rad` therefore report fewer hits, only the exactly-at-floor ones, which matters for a run whose dark cells hold the floor, as in photoionization (101,969 counts for 10,240 cell updates in 20 steps of Stromgren Test 1 at $n = 8$, which `run!` called unphysical, now 0). Only the counts change: the state of every run is bit for bit what it was.
 
 ### Fixed
 
