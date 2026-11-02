@@ -53,6 +53,20 @@ end
     @test bytes_per_cell(() -> Honghu.hydro_timestep(hw.prim, sim.eos, g, 0.4), sim) < LIMIT
 end
 
+@testset "scalar kernels do not allocate per cell" begin
+    LIMIT = 8.0
+    sim = Simulation(n=(24, 24, 24), nscalars=2, boundaries=Boundaries(Periodic()))
+    set_initial_conditions!((x, y, z) -> (rho=1 + 0.2sinpi(2x), vx=0.3, p=1.0, X=(0.4, 0.6)), sim)
+    hw, g, nv = sim.hw, sim.grid, Honghu.nhydrovars(sim)
+    Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g, 2)
+    Honghu.reconstruct!(hw.qL, hw.qR, hw.prim, PPM(), Val(1), g, nv)
+    @test bytes_per_cell(() -> Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g, 2), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos,
+                                                    sim.riemann, Val(1), g, 2), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.enforce_floors!(sim.U, sim.eos, g, sim.floors, 2), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.enforce_scalar_floors!(sim.U, g, 2), sim) < LIMIT
+end
+
 @testset "radiation kernels do not allocate per cell" begin
     LIMIT = 8.0
 

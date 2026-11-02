@@ -20,7 +20,7 @@ function Floors(; rho=1e-30, pressure=1e-30, erad=1e-30)
 end
 
 """
-    enforce_floors!(U, eos, grid, floors) -> Int
+    enforce_floors!(U, eos, grid, floors, nscalars = 0) -> Int
 
 Project the conserved gas state onto the admissible set, over the whole array,
 ghost cells included. Cells below `floors.rho` are reset to a quiescent floor
@@ -28,7 +28,16 @@ state; cells whose internal energy is below `floors.pressure/(gamma-1)` keep
 their momentum and have only the thermal part reset.
 
 Returns the number of cells repaired, which the driver accumulates so that a
-silently unphysical run is visible.
+silently unphysical run is visible. Only the hydro repairs are counted: a
+density reset also rescales the `nscalars` mass-scalar rows, but that is not a
+repair of its own.
+
+The density reset keeps each mass fraction `X_s = rho X_s / rho` of the cell and
+writes `floors.rho * X_s`, so a scalar is not erased by the floor. Quokka scales
+`rho X_s` by `rho / rho_new` and renormalises; this departs from it on purpose,
+because a floored cell is a state the scheme has already lost and the one thing
+worth keeping is what was in it. A cell whose density was not positive and
+finite has no mass fraction to keep and gets `X_s = 0`.
 
 This is deliberately a *separate* operation from [`cons2prim!`](@ref), matching
 Quokka's split between `EnforceLimits` and its `const`-qualified
@@ -37,7 +46,7 @@ diagnostic field silently mutated the state being diagnosed: results depended on
 how often you looked, and the repairs went uncounted. Keep them apart.
 """
 function enforce_floors!(U::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGrid{T},
-                         floors::Floors{T}) where {T}
+                         floors::Floors{T}, nscalars::Integer=0) where {T}
     n1, n2, n3 = g.dims
     nbad = Threads.Atomic{Int}(0)
     eint_min = internal_energy(eos, floors.rho, floors.pressure)
@@ -46,13 +55,20 @@ function enforce_floors!(U::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGr
         @inbounds for i in 1:n1
             rho = U[IRHO, i, j, k]
             if !(rho > floors.rho)
-                # near-vacuum or NaN: reset to a quiescent floor state
+                # near-vacuum or NaN: reset to a quiescent floor state, keeping
+                # the mass fraction of each scalar
+                rho_old = rho
                 rho = floors.rho
                 U[IRHO, i, j, k] = rho
                 U[IMX, i, j, k] = zero(T)
                 U[IMY, i, j, k] = zero(T)
                 U[IMZ, i, j, k] = zero(T)
                 U[IEGAS, i, j, k] = eint_min
+                for s in 1:nscalars
+                    idx = scalar_index(s)
+                    Xs = (rho_old > 0 && isfinite(rho_old)) ? U[idx, i, j, k] / rho_old : zero(T)
+                    U[idx, i, j, k] = Xs * rho
+                end
                 bad += 1
             end
             inv_rho = one(T) / rho
@@ -72,10 +88,50 @@ function enforce_floors!(U::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGr
 end
 
 """
-    cons2prim!(prim, U, eos, grid)
+    enforce_scalar_floors!(U, grid, nscalars) -> Int
+
+Set every negative or NaN mass-scalar density `rho X_s` to zero, over the whole
+array, ghost cells included, and return the number of cells changed. A scalar is
+a mass fraction and cannot be negative; a small negative value is what
+reconstruction leaves behind at a sharp front. There is no renormalisation, so
+`sum_s X_s` is not forced to one: the scalars here are passive and independent,
+and the clip only has to keep them admissible. The count goes to
+`Diagnostics.floors_scalar`, kept apart from the gas floors because a scalar
+clip says nothing about the gas.
+
+Separate from [`enforce_floors!`](@ref) so that a run without scalars never
+reaches it.
+"""
+function enforce_scalar_floors!(U::AbstractArray{T,4}, g::CartesianGrid{T},
+                                nscalars::Integer) where {T}
+    nscalars > 0 || return 0
+    n1, n2, n3 = g.dims
+    nbad = Threads.Atomic{Int}(0)
+    threaded_jk(1:n2, 1:n3) do j, k
+        local bad = 0
+        @inbounds for i in 1:n1
+            local changed = false
+            for s in 1:nscalars
+                idx = scalar_index(s)
+                if !(U[idx, i, j, k] >= zero(T))
+                    U[idx, i, j, k] = zero(T)
+                    changed = true
+                end
+            end
+            changed && (bad += 1)
+        end
+        bad > 0 && Threads.atomic_add!(nbad, bad)
+    end
+    return nbad[]
+end
+
+"""
+    cons2prim!(prim, U, eos, grid, nscalars = 0)
 
 Fill `prim = (rho, vx, vy, vz, p)` from the conserved state `U` over the whole
-array, ghost cells included.
+array, ghost cells included. The `nscalars` mass-scalar rows are copied
+unchanged, so they hold `rho X_s` and not `X_s`: that is what is reconstructed,
+as in Quokka.
 
 `U` is **only read**. Every caller — the right-hand side, `timestep`, and every
 diagnostic and plotting path — gets the same guarantee, so looking at a
@@ -84,7 +140,7 @@ simulation cannot change it. Admissibility is the caller's job, via
 whatever the arithmetic gives, including negative pressures.
 """
 function cons2prim!(prim::A, U::A, eos::AbstractEOS,
-                    g::CartesianGrid{T}) where {T,A<:AbstractArray{T,4}}
+                    g::CartesianGrid{T}, nscalars::Integer=0) where {T,A<:AbstractArray{T,4}}
     n1, n2, n3 = g.dims
     threaded_jk(1:n2, 1:n3) do j, k
         @inbounds for i in 1:n1
@@ -99,6 +155,9 @@ function cons2prim!(prim::A, U::A, eos::AbstractEOS,
             prim[IVY, i, j, k] = vy
             prim[IVZ, i, j, k] = vz
             prim[IPRE, i, j, k] = pressure(eos, rho, eint)
+            for s in 1:nscalars
+                prim[scalar_index(s), i, j, k] = U[scalar_index(s), i, j, k]
+            end
         end
     end
     return prim
@@ -122,7 +181,7 @@ function prim2cons!(U::A, prim::A, eos::AbstractEOS, g::CartesianGrid{T}) where 
 end
 
 """
-    hydro_fluxes!(flux, qL, qR, prim, eos, solver, Val(D), grid)
+    hydro_fluxes!(flux, qL, qR, prim, eos, solver, Val(D), grid, nscalars = 0)
 
 Solve the Riemann problem at every interface normal to direction `D` with
 `solver` (an [`AbstractRiemannSolver`](@ref)) and store the resulting
@@ -133,6 +192,14 @@ pressure, or a NaN) the interface falls back to the piecewise-constant state of
 the adjoining cell, which is guaranteed admissible because the floors have
 already been applied.
 
+The `nscalars` mass scalars are carried by the Riemann mass flux `F_rho`: the
+flux of `rho X_s` is `F_rho` times the mass fraction of the upwind side, taken
+from the reconstructed `rho X_s / rho` on that side (or from the cell-centred
+state if that side fell back). So a uniform `X_s` stays uniform to round-off
+whatever the solver does, because the flux of `rho X_s` and `F_rho` move
+together, and `X_s` cannot leave the range of the upwind values. The solvers
+themselves do not know about scalars.
+
 The carbuncle inputs `du` and `dw` are computed for every solver, not gated on
 whether the chosen one consumes them. Quokka does the same
 (`hydro_system.hpp:1484-1498`), and reuses the intermediates for its velocity
@@ -141,7 +208,8 @@ and a Riemann solve.
 """
 function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
                        solver::AbstractRiemannSolver,
-                       ::Val{D}, g::CartesianGrid{T}) where {T,A<:AbstractArray{T,4},D}
+                       ::Val{D}, g::CartesianGrid{T},
+                       nscalars::Integer=0) where {T,A<:AbstractArray{T,4},D}
     e1, e2, e3 = _shift(Val(D))
     s1 = _tshift1(Val(D))
     s2 = _tshift2(Val(D))
@@ -162,7 +230,9 @@ function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
             uL = qL[iu, i, j, k]
             vL = qL[iv, i, j, k]
             wL = qL[iw, i, j, k]
+            fallbackL = false
             if !(rhoL > 0) || !(pL > 0)
+                fallbackL = true
                 rhoL = prim[IRHO, im, jm, km]
                 pL = prim[IPRE, im, jm, km]
                 uL = prim[iu, im, jm, km]
@@ -175,7 +245,9 @@ function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
             uR = qR[iu, i, j, k]
             vR = qR[iv, i, j, k]
             wR = qR[iw, i, j, k]
+            fallbackR = false
             if !(rhoR > 0) || !(pR > 0)
+                fallbackR = true
                 rhoR = prim[IRHO, i, j, k]
                 pR = prim[IPRE, i, j, k]
                 uR = prim[iu, i, j, k]
@@ -217,6 +289,14 @@ function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
             flux[iv, i, j, k] = F[3]
             flux[iw, i, j, k] = F[4]
             flux[IEGAS, i, j, k] = F[5]
+
+            # passive scalars ride the mass flux, with the upwind mass fraction
+            for s in 1:nscalars
+                idx = scalar_index(s)
+                XL = (fallbackL ? prim[idx, im, jm, km] : qL[idx, i, j, k]) / rhoL
+                XR = (fallbackR ? prim[idx, i, j, k] : qR[idx, i, j, k]) / rhoR
+                flux[idx, i, j, k] = F[1] * (F[1] >= zero(T) ? XL : XR)
+            end
         end
     end
     return nothing

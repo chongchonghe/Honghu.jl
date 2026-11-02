@@ -25,6 +25,7 @@ them with [`reset_diagnostics!`](@ref).
 | `rad_substeps` | IMEX radiation substeps taken |
 | `floors_hydro` | cell updates that hit a gas density or pressure floor |
 | `floors_rad` | cell updates projected back onto the M1 admissible set |
+| `floors_scalar` | cells where a negative mass-scalar density was clipped to zero |
 | `floors_presolve` | cells whose radiation energy was floored before a coupling solve, because the energy the solve conserves was not positive |
 | `repairs_postsolve` | cells whose radiation state was repaired after a coupling solve |
 | `newton_cells` | cells passed through the implicit coupling solve |
@@ -41,6 +42,7 @@ mutable struct Diagnostics
     rad_substeps::Int
     floors_hydro::Int
     floors_rad::Int
+    floors_scalar::Int
     floors_presolve::Int
     repairs_postsolve::Int
     newton_cells::Int
@@ -49,7 +51,7 @@ mutable struct Diagnostics
     newton_failures::Int
 end
 
-Diagnostics() = Diagnostics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+Diagnostics() = Diagnostics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 """
     reset_diagnostics!(sim) -> Diagnostics
@@ -59,7 +61,7 @@ separately from the transient that preceded it.
 """
 function reset_diagnostics!(sim)
     d = sim.diag
-    d.steps = d.rad_substeps = d.floors_hydro = d.floors_rad = 0
+    d.steps = d.rad_substeps = d.floors_hydro = d.floors_rad = d.floors_scalar = 0
     d.floors_presolve = d.repairs_postsolve = 0
     d.newton_cells = d.newton_iterations = d.newton_max = d.newton_failures = 0
     return d
@@ -442,9 +444,11 @@ end
 function _hydro_sweep!(dU, sim::Simulation, ::Val{D}) where {D}
     hw = sim.hw
     g = sim.grid
-    reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, NHYDRO)
-    hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g)
-    flux_divergence!(dU, hw.flux, Val(D), g, NHYDRO)
+    nvar = nhydrovars(sim)
+    reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, nvar)
+    hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g,
+                  sim.nscalars)
+    flux_divergence!(dU, hw.flux, Val(D), g, nvar)
     return nothing
 end
 
@@ -458,8 +462,9 @@ directional sweep per active dimension.
 function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
     g = sim.grid
     fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
-    sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors)
-    cons2prim!(sim.hw.prim, U, sim.eos, g)
+    sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars)
+    sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars)
+    cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars)
     fill!(dU, zero(T))
     g.active[1] && _hydro_sweep!(dU, sim, Val(1))
     g.active[2] && _hydro_sweep!(dU, sim, Val(2))
@@ -518,7 +523,7 @@ function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
     copyto!(hw.U0, sim.U)
     for (a, b, c) in tableau(sim.integrator)
         hydro_rhs!(hw.dU, sim.U, sim)
-        combine!(sim.U, T(a), hw.U0, T(b), sim.U, T(c) * dt, hw.dU, g, NHYDRO)
+        combine!(sim.U, T(a), hw.U0, T(b), sim.U, T(c) * dt, hw.dU, g, nhydrovars(sim))
     end
     return sim
 end
@@ -775,8 +780,8 @@ nrepaired(sim::Simulation) = sim.diag.floors_hydro + sim.diag.floors_rad
 """
     enforce_state!(sim) -> Int
 
-Project both subsystems onto their admissible sets and accumulate the repair
-count. Called at the end of every step and after the initial conditions, which
+Project both subsystems, and the mass scalars if there are any, onto their
+admissible sets and accumulate the repair count. Called at the end of every step and after the initial conditions, which
 is what lets the conversion kernels and every diagnostic path stay read-only.
 
 The analogue of Quokka's `EnforceLimits`, called from the same place in the
@@ -785,8 +790,15 @@ driver.
 function enforce_state!(sim::Simulation)
     n = 0
     if sim.hydro_enabled
-        m = enforce_floors!(sim.U, sim.eos, sim.grid, sim.floors)
+        m = enforce_floors!(sim.U, sim.eos, sim.grid, sim.floors, sim.nscalars)
         sim.diag.floors_hydro += m
+        n += m
+    end
+    # Also with hydro off: a Strang source or the initial conditions can still
+    # leave a scalar negative, and the scalars are not the gas's to repair.
+    if sim.nscalars > 0
+        m = enforce_scalar_floors!(sim.U, sim.grid, sim.nscalars)
+        sim.diag.floors_scalar += m
         n += m
     end
     if has_radiation(sim)
@@ -865,6 +877,8 @@ function _print_summary(sim::Simulation, elapsed)
     nfl = d.floors_hydro + d.floors_rad
     nfl > 0 && @printf("note: %d cell updates hit a positivity floor (%d gas, %d radiation)\n",
                        nfl, d.floors_hydro, d.floors_rad)
+    d.floors_scalar > 0 &&
+        @printf("note: %d cell updates clipped a negative mass scalar to zero\n", d.floors_scalar)
     if d.newton_cells > 0
         @printf("      implicit coupling: %.2f Newton iterations per cell, %d worst case, %d substeps\n",
                 d.newton_iterations / d.newton_cells, d.newton_max, d.rad_substeps)
@@ -935,8 +949,10 @@ end
 """
     primitives(sim)
 
-A fresh `(NHYDRO, nx, ny, nz)` array of interior primitive variables
-`(rho, vx, vy, vz, p)`. Convenience for analysis and plotting.
+A fresh `(nhydrovars(sim), nx, ny, nz)` array of interior primitive variables
+`(rho, vx, vy, vz, p)`, followed by one row per mass scalar. Those rows hold the
+conserved density `rho X_s`, not the mass fraction `X_s`, exactly as the
+reconstruction sees them. Convenience for analysis and plotting.
 
 Does not modify `sim`. This is load-bearing, not incidental: it used to apply
 the positivity floors to `sim.U` as a side effect, so a run that was plotted
@@ -944,7 +960,7 @@ every ten steps and one that was not could quietly disagree.
 """
 function primitives(sim::Simulation{T}) where {T}
     g = sim.grid
-    cons2prim!(sim.hw.prim, sim.U, sim.eos, g)
+    cons2prim!(sim.hw.prim, sim.U, sim.eos, g, sim.nscalars)
     sim.hw.prim[:, g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]]
 end
 

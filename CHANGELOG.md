@@ -7,6 +7,7 @@ All notable changes to Honghu.jl are recorded here. The format follows [Keep a C
 ### Added
 
 - Passive mass scalars: `Simulation(nscalars = n)` stores the conserved densities $\rho X_s$ as extra rows of `sim.U`, `set_initial_conditions!` reads their mass fractions from the key `X`, and `conserved_totals(sim).scalars` is the mass of each. A `Reflecting` wall flips only the normal momentum, never a scalar row, and a `Fixed` or `FunctionBC` hydro boundary must give `NHYDRO + nscalars` values.
+- Mass scalars are advected: each $\rho X_s$ is reconstructed with the gas and carried by the Riemann mass flux with the upwind mass fraction, so a uniform $X_s$ stays uniform to round-off and a contact discontinuity stays monotone. The density floor keeps the mass fraction of the cell, and `enforce_scalar_floors!` clips a negative $\rho X_s$ to zero and counts it in `sim.diag.floors_scalar`. `cons2prim!`, `hydro_fluxes!` and `enforce_floors!` take an optional trailing `nscalars`; a run without scalars is bit for bit unchanged.
 
 ### Documentation
 
