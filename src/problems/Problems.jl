@@ -13,6 +13,7 @@ The hydrodynamic problems are the standard verification suite (Sod, smooth
 advection, Kelvin-Helmholtz, Sedov); the radiation problems exercise each limit
 of the two-moment system in turn: free streaming, static diffusion, stiff
 matter coupling, dust-gas coupling, a Marshak wave, a shadow, and the Mach 3 radiative shock.
+The photoionization problem is the Stromgren sphere of Iliev et al. (2006), Tests 1 and 2.
 
 # Varying a problem
 
@@ -47,12 +48,14 @@ using OrdinaryDiffEq: ODEProblem, Rodas5P, AutoFiniteDiff
 include("exact.jl")
 include("hydro.jl")
 include("radiation.jl")
+include("stromgren.jl")
 include("metrics.jl")     # needs the problem functions it dispatches on
 
 export sod_shock_tube, smooth_advection, kelvin_helmholtz, sedov_blast
 export radiation_streaming, radiation_diffusion, matter_coupling, rad_dust
 export marshak_wave, radiation_shadow, radhydro_shock, radhydro_shock_super
 export marshak_vaytet, radhydro_pulse_dyn, total_erad
+export stromgren_iliev, ionized_radius, stromgren_radius_analytic, stromgren_radius_finite_c
 export rad_dust_reference, sod_exact, diffusion_exact, radhydro_shock_exact, interpolate_to
 
 end # module Problems
