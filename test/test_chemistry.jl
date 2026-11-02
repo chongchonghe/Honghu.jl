@@ -17,6 +17,27 @@ end
 Honghu.chem_scales!(s, u, ::ChainNet, cell) = (fill!(s, 1.0); nothing)
 chain_exact(t, k1, k2) = (exp(-k1 * t), k1 / (k2 - k1) * (exp(-k1 * t) - exp(-k2 * t)))
 
+# G(u) = atan(u - a) as a backward-Euler equation: f(u) = (u - u0 - atan(u - a)) / dt, root a.
+# Newton on atan diverges from any start more than 1.39 from the root, so only a damped
+# iteration finds it.
+struct AtanNet <: Honghu.AbstractNetwork
+    a::Float64
+    u0::Float64
+    dt::Float64
+end
+Honghu.nspecies(::AtanNet) = 1
+Honghu.nbands(::AtanNet) = 0
+Honghu.species_mass(::AtanNet, s) = 1.0
+function Honghu.chem_rhs!(du, u, n::AtanNet, cell)
+    du[1] = (u[1] - n.u0 - atan(u[1] - n.a)) / n.dt; du[2] = 0.0
+    return nothing
+end
+function Honghu.chem_jacobian!(J, u, n::AtanNet, cell)
+    fill!(J, 0.0); J[1, 1] = (1 - 1 / (1 + (u[1] - n.a)^2)) / n.dt
+    return nothing
+end
+Honghu.chem_scales!(s, u, ::AtanNet, cell) = (fill!(s, 1.0); nothing)
+
 function be_bytes(w, s, net, cell, u)
     Honghu.solve_chemistry!(w, s, net, cell, u)
     @allocated Honghu.solve_chemistry!(w, s, net, cell, u)
@@ -73,6 +94,26 @@ end
     @test ok400 && ok800
     @test 1.8 < e400 / e800 < 2.2
     @test be_bytes(w, s, net, cell(0.01), copy(u0)) == 0
+
+    # The residual ends the iteration as well as the update. A linear problem is solved by
+    # the first Newton step, after which the residual is round-off while the update that
+    # was taken is of order one; stopping on the update alone takes a second iteration.
+    st = Honghu.solve_chemistry!(w, s, net, cell(0.5), copy(u0))
+    @test st.converged && st.steps == 1
+end
+
+@testset "chemistry: backward Euler damps a Newton step that overshoots" begin
+    net = AtanNet(100.0, 105.0, 1.0)
+    cell = Honghu.ChemCell(1.0, 1.0, 1.0, 1.0)
+    s = BackwardEulerChem()
+    w = Honghu.chem_workspace(s, net, Float64)
+    u = [105.0, 0.0]
+    st = Honghu.solve_chemistry!(w, s, net, cell, u)
+    @test st.converged
+    @test u[1] ≈ 100 atol = 1e-8
+    # the start 5 from the root is far outside the 1.39 that undamped Newton can recover from
+    @test abs(net.u0 - net.a) > 1.39
+    @test be_bytes(w, s, net, cell, [105.0, 0.0]) == 0
 end
 
 @testset "chemistry: defaults of the network interface" begin
@@ -356,4 +397,76 @@ end
         @test be_bytes(wt, b, nt, Honghu.ChemCell(1e-3 * CGS.m_H, CGS.c_light, 1e-3 * CGS.c_light, 1e9),
                        hstate(1e-3, 0.01, 100.0, 1e-4)) == 0
     end
+end
+
+@testset "chemistry: hydrogen network, cells the solvers must handle" begin
+    c = CGS.c_light
+    eps = 29.65 * CGS.eV
+    net = HydrogenOTSA(sigma=1.63e-18, photon_energy=eps)
+
+    # A cell on a front: one photon per hydrogen atom, Gamma dt = 4.9, T = 30 K. Undamped
+    # Newton cycled here for the whole 50 iterations; with the line search it takes a handful.
+    # The answer is a root of the backward-Euler equation, checked with the rates and not with
+    # the solver, and it keeps the hydrogen it started with.
+    cell = Honghu.ChemCell(1e-2 * CGS.m_H, c, 1e-3c, 1e13)
+    u0 = hstate(1e-2, 0.0, 30.0, 1e-5)
+    s = BackwardEulerChem()
+    u = copy(u0)
+    st = Honghu.solve_chemistry!(Honghu.chem_workspace(s, net, Float64), s, net, cell, u)
+    @test st.converged && st.steps < 20
+    f = zeros(4); Honghu.chem_rhs!(f, u, net, cell)
+    sc = zeros(4); Honghu.chem_scales!(sc, u0, net, cell)
+    @test maximum(abs.(u .- u0 .- cell.dt .* f) ./ sc) < 1e-9
+    @test u[1] + u[2] ≈ 1e-2 rtol = 1e-10
+    @test u[2] > 5e-3                                   # mostly ionized
+
+    # a dark neutral cold cell already satisfies the equation: no Newton iteration at all
+    dark = Honghu.ChemCell(1e-3 * CGS.m_H, c, 1e-3c, 1e12)
+    st = Honghu.solve_chemistry!(Honghu.chem_workspace(s, net, Float64), s, net, dark,
+                                 hstate(1e-3, 0.0, 100.0, 0.0))
+    @test st.converged && st.steps == 0
+
+    # a cell with no hydrogen is a no-op, not a NaN: the temperature is Tmin, every rate is
+    # zero, and the scales stay positive
+    u = [0.0, 0.0, 1e-15, 1e-5]; u0 = copy(u)
+    cell = Honghu.ChemCell(1e-3 * CGS.m_H, c, 1e-3c, 1e12)
+    du = fill(NaN, 4); J = fill(NaN, 4, 4); sc = zeros(4)
+    Honghu.chem_rhs!(du, u, net, cell); Honghu.chem_jacobian!(J, u, net, cell)
+    Honghu.chem_scales!(sc, u, net, cell)
+    @test all(==(0), du) && all(isfinite, J) && all(>(0), sc)
+    for s in (RosenbrockChem(), BackwardEulerChem())
+        v = copy(u0)
+        @test Honghu.solve_chemistry!(Honghu.chem_workspace(s, net, Float64), s, net, cell, v).converged
+        @test v == u0
+    end
+end
+
+# Absolute values of the rate coefficients, from the formulas of the docstring evaluated
+# independently (Python, same k_B), so that a constant or an exponent typed wrongly cannot hide
+# behind the finite-difference test, which only sees that rhs and Jacobian agree with each other.
+@testset "chemistry: hydrogen rate coefficients" begin
+    net = HydrogenOTSA(sigma=1.63e-18, photon_energy=29.65 * CGS.eV)
+    val(f, T) = f(net, T)[1]
+    #                    T       alpha_B      beta         L_rec        L_ff         L_ce
+    for (T, a, b, lr, lf, lc) in ((1e4, 2.630000e-13, 8.110429e-16, 2.319600e-25, 1.855100e-25, 4.129922e-24),
+                                  (1e5, 5.247540e-14, 3.807816e-09, 2.988224e-25, 5.866341e-25, 1.148292e-19),
+                                  (3e4, 1.218908e-13, 5.238221e-11, 2.617559e-25, 3.213127e-25, 9.377895e-21))
+        @test val(Honghu._hydrogen_alpha, T) ≈ a rtol = 1e-5
+        @test val(Honghu._hydrogen_beta, T) ≈ b rtol = 1e-5
+        @test val(Honghu._hydrogen_cool_recombination, T) ≈ lr rtol = 1e-5
+        @test val(Honghu._hydrogen_cool_freefree, T) ≈ lf rtol = 1e-5
+        @test val(Honghu._hydrogen_cool_excitation, T) ≈ lc rtol = 1e-5
+    end
+    # recombination cooling and excitation are zero or negligible well below 100 K and 1e4 K
+    @test val(Honghu._hydrogen_cool_recombination, 50.0) == 0
+    @test val(Honghu._hydrogen_cool_recombination, 100.0) ≈ 6.1e-10 * CGS.k_B * 100.0^0.11
+    @test val(Honghu._hydrogen_alpha, 50.0) ≈ 1.073190e-11 rtol = 1e-5      # 2.63e-13 (T / 1e4)^-0.7
+    # the switches
+    off = HydrogenOTSA(sigma=1.63e-18, photon_energy=29.65 * CGS.eV, cooling=false,
+                       collisional_ionization=false)
+    for f in (Honghu._hydrogen_beta, Honghu._hydrogen_cool_recombination,
+              Honghu._hydrogen_cool_freefree, Honghu._hydrogen_cool_excitation)
+        @test f(off, 1e4) == (0.0, 0.0)
+    end
+    @test Honghu._hydrogen_alpha(off, 1e4)[1] == 2.63e-13
 end

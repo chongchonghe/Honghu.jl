@@ -137,6 +137,8 @@ struct BackwardEulerWork{T<:AbstractFloat}
     du::Vector{T}       # the right-hand side of the linear system, then the Newton update
     scale::Vector{T}
     J::Matrix{T}        # the Jacobian, then the matrix I - dt J
+    ut::Vector{T}       # the trial iterate of the line search
+    ft::Vector{T}       # the right-hand side at the trial iterate
 end
 
 """
@@ -150,15 +152,28 @@ step of that length can be. It is the comparison for [`RosenbrockChem`](@ref),
 and it allocates nothing.
 
 Species and band unknowns are clamped at zero after each Newton update, so an
-iterate never carries a negative abundance into a rate. If Newton does not
-converge in `max_iterations`, or meets a singular matrix or a non-finite update,
-the result says so in [`ChemStats`](@ref); it never reports a failed solve as a
-converged one.
+iterate never carries a negative abundance into a rate. The Newton update is
+damped by a backtracking line search on the scaled residual, `max_i |G_i| / scale_i`:
+it tries the whole update, then a half, a quarter and so on up to 20 halvings, and
+keeps the first trial, clamped as above, whose residual is smaller than the
+current one (the last trial if none is). Undamped, a step across a front or a
+clamp makes Newton cycle, and the comparison would then measure that failure and
+not the time discretisation. It is still one backward-Euler step: the line search
+changes how the nonlinear equation of that step is solved, never the equation.
+It cannot help where the equation has no admissible root near the start state,
+for instance a growth term with `rate * dt > 1`, which backward Euler drives
+negative. If Newton does not converge in `max_iterations`, or meets a singular
+matrix or a non-finite update, the result says so in [`ChemStats`](@ref); it never
+reports a failed solve as a converged one.
 
-  - `tol`            : stop when the largest Newton update, in units of
-    [`chem_scales!`](@ref), is at most this. The scales are taken once, at the state
-    the step starts from.
+  - `tol`            : stop when the largest Newton update, or the largest residual
+    `G`, in units of [`chem_scales!`](@ref), is at most this. The scales are taken
+    once, at the state the step starts from. The residual test is what ends a
+    solve whose update is stuck a rounding error above `tol`.
   - `max_iterations` : the most Newton iterations to take.
+
+`ChemStats.steps` is the number of Newton iterations taken, 0 if the start state
+already satisfies the equation to `tol`.
 """
 struct BackwardEulerChem{T<:AbstractFloat} <: AbstractChemSolver
     tol::T
@@ -170,7 +185,8 @@ BackwardEulerChem(; tol=1e-10, max_iterations=50) =
 
 function chem_workspace(::BackwardEulerChem, net::AbstractNetwork, ::Type{T}) where {T<:AbstractFloat}
     n = nunknowns(net)
-    return BackwardEulerWork{T}(zeros(T, n), zeros(T, n), zeros(T, n), ones(T, n), zeros(T, n, n))
+    return BackwardEulerWork{T}(zeros(T, n), zeros(T, n), zeros(T, n), ones(T, n), zeros(T, n, n),
+                                zeros(T, n), zeros(T, n))
 end
 
 # Solve `A x = b` in place, `x` overwriting `b` and `A` destroyed, by Gaussian
@@ -218,6 +234,20 @@ function _gauss_solve!(A::Matrix{T}, b::Vector{T}) where {T}
     return true
 end
 
+# The largest `|G_i| / scale_i` of `G(u) = u - u0 - dt f(u)`, given `f = f(u)`. NaN-propagating
+# on purpose: `max` returns NaN if either argument is, so a broken iterate is seen as one.
+function _be_residual(u::Vector{T}, u0::Vector{T}, f::Vector{T}, scale::Vector{T}, dt::T) where {T}
+    r = zero(T)
+    @inbounds for i in eachindex(u)
+        r = max(r, abs(u[i] - u0[i] - dt * f[i]) / scale[i])
+    end
+    return r
+end
+
+# Twenty halvings reach a factor of 1e-6 of the Newton update: past that the trial is the
+# current iterate to within round-off in anything a rate can see.
+const _BE_MAX_HALVINGS = 20
+
 function solve_chemistry!(w::BackwardEulerWork{T}, s::BackwardEulerChem, net::AbstractNetwork,
                           cell::ChemCell{T}, u::Vector{T}) where {T}
     n = length(u)
@@ -225,8 +255,10 @@ function solve_chemistry!(w::BackwardEulerWork{T}, s::BackwardEulerChem, net::Ab
     dt = cell.dt
     copyto!(w.u0, u)
     chem_scales!(w.scale, u, net, cell)
+    chem_rhs!(w.f, u, net, cell)
+    r = _be_residual(u, w.u0, w.f, w.scale, dt)
+    r <= s.tol && return ChemStats(0, true)
     for iter in 1:s.max_iterations
-        chem_rhs!(w.f, u, net, cell)
         chem_jacobian!(w.J, u, net, cell)
         # `du` is -G(u) on the way in and the Newton update on the way out; the
         # matrix is I - dt J.
@@ -240,14 +272,30 @@ function solve_chemistry!(w::BackwardEulerWork{T}, s::BackwardEulerChem, net::Ab
         _gauss_solve!(w.J, w.du) || return ChemStats(iter, false)
         worst = zero(T)
         @inbounds for i in 1:n
-            u[i] += w.du[i]
-            # The energy may go negative in a bad iterate and recover; a number
-            # density or a photon count may not, because the rates read it.
-            i == ne || (u[i] = max(u[i], zero(T)))
             worst = max(worst, abs(w.du[i]) / w.scale[i])
         end
         isfinite(worst) || return ChemStats(iter, false)
-        worst <= s.tol && return ChemStats(iter, true)
+        # Backtrack on the residual. The trial is clamped exactly as the iterate is: the
+        # energy may go negative in a bad trial and recover; a number density or a photon
+        # count may not, because the rates read it. If no trial lowers the residual the
+        # last one is taken, so the iteration still moves and `max_iterations` ends it.
+        lambda = one(T)
+        rt = r
+        for k in 0:_BE_MAX_HALVINGS
+            @inbounds for i in 1:n
+                v = u[i] + lambda * w.du[i]
+                w.ut[i] = i == ne ? v : max(v, zero(T))
+            end
+            chem_rhs!(w.ft, w.ut, net, cell)
+            rt = _be_residual(w.ut, w.u0, w.ft, w.scale, dt)
+            (rt < r || k == _BE_MAX_HALVINGS) && break
+            lambda /= 2
+        end
+        copyto!(u, w.ut)
+        copyto!(w.f, w.ft)
+        r = rt
+        isfinite(r) || return ChemStats(iter, false)
+        (worst <= s.tol || r <= s.tol) && return ChemStats(iter, true)
     end
     return ChemStats(s.max_iterations, false)
 end

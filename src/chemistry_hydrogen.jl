@@ -39,7 +39,8 @@ written against [`AbstractNetwork`](@ref), so [`RosenbrockChem`](@ref) and
   - `sigma`          : the photoionization cross-section of the band, cm^2.
   - `photon_energy`  : the mean photon energy of the band, erg; it is `band_photon_energy`.
   - `heating_energy` : the energy each photoionization gives the gas, erg. The default,
-    `photon_energy - 13.6 eV`, is Quokka's. It **overheats** the ionized gas compared with
+    `photon_energy - 13.6 eV`, is Quokka's `max(eps - 13.6 eV, 0)` without the floor, which
+    would break the exact energy invariant below. It **overheats** the ionized gas compared with
     the optically thin value for a blackbody, which is `<eps> sigma_E / sigma_N - 13.6 eV`
     with the energy-weighted cross-section `sigma_E` (about 6.3 eV for a `1e5` K blackbody
     against 16 eV): a single band cannot be right for both the photon count and the energy.
@@ -162,7 +163,9 @@ end
 @inline function _hydrogen_T(net::HydrogenOTSA, a0, a1, e)
     iso = net.isothermal          # a local, so that the compiler can narrow the Union
     iso === nothing || return iso, false
-    T = e / (1.5 * CGS.k_B * (a0 + 2a1))
+    ntot = a0 + 2a1
+    ntot > 0 || return net.Tmin, false      # no hydrogen, no particles: the rates are all zero
+    T = e / (1.5 * CGS.k_B * ntot)
     return T > net.Tmin ? (T, true) : (net.Tmin, false)
 end
 
@@ -239,12 +242,16 @@ function chem_jacobian!(J, u, net::HydrogenOTSA, cell)
     return nothing
 end
 
+# A hydrogen-free cell must still get positive scales, or the integrators divide by zero
+# on a state that never changes. 1e-30 cm^-3 is far below any gas the code evolves.
+const _HYDROGEN_NFLOOR = 1e-30
+
 # The scales the integrators measure tolerance against: both species against the hydrogen
 # density, the energy against itself or against the energy of the cell at `Tmin` (so a cold
 # cell does not demand a vanishing absolute error), and the photons against `phi n_H`, the
 # photon density whose budget `N / phi` equals one photon per hydrogen nucleus.
 function chem_scales!(scale, u, net::HydrogenOTSA, cell)
-    nH = u[1] + u[2]
+    nH = max(u[1] + u[2], _HYDROGEN_NFLOOR)
     scale[1] = nH
     scale[2] = nH
     scale[3] = max(abs(u[3]), 1.5 * CGS.k_B * nH * net.Tmin)
