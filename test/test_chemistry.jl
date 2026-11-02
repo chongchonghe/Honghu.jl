@@ -44,6 +44,18 @@ end
         @test v == u
     end
 
+    # A step far longer than the placeholder time span the integrator is built on. Its
+    # `dtmax` defaulted to that span, one time unit, so a step of 1e6 took a million
+    # internal steps and a step of 1e10 s, an ordinary hydrodynamic one, never finished.
+    for dt in (1e3, 1e6)
+        s = RosenbrockChem()
+        w = Honghu.chem_workspace(s, net, Float64)
+        u = copy(u0)
+        st = Honghu.solve_chemistry!(w, s, net, cell(dt), u)
+        @test st.converged && st.steps < 200
+        @test u[3] ≈ 1 atol = 1e-6
+    end
+
     s = BackwardEulerChem()
     w = Honghu.chem_workspace(s, net, Float64)
     function be_run(n)                   # the error at t = 0.5, and whether every step converged

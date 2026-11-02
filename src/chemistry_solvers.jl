@@ -101,8 +101,12 @@ function chem_workspace(s::RosenbrockChem, net::AbstractNetwork, ::Type{T}) wher
     # `reinit!`, which also chooses the first step afresh for the new cell, so a
     # cell's answer does not depend on which cell came before it; the test of a
     # reused workspace pins that.
+    # `dtmax` defaults to the length of the problem's `tspan`, which is the placeholder
+    # (0, 1) here, and `reinit!` does not raise it: left alone, no step could exceed one
+    # second whatever the cell's `dt`, and a hydrodynamic step of 1e10 s would not finish.
     integ = init(prob, s.alg; reltol=T(s.reltol), abstol=fill(T(s.abstol), n),
-                 save_everystep=false, dense=false, verbose=SciMLLogging.None())
+                 dtmax=floatmax(T), save_everystep=false, dense=false,
+                 verbose=SciMLLogging.None())
     return RosenbrockWork(integ, p, ones(T, n), integ.opts.abstol)
 end
 
