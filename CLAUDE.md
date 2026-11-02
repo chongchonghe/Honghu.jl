@@ -4,7 +4,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Overview
 
-Honghu is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with a method-of-lines scheme (HLLC or LLF) and two-moment (M1) radiation — grey, or in `NG` frequency groups — with an HLL solver and an IMEX PD-ARS integrator. It exists as a bench for prototyping algorithms and test problems destined for Quokka, so structural fidelity to Quokka is a design goal: a kernel written here should transliterate across, and back. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `../quokka` and is the reference to check against when a numerical detail is in doubt.
+Honghu is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with a method-of-lines scheme (HLLC or LLF) and two-moment (M1) radiation — grey, or in `NG` frequency groups — with an HLL solver and an IMEX PD-ARS integrator. It exists as a bench for prototyping algorithms and test problems destined for Quokka, so structural fidelity to Quokka is a design goal: a kernel written here should transliterate across, and back. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `/Users/u1149259/softwares/quokka/quokka-local` and is the reference to check against when a numerical detail is in doubt.
 
 ## Commands
 
