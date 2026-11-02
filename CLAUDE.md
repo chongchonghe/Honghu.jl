@@ -13,6 +13,8 @@ julia --project=. -t 4 test/runtests.jl             # full suite, ~80 s
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw docs/figures/
 julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a figure)
 julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]  # every number of the ARSA paper's Sec. 5
+julia --project=. -t 8 examples/stromgren_sphere.jl [1|2] [n] [octant]  # Iliev et al. (2006) Test 1 or 2, centred 64^3 by default
+julia --project=. -t 8 docs/photoionization-experiments/measure.jl  # every number of docs/photoionization-findings.md
 julia --project=. -t auto docs/make_figures.jl      # regenerate README figures
 julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
 julia --project=. docs/make.jl                      # build the docs site into docs/_site (needs quarto)
@@ -30,7 +32,7 @@ Prefer building example figures out of `plotstate` / `plotpanels` rather than ra
 
 ## Documentation site
 
-`docs/make.jl` writes one reference page per group of source files (its `PAGES` table) from the docstrings, uses the README as the front page and four notes in `docs/` as further pages, renders them with Quarto, and publishes every page twice: as HTML and as its own source, `<page>.md`, with `honghu-docs.md` bundling them all. CI deploys it to GitHub Pages from `main`. The build is strict, and three things fail it: a `[`name`](@ref)` whose target has no docstring, a file in `src/` with a docstring but no entry in `PAGES`, and any relative link or anchor in the output that does not resolve. So a new source file needs a line in `PAGES`, and a cross-reference to an undocumented name needs the docstring, not the brackets removed. `docs/documentation.md` (also a page on the site) explains how the system works and how to update each kind of page.
+`docs/make.jl` writes one reference page per group of source files (its `PAGES` table) from the docstrings, uses the README as the front page and five notes in `docs/` as further pages, renders them with Quarto, and publishes every page twice: as HTML and as its own source, `<page>.md`, with `honghu-docs.md` bundling them all. CI deploys it to GitHub Pages from `main`. The build is strict, and three things fail it: a `[`name`](@ref)` whose target has no docstring, a file in `src/` with a docstring but no entry in `PAGES`, and any relative link or anchor in the output that does not resolve. So a new source file needs a line in `PAGES`, and a cross-reference to an undocumented name needs the docstring, not the brackets removed. `docs/documentation.md` (also a page on the site) explains how the system works and how to update each kind of page.
 
 ## Releases
 
@@ -81,11 +83,19 @@ actually mean:
   `ImplicitEulerStepper`. Removing them changed the manifest not at all, since
   they were already inside OrdinaryDiffEq's closure — but naming a package in
   `[deps]` says this code calls it, and it no longer does.
-- **Import selectively.** `using OrdinaryDiffEq: ODEProblem, ODEFunction, …` and
+- **Import selectively.** `using OrdinaryDiffEq: ODEProblem, ODEFunction, solve,
+  successful_retcode, Rosenbrock23, init, solve!, reinit!, SciMLLogging` and
   not `using OrdinaryDiffEq`, because it exports `step!` and so does this
   package; a blanket import would make `step!(sim)` ambiguous for every user with
-  both in scope. `using LinearAlgebra: lu!, ldiv!` is there for the same reason
-  (`dot` and `norm`), and the two comments in `src/Honghu.jl` say so.
+  both in scope. The first five names are `AdaptiveCoupling`'s (`Rosenbrock23` is
+  the default algorithm of `RosenbrockChem` too), and `init`, `solve!`, `reinit!`
+  and `SciMLLogging` are `RosenbrockChem`'s: it builds one integrator per
+  workspace and re-aims it at each cell, and passes `SciMLLogging.None()` so that a
+  failing cell is reported through its `ChemStats` and not by a warning per cell.
+  `using LinearAlgebra: lu!, ldiv!` is there for the same reason as the first
+  (`dot` and `norm`), and `using LinearSolve: SimpleLUFactorization` takes the one
+  name that is used; the comments in `src/Honghu.jl` say why for each, and the
+  list there is the one to keep this in step with.
 
 `SciMLBase` and `BracketingNonlinearSolve` are the other two: `BracketedCoupling`
 hands its one scalar equation, per cell, per step, through SciMLBase's
@@ -119,8 +129,23 @@ root-finders that are easy to get wrong, both handled in
   `_energy_bracket(G::F, s) where {F}` rather than `(G, s)`: without the type
   parameter the same code allocated 2.8 kB a cell.
 
+`LinearSolve` is there for a measured reason, and for one name. `RosenbrockChem`,
+the default chemistry integrator, is one reused OrdinaryDiffEq integrator per row
+of cells, and it solves a 4x4 linear system at every stage. The integrator's
+default factorisation and solve call OpenBLAS (`dgetrf`, `dgetrs`), whose buffer
+allocation takes one global lock on every call, so the threads of the chemistry
+step queued behind it: one `24^3` step took 85 ms on one thread and 184 ms on four,
+2.2 times *slower*. `GenericLUFactorization` does not help, because its solve is
+still `dgetrs` (76 and 176 ms). LinearSolve's `SimpleLUFactorization`, a dense LU
+written in Julia, takes 72 and 20 ms with the same step counts and the same answer
+(four cells from cold neutral to hot ionized agree to `7e-9` or better).
+It was already inside OrdinaryDiffEq's closure, so it adds no package; it is
+named in `[deps]` because `src/Honghu.jl` calls it. `AdaptiveCoupling`'s default
+`Rosenbrock23()` has the same OpenBLAS default and is probably slowed in the same
+way when run threaded; that was not measured, and not changed.
+
 The `[deps]` list is `Printf`, `Dates`, `LinearAlgebra` (all stdlibs),
-`OrdinaryDiffEq`, `SciMLBase` and `BracketingNonlinearSolve`. The bar for `[deps]` is still real — this code is
+`OrdinaryDiffEq`, `LinearSolve`, `SciMLBase` and `BracketingNonlinearSolve`. The bar for `[deps]` is still real — this code is
 meant to run on compute nodes where a large tree is a liability — but it is a
 bar, not a wall, and "the package calls it" clears it.
 
@@ -174,6 +199,10 @@ Include order in `src/Honghu.jl` matters, because later files use types defined 
 | `hydro_system.jl` | `Floors`, `cons2prim!` / `enforce_floors!`, the flux sweep, flux divergence, hydro CFL. |
 | `radiation_system.jl` | `RadiationPhysics`, the group layout (`ngroups`, `nradvars`, `gbase`), state repair, the HLL flux sweep, radiation CFL, the two drivers of the `chat` limiter (`update_chat!`, `energy_exchange_dt`), `scale_by_phi!`, and `floor_rad_energy!`, the only repair allowed before a coupling solve. |
 | `source_terms.jl` | The implicit matter-radiation coupling — the hardest file. Two drivers, chosen by dispatch on `NG`: the grey 2×2 Newton written out inline, and `multigroup_source_step!`, which hands each cell to an `AbstractCoupling`. |
+| `chemistry.jl` | `AbstractNetwork`: what is evolved in one cell, with no integrator in it — the species, the radiation bands, the right-hand side of `u = [n_s, e, N_b]`, its exact Jacobian and one scale per unknown; also `ChemCell`, `ChemStats` and `AbstractChemSolver`. Emission, the flux rescaling and the clamp at zero are deliberately not terms of the ODE; they belong to the grid driver. |
+| `chemistry_solvers.jl` | The two integrators, written against `chem_rhs!` and `chem_jacobian!` and restating no physics: `RosenbrockChem` (the default; one reused OrdinaryDiffEq integrator per workspace, with LinearSolve's `SimpleLUFactorization`) and `BackwardEulerChem` (one Newton-solved backward-Euler step with a line search, 0 bytes per call, reports non-convergence). |
+| `chemistry_hydrogen.jl` | `HydrogenOTSA`: H0 and H+, one band of ionizing photons, on the spot, with Quokka's rates and a switch for each of collisional ionization, cooling and isothermal gas. Every coefficient is a field. |
+| `chemistry_step.jl` | `Photochemistry` and `chemistry_step!`, the grid driver: one workspace per interior `(j, k)` row, and in each cell the emission, the solve and the write-back to the scalars, the gas energy and the band. |
 | `integrators.jl` | SSP-RK tableaux and the IMEX PD-ARS constants. |
 | `simulation.jl` | `Simulation`, workspaces, right-hand sides, stage drivers, `run!`. |
 | `output.jl` | VTK, text line-outs, checkpoints. |
@@ -181,6 +210,7 @@ Include order in `src/Honghu.jl` matters, because later files use types defined 
 | `metrics.jl` | `relative_l1` / `relative_l2` and the `default_metrics` generic. |
 | `compare.jl` | `compare`, `ComparisonTable`, and the table reader/writer. |
 | `problems/` | Built-in test problems and the exact Riemann solver. |
+| `problems/stromgren.jl` | The Stromgren tests of Iliev et al. (2006): `stromgren_iliev`, `ionized_radius`, and the two reference radii `stromgren_radius_analytic` and `stromgren_radius_finite_c`. |
 
 `ext/HonghuPlotsExt.jl` sits outside `src/` and is loaded by Julia's extension mechanism when Plots is present.
 
@@ -295,6 +325,16 @@ Two properties the tests pin, and that a change here must keep:
 ## Closures
 
 `RadiationPhysics` carries a `closure`. `LevermoreClosure()` is the M1 default. `EddingtonClosure()` fixes `chi = 1/3`, cannot free-stream, and exists only so that reference solutions derived under the P1 approximation can be reproduced -- `radhydro_shock` and `radhydro_shock_super` need it, exactly as Quokka overrides `ComputeEddingtonFactor` for the same problem. Do not make it the default, and do not use it for anything with a directional radiation field.
+
+## Photoionization chemistry
+
+`Simulation(; chemistry = Photochemistry(net; solver, emission))` evolves a network in every cell after each IMEX radiation substep (`chemistry_step.jl`), with the species stored as mass scalars `rho X_s` that are renormalised to sum to `rho`. The built-in network is `HydrogenOTSA`, the built-in problems are the Iliev et al. (2006) Stromgren tests (`Problems.stromgren_iliev`), and `docs/photoionization-findings.md` holds what was measured. Five things are not obvious from the code:
+
+- **The reduced speed of light is applied in three places, and all three are needed.** The gas side of the photoionization rate uses the speed of light, `c sigma n_H0 N`; the photon equation loses `chat sigma n_H0 N`; and the emission is multiplied by `phi = chat / c`. The conserved budget is then `n_H+ + N/phi`, "photons emitted equals `Ndot t`" holds for the integral of `N/phi` and not of `N`, and the ionization equilibrium does not depend on `chat`. Using `c` on the gas side with unscaled emission gives a Stromgren volume proportional to `1/phi`. Quokka stores `N_Q = N/phi` and takes `chat` in both rates, which is the same scheme.
+- **`ConstantChat` and `beta_order = 0` only.** `Simulation` refuses anything else, as it refuses a band whose group has thermal opacity and a gamma other than 5/3. The `StabilityBound` derivation has no photoabsorption term, so its bound does not cover this absorption, and the momentum that absorbed photons deposit is not modelled, which is what `beta_order > 0` would need.
+- **The flux is scaled, not integrated.** The ODE has no flux unknowns: absorption acts on a band's `N` and on its flux with the same linear rate, so after the solve each flux component is multiplied by `N_end / N_start` (Quokka's `SKIP_PHOTOCHEMFLUX`). That, the emission and the clamp at zero belong to the grid driver and are not terms of `chem_rhs!`; put any of them in the ODE and the two integrators stop solving the same problem. The emission is injected at the start of the substep, before the burn, so the step is first order: an opaque cell sits below its equilibrium ionization by about `alpha n x^2 dt / 2`.
+- **Set `Erad` in the initial conditions.** Its default is `a_r T^4`, which puts about `1e12` ionizing photons per cm^3 in a `1e4` K box. A photoionization problem passes `Erad = 0.0` (the floor makes it `1e-30`), as `stromgren_iliev` does.
+- **The default heating per ionization overheats.** `heating_energy = photon_energy - 13.6 eV` is Quokka's: 16.05 eV for the 29.65 eV band of Test 2, against about 6.3 eV for the optically thin `1e5` K blackbody. Measured on Test 2, 2.5 times the heating raises the temperature of the ionized gas by only 11% to 14% and the radius by 0.8% to 2.2%. A single band has no spectral hardening either, so the Test 2 temperature profile is checked for its shape and not against data.
 
 ## Style
 

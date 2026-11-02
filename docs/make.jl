@@ -50,7 +50,8 @@ const PAGES = [
 
 # Hand-written pages, in navigation order after the reference.
 const NOTES = ["coupling-new-method.md", "coupling-new-method-dust.md",
-               "coupling-findings.md", "rsla-findings.md", "documentation.md"]
+               "coupling-findings.md", "rsla-findings.md", "photoionization-findings.md",
+               "documentation.md"]
 
 const MODULES = (Honghu, Honghu.Problems, Honghu.CGS)
 

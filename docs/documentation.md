@@ -8,7 +8,7 @@ This page explains how the documentation site of Honghu.jl is made, where each p
 |:---|:---|:---|
 | Home page | `README.md` | copied to `docs/index.qmd` by `docs/make.jl`, with a few links rewritten |
 | Reference | the docstrings in `src/` | written to `docs/reference/*.qmd` by `docs/make.jl` |
-| Notes | `docs/*.md`: the four technical notes and this page | rendered as they are |
+| Notes | `docs/*.md`: the five technical notes and this page | rendered as they are |
 | Figures | `docs/figures/` | made by `docs/make_figures.jl` and `docs/make_animations.jl`, except the logo images `honghu-*.png`, which no script makes |
 
 Every page is published twice, from the same source and in the same build: as HTML, and as Markdown. The Markdown copy of `x.html` is `x.md` in the same folder, and the line "Markdown: this page" at the top of each HTML page links to it. The copy is the page's source itself. The only change is that links to other pages point at their `.md` copies instead of their `.qmd` sources. Two more files sit at the site root: `honghu-docs.md`, which holds all pages in one file in navigation order, and `llms.txt`, an index of the Markdown pages in the llms.txt format. Both exist so that a person or a coding agent can read the whole documentation as plain text. Each page links to its own copy and to the bundle; `llms.txt` is not linked from the pages, because it is the same site-wide index everywhere and agents look for it at `/llms.txt` by convention.
