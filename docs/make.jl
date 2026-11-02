@@ -39,6 +39,7 @@ const PAGES = [
     "coupling" => ("Matter-radiation coupling",
                    ["coupling.jl", "coupling_solvers.jl", "coupling_ode.jl", "source_terms.jl",
                     "dust.jl", "newton.jl"]),
+    "chemistry" => ("Photoionization chemistry", ["chemistry.jl", "chemistry_solvers.jl"]),
     "output" => ("Output, plotting and comparison",
                  ["output.jl", "plotting.jl", "metrics.jl", "compare.jl"]),
     "problems" => ("Test problems", ["problems/"]),

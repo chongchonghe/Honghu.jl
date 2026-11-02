@@ -32,6 +32,7 @@ website:
           - reference/radiation.qmd
           - reference/rsla.qmd
           - reference/coupling.qmd
+          - reference/chemistry.qmd
           - reference/output.qmd
           - reference/problems.qmd
           - reference/utilities.qmd

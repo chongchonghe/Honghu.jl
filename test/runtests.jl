@@ -24,6 +24,7 @@ import BracketingNonlinearSolve
     include("test_dust.jl")
     include("test_rsla.jl")
     include("test_coupling_adaptive.jl")
+    include("test_chemistry.jl")
     include("test_io.jl")
     include("test_plotting.jl")
     include("test_extensions.jl")

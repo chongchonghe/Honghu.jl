@@ -48,16 +48,20 @@ using Dates          # provenance timestamps only; a stdlib, not a package
 # a blanket `using` would make those definitions an error.
 using LinearAlgebra: lu!, ldiv!
 
-# Five names, not the package, and for the same reason: OrdinaryDiffEq exports
+# Eight names, not the package, and for the same reason: OrdinaryDiffEq exports
 # `step!`, which this package also exports, so a blanket `using` would leave that
 # one name ambiguous for anyone with both in scope -- `step!(sim)` would have to
 # be spelled `Honghu.step!`. Naming what is used keeps `step!` this package's.
 #
-# `AdaptiveCoupling` in `coupling_ode.jl` is the only thing that needs them:
-# `Rosenbrock23` is its default algorithm and the rest state the problem and read
-# the answer. All five come from the meta-package; the two sub-package
+# `AdaptiveCoupling` in `coupling_ode.jl` and `RosenbrockChem` in
+# `chemistry_solvers.jl` are the only things that need them: `Rosenbrock23` is
+# the default algorithm of both and the rest state the problem and read the
+# answer. `init`, `solve!` and `reinit!` are the last three, for the chemistry
+# integrator that is created once per workspace and re-aimed at each cell rather
+# than built anew. All eight come from the meta-package; the two sub-package
 # dependencies this file used to name went with `ImplicitEulerStepper`.
-using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23
+using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23,
+                      init, solve!, reinit!
 
 # `BracketedCoupling` hands its one scalar equation to a bracketing root-finder
 # through SciMLBase's interface, and `Brent` is the default one. `solve` is
@@ -90,6 +94,8 @@ include("riemann_radiation.jl")
 include("hydro_system.jl")
 include("radiation_system.jl")
 include("source_terms.jl")
+include("chemistry.jl")            # per-cell chemical network interface
+include("chemistry_solvers.jl")    # ... and the two in-tree integrators
 include("integrators.jl")
 include("simulation.jl")
 include("output.jl")
@@ -115,6 +121,7 @@ export LevermoreClosure, EddingtonClosure
 export RadiationGroups, ngroups, planck_integral, planck_fractions
 export AbstractCoupling, BracketedCoupling, QuokkaCoupling, AdaptiveCoupling
 export AbstractDustModel, NoDust, BateKetoDust
+export AbstractNetwork, AbstractChemSolver, RosenbrockChem, BackwardEulerChem
 export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit, per_group, flux_form
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 
