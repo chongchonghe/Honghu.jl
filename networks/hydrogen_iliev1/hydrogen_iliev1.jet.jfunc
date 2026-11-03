@@ -1,0 +1,4 @@
+# Iliev et al. (2006) Test 1: the photoionization cross-section at 13.6 eV, flat in
+# the band so that the band average is this number.
+@function photoCrossSection0()
+    @return Piecewise((6.3e-18, ph_E >= 13.6), (0, True))

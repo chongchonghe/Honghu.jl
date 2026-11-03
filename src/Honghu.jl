@@ -108,7 +108,8 @@ include("radiation_system.jl")
 include("source_terms.jl")
 include("chemistry.jl")            # per-cell chemical network interface
 include("chemistry_solvers.jl")    # ... and the two in-tree integrators
-include("chemistry_hydrogen.jl")   # ... and the hydrogen OTSA network written against it
+include("networks/hydrogen_iliev1.jl")  # ... and the networks JAFF generates (networks/)
+include("networks/hydrogen_iliev2.jl")
 include("chemistry_step.jl")       # ... and the grid driver that runs a network in a simulation
 include("integrators.jl")
 include("simulation.jl")
@@ -135,7 +136,9 @@ export LevermoreClosure, EddingtonClosure
 export RadiationGroups, ngroups, planck_integral, planck_fractions
 export AbstractCoupling, BracketedCoupling, QuokkaCoupling, AdaptiveCoupling
 export AbstractDustModel, NoDust, BateKetoDust
-export AbstractNetwork, AbstractChemSolver, RosenbrockChem, BackwardEulerChem, HydrogenOTSA
+export AbstractNetwork, AbstractChemSolver, RosenbrockChem, BackwardEulerChem
+export NetworkOptions, HydrogenIliev1, HydrogenIliev2
+export nspecies, nbands, species_names, species_masses, network_reactions, band_edges
 export Photochemistry
 export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit, per_group, flux_form
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve

@@ -15,11 +15,11 @@ $$\begin{aligned}
 \frac{\partial(\rho X_s)}{\partial t} + \nabla\cdot(\rho X_s\mathbf v) &= m_s\,\mathcal R_s ,
 \end{aligned}$$
 
-with $E = e + \rho v^2/2$, $e$ the internal energy density, $m_s$ the particle mass and $\mathcal R_s$ the net creation rate of species $s$ per unit volume. The species are H$^0$ and H$^+$, so $n_s = \rho X_s/m_{\rm H}$, $n_{\rm H^0} + n_{\rm H^+} = n_{\rm H} = \rho/m_{\rm H}$ and $n_e = n_{\rm H^+}$. The radiation exerts no force on the gas.
+with $E = e + \rho v^2/2$, $e$ the internal energy density, $m_s$ the particle mass and $\mathcal R_s$ the net creation rate of species $s$ per unit volume. The species are H$^0$, H$^+$ and electrons, so $n_s = \rho X_s/m_s$ and $\sum_s n_s m_s = \rho$. Every reaction conserves charge, so $n_e = n_{\rm H^+}$. The radiation exerts no force on the gas.
 
-The gas is monatomic, $p = (\gamma - 1)\,e$ with $\gamma = 5/3$, and its temperature counts the electrons:
+The gas is monatomic, $p = (\gamma - 1)\,e$ with $\gamma = 5/3$, and its temperature counts every particle:
 
-$$e = \frac32\,k_B\,(n_{\rm H^0} + 2n_{\rm H^+})\,T .$$
+$$e = \frac32\,k_B\,(n_{\rm H^0} + n_{\rm H^+} + n_e)\,T .$$
 
 At fixed $e$, ionizing the gas halves its temperature.
 
@@ -72,7 +72,7 @@ $$\Lambda = \chi_{\rm H}\,\beta\,n_e n_{\rm H^0} + (\Lambda_{\rm rec} + \Lambda_
 
 These are Quokka's processes for hydrogen, without its metal-line and neutral-ISM terms, plus the Ly$\alpha$ cooling.
 
-The default $\varepsilon_{\rm heat} = \varepsilon - \chi_{\rm H}$ (16.05 eV for Test 2, as in Quokka) is too large for a broad spectrum. Because $\sigma$ falls steeply with frequency, the low-energy photons do most of the ionizing, and the optically thin value is $\langle\varepsilon\rangle\,\sigma_E/\sigma_N - \chi_{\rm H} \approx 6.3$ eV for a $10^5$ K blackbody. One band cannot get both the ionization and the heating right. The effect on Test 2 is small: the ionized gas is about 10% hotter ([findings, section 4](photoionization-findings.md#the-overheating-of-test-2)).
+Test 2 uses $\varepsilon_{\rm heat} = \varepsilon - \chi_{\rm H}$ (16.05 eV, as in Quokka), which is too large for a broad spectrum. Because $\sigma$ falls steeply with frequency, the low-energy photons do most of the ionizing, and the optically thin value is $\langle\varepsilon\rangle\,\sigma_E/\sigma_N - \chi_{\rm H} \approx 6.3$ eV for a $10^5$ K blackbody. One band cannot get both the ionization and the heating right. The effect on Test 2 is small: the ionized gas is about 10% hotter ([findings, section 4](photoionization-findings.md#the-overheating-of-test-2)).
 
 For Iliev's Test 1 the energy equation is replaced by a fixed temperature, $T = 10^4$ K.
 
@@ -94,7 +94,7 @@ The RSLA is accurate when $\hat c$ exceeds the speed of the ionization front (se
 
 ### 1.7 Conservation laws
 
-The chemistry conserves hydrogen nuclei. With recombination, collisional ionization and cooling off, and the default $\varepsilon_{\rm heat}$, the local equations also conserve the photon budget and the energy,
+The chemistry conserves hydrogen nuclei and charge. With photoionization alone and $\varepsilon_{\rm heat} = \varepsilon - \chi_{\rm H}$, the local equations also conserve the photon budget and the energy,
 
 $$n_{\rm H^+} + \frac{N_\gamma}{\phi} , \qquad e + \chi_{\rm H}\,n_{\rm H^+} + \varepsilon\,\frac{N_\gamma}{\phi} ,$$
 
@@ -140,15 +140,13 @@ A uniform $X_s$ is then advected exactly. For HLLC this equals Quokka's flux; fo
 
 In each cell, $\mathcal C$ integrates the stiff system
 
-$$\frac{\mathrm du}{\mathrm dt} = S(u) , \qquad u = (n_{\rm H^0},\, n_{\rm H^+},\, e,\, N_\gamma) ,$$
+$$\frac{\mathrm du}{\mathrm dt} = S(u) , \qquad u = (n_{\rm H^0},\, n_{\rm H^+},\, n_e,\, e,\, N,\, f) ,$$
 
-with $S$ the source terms of sections 1.1–1.4 and the photon loss $-\hat c\,\sigma\,n_{\rm H^0}N_\gamma$.
+with $S$ the source terms of sections 1.1–1.4 and the photon loss. The photons are stored as $N = N_\gamma/\phi$, Quokka's $N_Q$, so that both rates read $\hat c N$: the gas ionizes at $\hat c\,\sigma n_{\rm H^0} N = c\,\sigma n_{\rm H^0} N_\gamma$, and $N$ loses the same number. The last unknown, $f$, is the factor by which absorption has attenuated the band's flux, $\mathrm df/\mathrm dt = -\hat c\,\sigma\,n_{\rm H^0} f$ from $f = 1$. Every flux component obeys this linear equation, so one factor carries all three; without emission inside $S$ it equals $N^{\rm end}/N^{\rm start}$, Quokka's `SKIP_PHOTOCHEMFLUX`.
 
 The default integrator is `Rosenbrock23` from OrdinaryDiffEq, the method of MATLAB's `ode23s` (Shampine & Reichelt 1997): a linearly implicit, second-order Rosenbrock-W method with an embedded third-order error estimate. Each internal step solves linear systems with $I - \gamma h J$, $J = \partial S/\partial u$, instead of iterating Newton's method, and the step size is adapted to keep the error estimate below $a_i + r\,|u_i|$ for each unknown. So each cell takes the internal steps it needs, and the error is controlled rather than assumed.
 
-The relative tolerance is $r = 10^{-2}$. The absolute tolerances are $10^{-8}$ of a physical scale of each unknown: $n_{\rm H}$ for the species, the cell's internal energy for $e$, and $\phi\,n_{\rm H}$ for $N_\gamma$ (one photon per atom in the budget of section 1.6). A tolerance then means the same in every cell and unit system. The Jacobian is exact and analytic, including the temperature dependence of every rate. Negative densities enter the rates as zero, so a trial state slightly below zero cannot create atoms. On the Iliev tests this takes about 15 internal steps and 5–6.5 µs per cell per substep, with no failures ([findings, section 1](photoionization-findings.md#cost-of-the-chemistry-step)).
-
-The flux is not integrated. Absorption attenuates it at the same rate as $N_\gamma$, and isotropic emission adds none, so it is multiplied by $N_\gamma^{\rm end}/N_\gamma^{\rm start}$, as in Quokka's `SKIP_PHOTOCHEMFLUX`.
+The relative tolerance is $r = 10^{-2}$. The absolute tolerances are $10^{-8}$ of a physical scale of each unknown: the total particle density for the species and for $N$ (one photon per particle in the budget of section 1.6), the cell's internal energy for $e$, and 1 for $f$. A tolerance then means the same in every cell and unit system. The Jacobian is exact and analytic, including the temperature dependence of every rate. Negative densities enter the rates as zero, so a trial state slightly below zero cannot create atoms. On the Iliev tests this takes about 15 internal steps and 5–6.5 µs per cell per substep, with no failures ([findings, section 1](photoionization-findings.md#cost-of-the-chemistry-step)).
 
 ### 2.4 The alternative: one backward-Euler step
 
@@ -164,7 +162,16 @@ It failed in 10% of a 2592-cell stress grid and nowhere in the Iliev tests. On T
 
 ## 3. Design
 
-The local problem is defined once, by a *network* ([`AbstractNetwork`](reference/chemistry.qmd#AbstractNetwork)): species, bands, $S(u)$, its exact Jacobian, and the scales of the unknowns. It is solved by an *integrator* ([`AbstractChemSolver`](reference/chemistry.qmd#AbstractChemSolver)) that reads only those. The two integrators thus solve exactly the same problem, and a new network (say, hydrogen and helium with three bands) or a new integrator can be added without touching the other. What is not a term of the local ODE (the emission, the flux attenuation, keeping the stored state admissible) is done around the solve, not in $S$.
+The local problem is defined once, by a *network* ([`AbstractNetwork`](reference/chemistry.qmd#AbstractNetwork)): species, bands, $S(u)$ and its exact Jacobian. It is solved by an *integrator* ([`AbstractChemSolver`](reference/chemistry.qmd#AbstractChemSolver)) that reads only those. The two integrators thus solve exactly the same problem, and a new network or a new integrator can be added without touching the other. What is not a term of the local ODE (the emission, applying the flux factor, keeping the stored state admissible) is done around the solve, not in $S$.
+
+### 3.1 Networks from JAFF
+
+Networks are not written by hand. They are generated by [JAFF](https://github.com/jaff-chemistry/jaff), the network tool that also writes Quokka's, with its `honghu` template. A network is two files in a folder of `networks/`:
+
+- `name.jet`, the reactions with their rate coefficients, one per line; a photoreaction is marked `PHOTO` with its threshold in eV;
+- `name.jet.jfunc`, the rest of the physics as functions of `tgas` and the species densities: the cross-section of each photoreaction (`photoCrossSection<N>`), the energy each reaction gives the gas (`deltaE<N>`), custom rates (`chemRate<N>`) and the cooling (`heatingCoolingRate`);
+
+and a `jaffgen.toml` that names the network and sets its radiation bands. JAFF writes $S(u)$ and its Jacobian from these, symbolically, and `networks/regenerate.sh --jaff-path DIR` writes them into `src/networks/` as Julia. Honghu adds the parts common to every network: the temperature, the isothermal option, the temperature floor, and the scales of the tolerance. The built-in networks are [`HydrogenIliev1`](reference/chemistry.qmd#HydrogenIliev1) and [`HydrogenIliev2`](reference/chemistry.qmd#HydrogenIliev2), for the two tests below. The mean photon energy of a band is not part of a network; it is given when the network is built ([`NetworkOptions`](reference/chemistry.qmd#NetworkOptions)), and the heating per ionization in the `.jfunc` must agree with it.
 
 ## 4. Test problems
 
@@ -176,7 +183,7 @@ The front radius has an analytic solution (section 1.8), so this test measures t
 
 | Setup | |
 |:---|:---|
-| Physics | radiation transport (M1, one ionizing band); photochemistry ([`HydrogenOTSA`](reference/chemistry.qmd#HydrogenOTSA)), isothermal at $10^4$ K, $\alpha_B = 2.59\times10^{-13}$ cm$^3$ s$^{-1}$, no collisional ionization; hydrodynamics off |
+| Physics | radiation transport (M1, one ionizing band); photochemistry ([`HydrogenIliev1`](reference/chemistry.qmd#HydrogenIliev1)), isothermal at $10^4$ K, $\alpha_B = 2.59\times10^{-13}$ cm$^3$ s$^{-1}$, no collisional ionization; hydrodynamics off |
 | Domain | the octant $[0, 6.6\ {\rm kpc}]^3$ with the source at the origin, $32^3$ cells ($\Delta x = 206$ pc) |
 | Initial condition | $n_{\rm H} = 10^{-3}$ cm$^{-3}$, $T = 10^4$ K, $x = 1.2\times10^{-3}$, $N_\gamma = 0$, $\mathbf F_\gamma = 0$ |
 | Boundary conditions | reflecting on the three faces through the source, outflow on the other three |
@@ -193,9 +200,9 @@ The front radius has an analytic solution (section 1.8), so this test measures t
 | 30 | 2.903 | 2.880 | +0.8% | 3.243 | −10.5% |
 | 100 | 4.318 | 4.266 | +1.2% | 4.441 | −2.8% |
 | 200 | 5.011 | 4.934 | +1.6% | 5.017 | −0.1% |
-| 500 | 5.488 | 5.352 | +2.5% | 5.363 | +2.3% |
+| 500 | 5.489 | 5.352 | +2.6% | 5.363 | +2.3% |
 
-The front follows the finite-$\hat c$ solution to within 2.5% at all times. Early on it lags the $\hat c = c$ curve, because many of the photons are still in flight at $\hat c$, and it catches up as the front slows. The excess of about 2.5% at late times does not depend on $\hat c$ ([findings, section 3](photoionization-findings.md#the-reduced-speed-of-light-on-test-1)). The run had no failed chemistry solves.
+The front follows the finite-$\hat c$ solution to within 2.6% at all times. Early on it lags the $\hat c = c$ curve, because many of the photons are still in flight at $\hat c$, and it catches up as the front slows. The excess of about 2.5% at late times does not depend on $\hat c$ ([findings, section 3](photoionization-findings.md#the-reduced-speed-of-light-on-test-1)). The run had no failed chemistry solves.
 
 ### 4.2 Iliev Test 2: H II region with heating and cooling
 
@@ -203,7 +210,7 @@ The gas starts cold and is heated by the photoionizations. There is no analytic 
 
 | Setup | |
 |:---|:---|
-| Physics | as Test 1, but with the energy equation: photoheating and cooling (section 1.4), $\alpha_B(T)$ and collisional ionization |
+| Physics | as Test 1, but the network [`HydrogenIliev2`](reference/chemistry.qmd#HydrogenIliev2), with the energy equation: photoheating and cooling (section 1.4), $\alpha_B(T)$ and collisional ionization |
 | Domain, boundary conditions, evolution | as Test 1 |
 | Initial condition | as Test 1, but $T = 100$ K and $x = 0$ |
 | Source | as Test 1, but a $10^5$ K blackbody as one band: $\varepsilon = 29.65$ eV, $\sigma = 1.63\times10^{-18}$ cm$^2$, $\varepsilon_{\rm heat} = 16.05$ eV |
@@ -223,15 +230,16 @@ The ionized gas is heated to about $1.4\times10^4$ K and the neutral gas ahead o
 
 The unit tests check properties rather than tuned numbers:
 
-- the Jacobian against a 256-bit finite difference, and the rate coefficients against hand-computed values;
-- the photon budget and the energy of section 1.7, to $10^{-10}$ in a cell and $10^{-8}$ in a whole run;
+- the generated Jacobians against a 256-bit finite difference, including the isothermal and floored cases, and the generated rates against hand-computed values;
+- the photon budget, charge and the energy of section 1.7, with a photoionization-only network generated for the tests, to $10^{-10}$ in a cell and $10^{-8}$ in a whole run;
 - the ionization equilibrium, and that it does not depend on $\hat c$;
 - conservation of hydrogen and $\sum_s X_s = 1$ in moving gas;
 - Iliev's Test 1 at $16^3$, within 4.5% of the finite-$\hat c$ solution, and Test 2, a growing front with hot gas behind it and cold gas ahead.
 
 ## 6. Limitations
 
-- **Hydrogen only, one band, on the spot.** The model extends to more species and bands, but only one band and one source band are implemented, and diffuse recombination radiation is not followed.
+- **Hydrogen only, one band, on the spot.** JAFF can write networks with more species and bands, but the emission goes into the first band only, and diffuse recombination radiation is not followed.
+- **What JAFF does not know is set by hand:** the mean photon energy of each band, and so the heating per ionization in the `.jfunc`. JAFF averages a flat cross-section over a band that extends to infinity to only $2\times10^{-8}$.
 - **No radiation pressure** (`beta_order = 0`).
 - **No thermal radiation groups alongside.** The thermal coupling uses a constant mean molecular weight, which is wrong by up to a factor of 2 in ionized gas, so groups with thermal opacity are refused.
 - **A constant reduced speed of light,** a monatomic gas ($\gamma = 5/3$) and CGS units.
@@ -243,6 +251,7 @@ The unit tests check properties rather than tuned numbers:
 
 - Aubert, D. & Teyssier, R. 2008, MNRAS, 387, 295 (ATON).
 - Cen, R. 1992, ApJS, 78, 341.
+- JAFF, <https://github.com/jaff-chemistry/jaff>.
 - Gnedin, N. Y. & Abel, T. 2001, New Astron., 6, 437.
 - Iliev, I. T., et al. 2006, MNRAS, 371, 1057.
 - Katz, N., Weinberg, D. H. & Hernquist, L. 1996, ApJS, 105, 19.

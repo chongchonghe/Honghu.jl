@@ -1,4 +1,5 @@
-# The Stromgren-sphere tests of Iliev et al. (2006), on the hydrogen network of `chemistry_hydrogen.jl`.
+# The Stromgren-sphere tests of Iliev et al. (2006), on the hydrogen networks JAFF generates
+# from `networks/hydrogen_iliev1` and `networks/hydrogen_iliev2`.
 #
 # Everything here is in CGS, which the chemistry requires. Hydrodynamics is off: the tests
 # are about the ionization front, and the gas does not move.
@@ -33,7 +34,8 @@ end
 
 Test 1 or 2 of the Stromgren-sphere comparison of Iliev et al. (2006): an ionizing point
 source switched on in a uniform, static, hydrogen-only medium, run with the network
-[`HydrogenOTSA`](@ref) and the photon band of [`Photochemistry`](@ref). `n` is the number of
+[`HydrogenIliev1`](@ref) or [`HydrogenIliev2`](@ref) and the photon band of
+[`Photochemistry`](@ref). `n` is the number of
 cells along each side of the box; `chat_factor` is `chat / c`; `solver` is the chemistry
 integrator; the other keywords go to [`Simulation`](@ref). `tmax` is 500 Myr, the end of the
 paper's runs.
@@ -52,15 +54,16 @@ Choices that the paper does not make, and that are ours:
     `sigma = 1.63e-18` cm^2 and `photon_energy = 29.65 eV`. These are the project's values
     for the `1e5` K blackbody, the number-weighted mean energy of the ionizing photons and
     their photon-number-averaged cross-section, and not numbers the paper prescribes (a
-    cross-section `~ nu^-3` gives 29.6 eV and 1.5e-18 cm^2). The band has the network's
-    default heating of `photon_energy - 13.6 eV` per ionization. That overheats
-    the gas compared with the real spectrum (see [`HydrogenOTSA`](@ref)), so the Test 2
-    temperature behind the front is too high, and the paper prescribes no rates (each code
-    used its own), so the result is checked for its shape and not against data. The network
-    keeps its default rates, with `alpha_B(T)` and collisional ionization.
-  - **Test 1 in the network.** `isothermal = 1e4`, `heating_energy = 0`, a constant
-    `alpha_B`, and `collisional_ionization = false`, which keeps the background ionization
-    at `1.2e-3` instead of letting `1e4` K gas ionize itself.
+    cross-section `~ nu^-3` gives 29.6 eV and 1.5e-18 cm^2). Each ionization heats the gas
+    by `29.65 - 13.6` eV, Quokka's default. That overheats the gas compared with the real
+    spectrum, whose energy-weighted value is about 6.3 eV, so the Test 2 temperature behind
+    the front is too high; and the paper prescribes no rates (each code used its own), so
+    the result is checked for its shape and not against data. The network has the case B
+    `alpha_B(T)`, collisional ionization, and recombination, free-free and Lyman alpha
+    cooling (`networks/hydrogen_iliev2`).
+  - **Test 1 in the network.** `isothermal = 1e4`, no heating, a constant `alpha_B`, and no
+    collisional ionization, which keeps the background ionization at `1.2e-3` instead of
+    letting `1e4` K gas ionize itself (`networks/hydrogen_iliev1`).
   - **The photon rate of the octant.** With `centered = false` (the default) the box is the
     paper's octant `[0, L]^3`, with [`Reflecting`](@ref) walls on the low faces and
     [`Outflow`](@ref) on the high ones. Emitting `Ndot / 8` into it, so that the full sphere
@@ -92,11 +95,8 @@ function stromgren_iliev(; test::Integer=1, n::Integer=32, centered::Bool=false,
     test in (1, 2) || throw(ArgumentError("test must be 1 or 2, got $test"))
     CGS = Honghu.CGS
     eV = CGS.eV
-    net = test == 1 ?
-          HydrogenOTSA(sigma=6.3e-18, photon_energy=13.6 * eV, heating_energy=0.0,
-                       alpha0=_ILIEV_ALPHA_B, alpha_exp=0.0, collisional_ionization=false,
-                       isothermal=1e4) :
-          HydrogenOTSA(sigma=1.63e-18, photon_energy=29.65 * eV)
+    net = test == 1 ? HydrogenIliev1(photon_energy=13.6 * eV, isothermal=1e4) :
+          HydrogenIliev2(photon_energy=29.65 * eV)
     T0, x0 = test == 1 ? (1e4, 1.2e-3) : (100.0, 0.0)
 
     L = _ILIEV_L
@@ -113,9 +113,13 @@ function stromgren_iliev(; test::Integer=1, n::Integer=32, centered::Bool=false,
                      hydro=false, radiation=rad, eos=IdealGas(gamma=5 / 3, cv=cv_from_mu(1.0, 5 / 3)),
                      boundaries=bc, radiation_boundaries=bc,
                      chemistry=Photochemistry(net; solver, emission), kwargs...)
-    rho = _ILIEV_NH * CGS.m_H
+    # The species are H, H+ and e-, and the mass of an H+ ion and an electron is that of an
+    # H atom, so a hydrogen density `n_H` with ionization fraction `x` has these fractions.
+    m = Honghu.species_masses(net)
+    rho = _ILIEV_NH * m[1]
+    X = (1 - x0, x0 * m[2] / m[1], x0 * m[3] / m[1])
     set_initial_conditions!(sim) do x, y, z
-        (rho=rho, T=T0, x_HII=x0, Erad=0.0)
+        (rho=rho, T=T0, X=X, Erad=0.0)
     end
     return sim, 500e6 * CGS.year
 end
@@ -125,7 +129,7 @@ end
 
 The radius of the ionized region of a [`stromgren_iliev`](@ref) run, `r = (3 V / 4 pi)^(1/3)`,
 with `V` the volume of ionized gas, `sum max(x - x0, 0) / (1 - x0) dV` over the cells: the
-ionization fraction `x = rho X_H+ / rho` counted above the background `x0`, which is the
+ionization fraction `x = n_H+ / (n_H0 + n_H+)` counted above the background `x0`, which is the
 initial `1.2e-3` of Test 1 and zero for Test 2. It is a volume-weighted radius, not the
 position of a front, so a sharp front and a smeared one of the same total give the same
 `r`. With `centered = false` the grid is the octant and `V` is multiplied by 8.
@@ -133,10 +137,12 @@ position of a front, so a sharp front and a smeared one of the same total give t
 function ionized_radius(sim; centered::Bool=false, x0=0.0)
     g = sim.grid
     U = sim.U
-    i2 = Honghu.scalar_index(2)
+    i1, i2 = Honghu.scalar_index(1), Honghu.scalar_index(2)
+    m1, m2 = Honghu.species_masses(sim.chemistry.network)
     V = 0.0
     for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
-        x = U[i2, i, j, k] / U[Honghu.IRHO, i, j, k]
+        n0, n1 = U[i1, i, j, k] / m1, U[i2, i, j, k] / m2
+        x = n1 / (n0 + n1)
         V += max(x - x0, 0.0) / (1 - x0)
     end
     V *= prod(g.dx)

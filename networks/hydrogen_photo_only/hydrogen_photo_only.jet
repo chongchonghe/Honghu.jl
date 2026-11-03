@@ -1,0 +1,3 @@
+! Photoionization alone, for the tests: with no recombination the step conserves
+! n_H0 + n_H+, n_H+ + N/phi, n_e - n_H+ and E - deltaE0 n_H+ exactly.
+H  -> H+ + E                   []         PHOTO, 13.60

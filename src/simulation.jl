@@ -470,10 +470,9 @@ different length is an `ArgumentError` rather than a scalar quietly left at
 zero. Leaving `X` out sets every fraction to zero, which is also what a
 `Simulation` without scalars wants.
 
-With `chemistry`, leaving `X` out asks the network instead:
-[`initial_mass_fractions`](@ref) reads the network's own keys from the same
-`NamedTuple`, for instance the ionization fraction `x_HII` of
-[`HydrogenOTSA`](@ref). A `T` key then goes through the network's equation of
+With `chemistry`, `X` gives one mass fraction per species of the network, electrons
+included, in the order of [`species_names`](@ref); leaving it out is an error
+([`initial_mass_fractions`](@ref)). A `T` key then goes through the network's equation of
 state, [`network_eint`](@ref) of the species the cell starts with, and not the
 constant-`mu` one of `eos`, so the same `T` means the same energy that
 [`gas_temperature`](@ref) reports back.

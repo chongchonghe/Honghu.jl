@@ -1,0 +1,7 @@
+@var eV = 1.602176634e-12   # erg
+
+@function photoCrossSection0()
+    @return Piecewise((6.3e-18, ph_E >= 13.6), (0, True))
+
+@function deltaE0()
+    @return 6.4 * eV

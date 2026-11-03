@@ -1,0 +1,8 @@
+[network]
+label = "HydrogenPhotoOnly"
+
+[network.radiation]
+bands = [13.6, "inf"]
+profile_index = 0
+mode = "nph"
+rsl = "c_hat"

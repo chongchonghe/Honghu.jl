@@ -1,0 +1,34 @@
+@var kB = 1.380649e-16      # erg / K
+@var eV = 1.602176634e-12   # erg
+
+# The single band stands for a 1e5 K blackbody: its photon-averaged cross-section is
+# 1.63e-18 cm^2 and its mean photon energy 29.65 eV. The photon energy is not part of
+# the network: Honghu takes it as `photon_energy`, and deltaE0 below must be kept
+# consistent with it by hand.
+@function photoCrossSection0()
+    @return Piecewise((1.63e-18, ph_E >= 13.6), (0, True))
+
+# Each photoionization heats the gas by the photon energy less 13.6 eV, Quokka's
+# default (29.65 - 13.6 = 16.05 eV). It overheats the gas compared with the
+# energy-weighted value of a real blackbody, about 6.3 eV.
+@function deltaE0()
+    @return (29.65 - 13.6) * eV
+
+# Collisional ionization, Krumholz, Stone & Gardiner (2007); 2.18e-11 erg is 13.6 eV.
+@function chemRate2(tgas)
+    @return 5.84e-11 * sqrt(tgas) * exp(-2.18e-11 / (kB * tgas))
+
+# ... and each one costs the gas 13.6 eV.
+@function deltaE2()
+    @return -13.6 * eV
+
+# Cooling per unit volume:
+#   recombination, 6.1e-10 k_B T^0.11 n_e n_H+ above 100 K (Krumholz et al. 2007);
+#   free-free, 1.3 * 1.427e-27 sqrt(T) n_e n_H+;
+#   Lyman alpha collisional excitation, 7.5e-19 exp(-118348 / T) / (1 + sqrt(T / 1e5))
+#   n_e n_H0, Cen (1992) in the form of Katz, Weinberg & Hernquist (1996).
+@function heatingCoolingRate(tgas, n_e, n_Hj, n_H)
+    lrec = Piecewise((0.0, tgas < 100.0), (6.1e-10 * kB * tgas**0.11, True))
+    lff = 1.3 * 1.427e-27 * sqrt(tgas)
+    lce = 7.5e-19 * exp(-118348.0 / tgas) / (1 + sqrt(tgas / 1e5))
+    @return -(lrec + lff) * n_e * n_Hj - lce * n_e * n_H
