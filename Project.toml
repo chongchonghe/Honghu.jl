@@ -3,14 +3,17 @@ uuid = "dadb9192-06c8-4952-8646-5842d530648b"
 authors = ["ChongChong He <chongchong.he@anu.edu.au> and contributors"]
 version = "0.1.0"
 
-# Three stdlibs and three packages from one tree.
+# Three stdlibs and four packages from one tree.
 #
-# OrdinaryDiffEq supplies one of the three matter-radiation coupling solvers:
-# `AdaptiveCoupling`, the error-controlled reference. It is the only coupling
-# path that cannot use the scalar reduction the other two are built on -- the
-# group block is algebraically eliminable only after an implicit step has been
-# taken, not along an ODE trajectory -- so it is the only one that needs an
-# integrator, and the only one that allocates.
+# OrdinaryDiffEq supplies the integrator of two things. `RosenbrockChem`, the
+# default chemistry integrator, is one reused OrdinaryDiffEq integrator per
+# workspace, so every photoionization run calls it. `AdaptiveCoupling`, the
+# error-controlled reference of the three matter-radiation coupling solvers, is
+# the other. It is the only coupling path that cannot use the scalar reduction
+# the other two are built on -- the group block is algebraically eliminable only
+# after an implicit step has been taken, not along an ODE trajectory -- so it is
+# the only coupling solver that needs an integrator, and the only one that
+# allocates.
 #
 # SciMLBase supplies the interface `BracketedCoupling` hands its one scalar
 # equation through -- `IntervalNonlinearProblem` and `solve`.
@@ -27,6 +30,15 @@ version = "0.1.0"
 # sub-package dependencies that existed only to name `ImplicitEuler`
 # (OrdinaryDiffEqSDIRK) and `NLNewton` (OrdinaryDiffEqNonlinearSolve).
 #
+# LinearSolve supplies the one name `RosenbrockChem` needs from it,
+# `SimpleLUFactorization`: a dense LU written in Julia, for the integrator's
+# 4x4 linear solves. The integrator's default factorisation and solve call
+# OpenBLAS (`dgetrf` and `dgetrs`), whose buffer allocation takes one global lock
+# on every call, so on this machine four threads running the chemistry step were
+# 2.2 times slower than one. `GenericLUFactorization` does not help, because its
+# solve still goes through `dgetrs`. It is already inside OrdinaryDiffEq's
+# closure, so naming it adds no package.
+#
 # What the tree does cost, measured on this machine: `using Honghu` goes from
 # 0.035 s to 1.53 s, and a fresh install has ~190 packages to precompile instead
 # of none. That is the price of the decision, paid by everyone on every run.
@@ -34,6 +46,7 @@ version = "0.1.0"
 BracketingNonlinearSolve = "70df07ce-3d50-431d-a3e7-ca6ddb60ac1e"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LinearSolve = "7ed4a6bd-45f5-4d41-b270-4a48e9bafcae"
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
@@ -52,6 +65,8 @@ HonghuPlotsExt = "Plots"
 # each point once. Every method terminates on bracket width rather than on the
 # residual, which `BracketedCoupling` converts for.
 BracketingNonlinearSolve = "1.12.8"
+# 5 is the release in the manifest. `SimpleLUFactorization` is all that is used.
+LinearSolve = "5"
 # 7 is what this is tested against. The coupling supplies its own `jac` and
 # `tgrad` through `ODEFunction`, so it never asks an integrator to differentiate
 # anything and never touches the `autodiff` specifier that changed shape in 7.

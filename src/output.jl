@@ -38,6 +38,9 @@ end
 The named fields written by [`write_vtk`](@ref): `(name, ncomponents, data)`
 where `data` is laid out with the component index first and then `x, y, z`.
 
+A run with mass scalars adds `mass_fraction_1`, ... after `gas_temperature`: the
+mass fraction `X_s`, not the conserved density `rho X_s`.
+
 `radiation_energy` and `radiation_flux` are summed over the frequency groups.
 A multigroup run adds `radiation_energy_1`, `radiation_flux_1`, ... per group
 after them; a grey run does not, since those would be exact duplicates of the
@@ -52,6 +55,11 @@ function output_fields(sim::Simulation{T}) where {T}
     push!(fields, ("velocity", 3, prim[IVX:IVZ, :, :, :]))
     push!(fields, ("pressure", 1, prim[IPRE:IPRE, :, :, :]))
     push!(fields, ("gas_temperature", 1, reshape(gas_temperature(sim), 1, g.n...)))
+    for s in 1:sim.nscalars
+        # `prim` holds rho X_s; the file gets the mass fraction, as `field` does.
+        push!(fields, ("mass_fraction_$s", 1,
+                       prim[scalar_index(s):scalar_index(s), :, :, :] ./ prim[IRHO:IRHO, :, :, :]))
+    end
     if has_radiation(sim)
         push!(fields, ("radiation_energy", 1, _rad_group_sum(sim, IERAD:IERAD)))
         push!(fields, ("radiation_flux", 3, _rad_group_sum(sim, IFRX:IFRZ)))
@@ -175,9 +183,15 @@ end
 
 # --- checkpoints -------------------------------------------------------------
 
-const _CHECKPOINT_MAGIC = b"HONGHU\x00\x01"
+# Format 2 adds the row counts of `U` and `R` after the radiation flag, so a
+# file written with mass scalars cannot be read into a simulation without them
+# (or the reverse) and come out as shifted garbage.
+const _CHECKPOINT_MAGIC = b"HONGHU\x00\x02"
+# Format 1: the same layout without the counts, so it can only hold a
+# simulation with no mass scalars.
+const _CHECKPOINT_MAGIC_V1 = b"HONGHU\x00\x01"
 # What the package wrote under its old name, Hydro3D, as `.h3d` files. Same
-# length and the same layout after it, so those files still load.
+# length and the same layout as format 1, so those files still load.
 const _CHECKPOINT_MAGIC_HYDRO3D = b"HYDRO3D\x01"
 
 """
@@ -204,6 +218,7 @@ function save_checkpoint(sim::Simulation{T}, path::AbstractString) where {T}
         end
         write(f, Float64(sim.t), Float64(sim.dt), Int64(sim.step))
         write(f, Int64(has_radiation(sim) ? 1 : 0))
+        write(f, Int64(size(sim.U, 1)), Int64(size(sim.R, 1)))
         write(f, sim.U)
         has_radiation(sim) && write(f, sim.R)
     end
@@ -214,16 +229,19 @@ end
     load_checkpoint!(sim, path) -> sim
 
 Restore a simulation from a checkpoint written by [`save_checkpoint`](@ref).
-The grid, floating-point precision, and presence of radiation must match those
-of `sim`. A `.h3d` checkpoint, written when the package was called Hydro3D,
-loads too.
+The grid, floating-point precision, presence of radiation, and the number of
+gas and radiation variables (hence of mass scalars) must match those of `sim`,
+or it throws before touching `sim.t`, `sim.dt`, `sim.step` or the state.
+A checkpoint of format 1 and a `.h3d` checkpoint, written when the package was
+called Hydro3D, carry no variable counts, so they load only into a simulation
+with `nscalars == 0`.
 """
 function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
     g = sim.grid
     open(path, "r") do f
         magic = read(f, length(_CHECKPOINT_MAGIC))
-        magic == _CHECKPOINT_MAGIC || magic == _CHECKPOINT_MAGIC_HYDRO3D ||
-            error("$path is not a Honghu checkpoint")
+        magic == _CHECKPOINT_MAGIC || magic == _CHECKPOINT_MAGIC_V1 ||
+            magic == _CHECKPOINT_MAGIC_HYDRO3D || error("$path is not a Honghu checkpoint")
         read(f, Int64) == sizeof(T) || error("checkpoint precision does not match the simulation")
         for d in 1:3
             read(f, Int64) == g.n[d] || error("checkpoint grid size does not match the simulation")
@@ -231,14 +249,27 @@ function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
         for d in 1:3
             read(f, Int64) == g.ng[d] || error("checkpoint ghost width does not match the simulation")
         end
-        sim.t = T(read(f, Float64))
-        sim.dt = T(read(f, Float64))
-        sim.step = Int(read(f, Int64))
+        # Locals until every check has passed, so that a refused file leaves the clock as it
+        # was along with the state.
+        t = T(read(f, Float64))
+        dt = T(read(f, Float64))
+        step = Int(read(f, Int64))
         hasrad = read(f, Int64) == 1
         hasrad == has_radiation(sim) ||
             error("checkpoint radiation setting does not match the simulation")
+        if magic == _CHECKPOINT_MAGIC
+            nu, nr = read(f, Int64), read(f, Int64)
+            nu == size(sim.U, 1) ||
+                error("checkpoint has $nu hydro variables, the simulation has $(size(sim.U, 1))")
+            nr == size(sim.R, 1) ||
+                error("checkpoint has $nr radiation variables, the simulation has $(size(sim.R, 1))")
+        else
+            sim.nscalars == 0 ||
+                error("checkpoint has no variable counts (format 1), so it cannot be read into a simulation with $(sim.nscalars) mass scalars")
+        end
         read!(f, sim.U)
         hasrad && read!(f, sim.R)
+        sim.t, sim.dt, sim.step = t, dt, step
     end
     return sim
 end

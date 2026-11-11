@@ -25,31 +25,42 @@ them with [`reset_diagnostics!`](@ref).
 | `rad_substeps` | IMEX radiation substeps taken |
 | `floors_hydro` | cell updates that hit a gas density or pressure floor |
 | `floors_rad` | cell updates projected back onto the M1 admissible set |
+| `floors_scalar` | cells where a negative mass-scalar density was clipped to zero |
 | `floors_presolve` | cells whose radiation energy was floored before a coupling solve, because the energy the solve conserves was not positive |
 | `repairs_postsolve` | cells whose radiation state was repaired after a coupling solve |
 | `newton_cells` | cells passed through the implicit coupling solve |
 | `newton_iterations` | Newton iterations summed over those cells |
 | `newton_max` | worst-case Newton iterations in any one cell |
 | `newton_failures` | cells that hit `max_iterations` without converging |
+| `chem_cells` | cells passed through the chemistry solve ([`chemistry_step!`](@ref)) |
+| `chem_steps` | chemistry solver steps summed over those cells (Newton iterations for [`BackwardEulerChem`](@ref)) |
+| `chem_max` | worst-case chemistry steps in any one cell |
+| `chem_failures` | cells whose chemistry solve did not converge |
 
 A handful of floor hits is normal wherever the solution genuinely reaches
 vacuum. `newton_failures > 0` is not: it means the implicit solve gave up, and
-the run should not be trusted.
+the run should not be trusted, and neither should `chem_failures > 0`, which
+says the same of the chemistry solve.
 """
 mutable struct Diagnostics
     steps::Int
     rad_substeps::Int
     floors_hydro::Int
     floors_rad::Int
+    floors_scalar::Int
     floors_presolve::Int
     repairs_postsolve::Int
     newton_cells::Int
     newton_iterations::Int
     newton_max::Int
     newton_failures::Int
+    chem_cells::Int
+    chem_steps::Int
+    chem_max::Int
+    chem_failures::Int
 end
 
-Diagnostics() = Diagnostics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+Diagnostics() = Diagnostics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 """
     reset_diagnostics!(sim) -> Diagnostics
@@ -59,9 +70,10 @@ separately from the transient that preceded it.
 """
 function reset_diagnostics!(sim)
     d = sim.diag
-    d.steps = d.rad_substeps = d.floors_hydro = d.floors_rad = 0
+    d.steps = d.rad_substeps = d.floors_hydro = d.floors_rad = d.floors_scalar = 0
     d.floors_presolve = d.repairs_postsolve = 0
     d.newton_cells = d.newton_iterations = d.newton_max = d.newton_failures = 0
+    d.chem_cells = d.chem_steps = d.chem_max = d.chem_failures = 0
     return d
 end
 
@@ -73,14 +85,27 @@ end
     return d
 end
 
+@inline function _record!(d::Diagnostics, s::ChemStepStats)
+    d.chem_cells += s.cells
+    d.chem_steps += s.steps
+    d.chem_max = max(d.chem_max, s.max_steps)
+    d.chem_failures += s.failures
+    return d
+end
+
 function Base.show(io::IO, d::Diagnostics)
     print(io, "Diagnostics(steps = ", d.steps)
     d.rad_substeps > 0 && print(io, ", rad_substeps = ", d.rad_substeps)
     print(io, ", floors = ", d.floors_hydro, " gas / ", d.floors_rad, " rad")
+    d.floors_scalar > 0 && print(io, " / ", d.floors_scalar, " scalar")
     if d.newton_cells > 0
         @printf(io, ", newton = %.2f mean / %d max", d.newton_iterations / d.newton_cells,
                 d.newton_max)
         d.newton_failures > 0 && print(io, ", ", d.newton_failures, " FAILURES")
+    end
+    if d.chem_cells > 0
+        @printf(io, ", chemistry = %.2f mean / %d max", d.chem_steps / d.chem_cells, d.chem_max)
+        d.chem_failures > 0 && print(io, ", ", d.chem_failures, " FAILURES")
     end
     print(io, ")")
 end
@@ -113,9 +138,9 @@ struct HydroWorkspace{T<:AbstractFloat}
     U0::Array{T,4}
 end
 
-function HydroWorkspace(g::CartesianGrid{T}) where {T}
-    HydroWorkspace(allocate(g, NHYDRO), allocate(g, NHYDRO), allocate(g, NHYDRO),
-                   allocate(g, NHYDRO), allocate(g, NHYDRO), allocate(g, NHYDRO))
+function HydroWorkspace(g::CartesianGrid{T}, nvar::Integer=NHYDRO) where {T}
+    HydroWorkspace(allocate(g, nvar), allocate(g, nvar), allocate(g, nvar),
+                   allocate(g, nvar), allocate(g, nvar), allocate(g, nvar))
 end
 
 """
@@ -143,10 +168,10 @@ struct RadiationWorkspace{T<:AbstractFloat}
 end
 
 function RadiationWorkspace(g::CartesianGrid{T}, nrad::Integer=NRAD,
-                            ng::Integer=nrad ÷ NRAD) where {T}
+                            ng::Integer=nrad ÷ NRAD, nvar_gas::Integer=NHYDRO) where {T}
     RadiationWorkspace(allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
                        allocate(g, nrad), allocate(g, nrad), allocate(g, nrad),
-                       allocate(g, NHYDRO), allocate(g, ng), allocate(g, ng))
+                       allocate(g, nvar_gas), allocate(g, ng), allocate(g, ng))
 end
 
 """
@@ -174,6 +199,23 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     `dt/2` before the advance and `dt/2` after it, mutating `sim.U` and `sim.R`
     in place. See [`SourceOrder`](@ref).
   - `floors = Floors()` : positivity floors.
+  - `nscalars = 0` : number of passive mass scalars, stored as the conserved
+    `rho * X_s` in rows `NHYDRO + 1 : NHYDRO + nscalars` of `sim.U` (see
+    [`scalar_index`](@ref)) and set from the key `X` of
+    [`set_initial_conditions!`](@ref). With the default, the state is exactly
+    the five hydro variables.
+  - `chemistry = nothing` : a [`Photochemistry`](@ref) to evolve a chemical
+    network, with its ionizing photons, inside every radiation substep. It sets
+    `nscalars` to the number of species (an explicit `nscalars` must equal it)
+    and needs radiation with the default [`ConstantChat`](@ref) limiter,
+    `beta_order = 0` and zero thermal opacity in every group (the coupling would
+    take the gas temperature from the constant-mu equation of state, which
+    ignores the species), and an `eos` with
+    `adiabatic_index(eos) == 5/3`, or the constructor throws an `ArgumentError`.
+    One chemistry workspace is built per row of cells, `n[2] * n[3]` of them.
+    The species scalars are renormalised to add up to `rho` at the start of
+    every radiation advance, in every hydrodynamic right-hand side and at the end
+    of every step (see [`enforce_scalar_floors!`](@ref)).
 
 # Numerics
   - `reconstruction = PPM()` : [`PCM`](@ref), [`PLM`](@ref) or [`PPM`](@ref).
@@ -201,7 +243,7 @@ run!(sim, tmax = 0.5)
 """
 mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
                           RR<:AbstractReconstruction,RS<:AbstractRiemannSolver,
-                          IN<:AbstractIntegrator,BH,BR,SRC,SS,RW}
+                          IN<:AbstractIntegrator,BH,BR,SRC,SS,CH,RW,CW}
     const grid::CartesianGrid{T}
     const eos::E
     const radiation::RP
@@ -213,15 +255,18 @@ mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
     const radiation_boundaries::BR
     const source::SRC
     const strang_sources::SS
+    const chemistry::CH
     const floors::Floors{T}
     const cfl::T
     const cfl_radiation::T
     const max_radiation_substeps::Int
     const hydro_enabled::Bool
+    const nscalars::Int
     const U::Array{T,4}
     const R::Array{T,4}
     const hw::HydroWorkspace{T}
     const rw::RW
+    const cw::CW
     const diag::Diagnostics
     t::T
     dt::T
@@ -243,26 +288,84 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     radiation_boundaries::Boundaries=boundaries,
                     cfl=0.4, cfl_radiation=0.3,
                     max_radiation_substeps::Integer=10,
+                    nscalars::Integer=0,
+                    chemistry=nothing,
                     T::Type{<:AbstractFloat}=Float64)
     hydro || radiation !== nothing ||
         throw(ArgumentError("nothing to evolve: enable hydro, radiation, or both"))
+    nscalars >= 0 || throw(ArgumentError("nscalars must be non-negative, got $nscalars"))
+    chemistry === nothing || _check_chemistry(chemistry, radiation, eos, nscalars, T)
+    nscalars = chemistry === nothing ? Int(nscalars) : nspecies(chemistry.network)
     ng = max(required_ghosts(reconstruction),
              radiation === nothing ? 0 : required_ghosts(radiation_reconstruction))
     grid = CartesianGrid(; n, xlo, xhi, nghost=ng, T)
-    U = allocate(grid, NHYDRO)
+    nvar = NHYDRO + nscalars
+    U = allocate(grid, nvar)
     nrad = radiation === nothing ? 0 : nradvars(radiation)
     Rarr = radiation === nothing ? Array{T,4}(undef, 0, 0, 0, 0) : allocate(grid, nrad)
     rw = radiation === nothing ? nothing :
-         RadiationWorkspace(grid, nrad, ngroups(radiation))
+         RadiationWorkspace(grid, nrad, ngroups(radiation), nvar)
     # The limiter only ever raises `chat` above this floor, and `ConstantChat`
     # leaves it here for the whole run.
     rw === nothing || fill!(rw.chat, T(radiation.chat))
     fl = Floors(T(floors.rho), T(floors.pressure), T(floors.erad))
+    # One chemistry workspace per interior row, so that each row of the threaded
+    # loop in `chemistry_step!` has one to itself.
+    cw = chemistry === nothing ? nothing :
+         chem_row_workspaces(chemistry, T, grid.n[2] * grid.n[3])
     Simulation(grid, eos, radiation, reconstruction, radiation_reconstruction,
                riemann, integrator, boundaries,
-               radiation_boundaries, source, strang_sources, fl, T(cfl), T(cfl_radiation),
-               Int(max_radiation_substeps), hydro, U, Rarr,
-               HydroWorkspace(grid), rw, Diagnostics(), zero(T), zero(T), 0)
+               radiation_boundaries, source, strang_sources, chemistry, fl, T(cfl),
+               T(cfl_radiation), Int(max_radiation_substeps), hydro, Int(nscalars), U, Rarr,
+               HydroWorkspace(grid, nvar), rw, cw, Diagnostics(), zero(T), zero(T), 0)
+end
+
+# What a chemistry run needs of the rest of the simulation (see `Photochemistry`): the
+# radiation to carry the photons, a limiter and a coupling that leave the band alone, and a
+# mass scalar per species. Each is an error rather than a quiet wrong answer, because a
+# run that breaks one of them is not slightly off, it is another problem.
+function _check_chemistry(chem, radiation, eos, nscalars, ::Type{T}) where {T}
+    chem isa Photochemistry ||
+        throw(ArgumentError("`chemistry` must be a Photochemistry, got $(typeof(chem))"))
+    net = chem.network
+    nscalars in (0, nspecies(net)) ||
+        throw(ArgumentError("chemistry carries one mass scalar per species ($(nspecies(net))), " *
+                            "but nscalars = $nscalars"))
+    # The network's temperature is `e / (3/2 k_B n)`, a monatomic gas. A different gamma
+    # makes the hydro pressure `(gamma - 1) e` inconsistent with it.
+    isapprox(adiabatic_index(eos), 5 / 3; rtol=1e-6) ||
+        throw(ArgumentError("chemistry assumes a monatomic gas, adiabatic_index(eos) = 5/3, " *
+                            "got $(adiabatic_index(eos))"))
+    radiation === nothing &&
+        throw(ArgumentError("chemistry needs radiation: pass `radiation = RadiationPhysics(...)`"))
+    radiation.chat_limiter isa ConstantChat ||
+        throw(ArgumentError("chemistry needs the standard reduced speed of light " *
+                            "(chat_limiter = ConstantChat()): the stability bound of the " *
+                            "other limiters has no photoabsorption term"))
+    radiation.beta_order == 0 ||
+        throw(ArgumentError("chemistry needs beta_order = 0: the momentum the absorbed " *
+                            "photons deposit is not modelled"))
+    for b in 1:nbands(net)
+        gr = band_group(net, b)
+        1 <= gr <= ngroups(radiation) ||
+            throw(ArgumentError("band $b of the network reads radiation group $gr, but the " *
+                                "simulation has $(ngroups(radiation))"))
+    end
+    # Every group, not only the band's: the matter-radiation coupling of any group with
+    # opacity reads the gas temperature from the equation of state, `temperature(eos, ...)`,
+    # at a constant mean molecular weight, which ignores the species. In ionized gas that
+    # differs from the network's temperature by a factor of 2, so the coupling would heat
+    # and cool the gas to the wrong temperature.
+    kappa = group_opacities(radiation.opacity, radiation.groups, one(T), T(1e4))
+    for gr in 1:ngroups(radiation)
+        kappa[gr] == 0 ||
+            throw(ArgumentError("the thermal opacity of group $gr must be zero while chemistry is " *
+                                "on: the matter-radiation coupling takes the gas temperature from " *
+                                "the constant-mu equation of state, which ignores the species and " *
+                                "differs from the network's temperature by up to a factor of 2 in " *
+                                "ionized gas, so only the network may change the gas energy"))
+    end
+    return nothing
 end
 
 """
@@ -271,6 +374,15 @@ end
 Whether the radiation module is enabled (a compile-time property of the type).
 """
 @inline has_radiation(::Simulation{T,E,RP}) where {T,E,RP} = RP !== Nothing
+
+"""
+    nhydrovars(sim) -> Int
+
+Length of the gas state vector, `NHYDRO + sim.nscalars`: the five hydro
+variables followed by one conserved density `rho * X_s` per mass scalar. It is
+the first dimension of `sim.U` and of the hydro scratch arrays.
+"""
+@inline nhydrovars(sim::Simulation) = NHYDRO + sim.nscalars
 
 Base.eltype(::Simulation{T}) where {T} = T
 
@@ -294,6 +406,9 @@ function Base.show(io::IO, sim::Simulation{T}) where {T}
     else
         println(io, "  radiation      : disabled")
     end
+    sim.chemistry === nothing ||
+        println(io, "  chemistry      : ", nameof(typeof(sim.chemistry.network)), ", ",
+                nameof(typeof(sim.chemistry.solver)))
     print(io, "  t = ", sim.t, ", step = ", sim.step)
 end
 
@@ -301,6 +416,26 @@ end
 
 @inline _field(nt::NamedTuple, ::Val{K}, default) where {K} =
     haskey(nt, K) ? getfield(nt, K) : default
+
+# The conserved scalar densities `rho * X_s` of one cell. `X === nothing` is the
+# key left out of the initial condition. The zeros are written rather than assumed
+# so that setting the initial conditions a second time resets the scalars too.
+function _set_scalars!(U::Array{T,4}, ns::Int, ::Nothing, rho, i, j, k) where {T}
+    for s in 1:ns
+        U[scalar_index(s), i, j, k] = zero(T)
+    end
+    return nothing
+end
+
+function _set_scalars!(U::Array{T,4}, ns::Int, X, rho, i, j, k) where {T}
+    length(X) == ns ||
+        throw(ArgumentError("initial condition gave $(length(X)) mass fractions `X` " *
+                            "but the simulation has nscalars = $ns"))
+    for s in 1:ns
+        U[scalar_index(s), i, j, k] = rho * T(X[s])
+    end
+    return nothing
+end
 
 """
     set_initial_conditions!(f, sim)
@@ -317,6 +452,7 @@ Recognised keys:
 | `vx`, `vy`, `vz`   | velocity                               | `0` |
 | `Erad` or `Trad`   | radiation energy density, or radiation temperature | gas temperature |
 | `Fx`, `Fy`, `Fz`   | radiation flux                         | `0` |
+| `X`                | mass fractions of the passive scalars: a tuple or vector of `sim.nscalars` numbers | all `0`; with `chemistry`, [`initial_mass_fractions`](@ref) of the network |
 
 Ghost cells are filled from the boundary conditions afterwards, so `f` is only
 called on interior cells.
@@ -327,6 +463,24 @@ radiation temperature `Erad` implies, so a multigroup run starts in equilibrium
 rather than with everything piled into group 1. A multigroup problem therefore
 needs no group-aware initial condition of its own; a [`Fixed`](@ref) radiation
 boundary still does, since nothing splits a boundary state.
+
+`X` holds mass *fractions*, as the problem is posed; the state stores the
+conserved density `rho * X_s`. Its length must be `sim.nscalars`, and a
+different length is an `ArgumentError` rather than a scalar quietly left at
+zero. Leaving `X` out sets every fraction to zero, which is also what a
+`Simulation` without scalars wants.
+
+With `chemistry`, `X` gives one mass fraction per species of the network, electrons
+included, in the order of [`species_names`](@ref); leaving it out is an error
+([`initial_mass_fractions`](@ref)). A `T` key then goes through the network's equation of
+state, [`network_eint`](@ref) of the species the cell starts with, and not the
+constant-`mu` one of `eos`, so the same `T` means the same energy that
+[`gas_temperature`](@ref) reports back.
+
+`Erad` defaults to `a_r T^4`, the radiation in equilibrium with the gas, which is
+wrong for a photoionization problem: it puts a blackbody's energy in the band of
+ionizing photons, where there should be none. A chemistry run must pass `Erad`
+(usually a tiny value, or the radiation field it starts with) instead.
 
 ```julia
 set_initial_conditions!(sim) do x, y, z
@@ -339,16 +493,29 @@ function set_initial_conditions!(f::F, sim::Simulation{T}) where {F,T}
     eos = sim.eos
     U = sim.U
     z0 = zero(T)
+    ch = sim.chemistry
+    # The species of one cell, for the network's equation of state under a `T` key.
+    nsp = ch === nothing ? T[] : Vector{T}(undef, nspecies(ch.network))
     for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
         x, y, z = cellcenter(g, i, j, k)
         s = f(x, y, z)
         rho = T(_field(s, Val(:rho), NaN))
         isfinite(rho) || throw(ArgumentError("initial condition must provide `rho`"))
+        X = _field(s, Val(:X), nothing)
+        ch !== nothing && X === nothing && (X = initial_mass_fractions(ch.network, s))
+        _set_scalars!(U, sim.nscalars, X, rho, i, j, k)
         p = T(_field(s, Val(:p), NaN))
         if !isfinite(p)
             tg = T(_field(s, Val(:T), NaN))
             isfinite(tg) || throw(ArgumentError("initial condition must provide `p` or `T`"))
-            p = pressure(eos, rho, eint_from_temperature(eos, rho, tg))
+            if ch === nothing
+                p = pressure(eos, rho, eint_from_temperature(eos, rho, tg))
+            else
+                for q in 1:nspecies(ch.network)
+                    nsp[q] = U[scalar_index(q), i, j, k] / species_mass(ch.network, q)
+                end
+                p = pressure(eos, rho, T(network_eint(ch.network, nsp, tg)))
+            end
         end
         w = SVec(rho, T(_field(s, Val(:vx), z0)), T(_field(s, Val(:vy), z0)),
                  T(_field(s, Val(:vz), z0)), p)
@@ -385,7 +552,7 @@ function set_initial_conditions!(f::F, sim::Simulation{T}) where {F,T}
     end
     # Ghosts first: `enforce_state!` sweeps the whole array, and until the
     # boundary conditions have run the ghost cells hold uninitialised memory.
-    fill_ghosts!(U, sim.boundaries, g, sim.t)
+    fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
     has_radiation(sim) && fill_ghosts!(sim.R, sim.radiation_boundaries, g, sim.t)
     enforce_state!(sim)
     return sim
@@ -396,9 +563,11 @@ end
 function _hydro_sweep!(dU, sim::Simulation, ::Val{D}) where {D}
     hw = sim.hw
     g = sim.grid
-    reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, NHYDRO)
-    hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g)
-    flux_divergence!(dU, hw.flux, Val(D), g, NHYDRO)
+    nvar = nhydrovars(sim)
+    reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, nvar)
+    hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g,
+                  sim.nscalars)
+    flux_divergence!(dU, hw.flux, Val(D), g, nvar)
     return nothing
 end
 
@@ -411,9 +580,10 @@ directional sweep per active dimension.
 """
 function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
     g = sim.grid
-    fill_ghosts!(U, sim.boundaries, g, sim.t)
-    sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors)
-    cons2prim!(sim.hw.prim, U, sim.eos, g)
+    fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
+    sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars)
+    sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars, sim.chemistry !== nothing)
+    cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars)
     fill!(dU, zero(T))
     g.active[1] && _hydro_sweep!(dU, sim, Val(1))
     g.active[2] && _hydro_sweep!(dU, sim, Val(2))
@@ -472,7 +642,7 @@ function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
     copyto!(hw.U0, sim.U)
     for (a, b, c) in tableau(sim.integrator)
         hydro_rhs!(hw.dU, sim.U, sim)
-        combine!(sim.U, T(a), hw.U0, T(b), sim.U, T(c) * dt, hw.dU, g, NHYDRO)
+        combine!(sim.U, T(a), hw.U0, T(b), sim.U, T(c) * dt, hw.dU, g, nhydrovars(sim))
     end
     return sim
 end
@@ -486,7 +656,7 @@ end
 function _stage_chat!(sim::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Array{T,4},
                       dt::T, t::T) where {T}
     sim.radiation.wavespeed_correction || return nothing
-    fill_ghosts!(U, sim.boundaries, sim.grid, t)
+    fill_ghosts!(U, sim.boundaries, sim.grid, t; momentum_blocks=1)
     update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
     return nothing
 end
@@ -495,7 +665,7 @@ end
 # from the state that stage transports.
 function _stage_chiF!(sim::Simulation{T}, U::Array{T,4}, t::T) where {T}
     sim.radiation.wavespeed_correction || return nothing
-    fill_ghosts!(U, sim.boundaries, sim.grid, t)
+    fill_ghosts!(U, sim.boundaries, sim.grid, t; momentum_blocks=1)
     update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
     return nothing
 end
@@ -507,7 +677,7 @@ function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
     # step has a value on both sides of every interface bounding the domain.
     # `rad_rhs!` fills `R`'s ghosts again a moment later, which costs one
     # boundary sweep and keeps the ordering here independent of what it does.
-    fill_ghosts!(U, sim.boundaries, g, t)
+    fill_ghosts!(U, sim.boundaries, g, t; momentum_blocks=1)
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
     update_chat!(sim.rw.chat, U, R, sim.eos, sim.radiation, g, sim.floors, dt)
     return nothing
@@ -578,8 +748,20 @@ end
 
 Subcycle the radiation subsystem over one hydro step, using as many IMEX
 substeps as the radiation CFL condition requires.
+
+With chemistry and hydrodynamics both on, the species scalars are clipped and
+renormalised to add up to `rho` once before the first substep, and the clip is
+counted in `Diagnostics.floors_scalar`. The last Runge-Kutta combine of the hydro
+step is neither floored nor renormalised, so without this the chemistry would read
+species whose masses add up to `rho` only to about a percent, or are negative, and
+its write-back (which clamps a negative species to zero) would create mass. The
+substeps leave `rho` and the scalars alone and the burn conserves the species
+total, so one call covers all of them.
 """
 function advance_radiation!(sim::Simulation{T}, dt::T) where {T}
+    if sim.chemistry !== nothing && sim.hydro_enabled
+        sim.diag.floors_scalar += enforce_scalar_floors!(sim.U, sim.grid, sim.nscalars, true)
+    end
     dtr = _rad_dt(sim)
     nsub = max(1, ceil(Int, dt / dtr))
     dts = dt / nsub
@@ -587,6 +769,14 @@ function advance_radiation!(sim::Simulation{T}, dt::T) where {T}
     tt = sim.t
     for _ in 1:nsub
         stats += imex_substep!(sim, dts, tt)
+        if sim.chemistry !== nothing
+            # After the IMEX step, as Quokka does: the band's transport is done, and the
+            # chemistry burns what is in the cell over the substep. The burn rescales the
+            # band's energy and flux, so the state is repaired once more afterwards.
+            _record!(sim.diag, chemistry_step!(sim, dts, tt))
+            sim.diag.repairs_postsolve += amend_rad_state!(sim.R, sim.radiation, sim.grid,
+                                                           sim.floors)
+        end
         tt += dts
     end
     sim.diag.rad_substeps += nsub
@@ -720,17 +910,18 @@ end
 """
     nrepaired(sim) -> Int
 
-Total cell updates that hit a positivity floor, gas and radiation together.
+Total cell updates that hit a positivity floor: gas, radiation and mass scalars
+together.
 Zero is the invariant worth asserting in a test: a scheme that needs no help
 from the floors is one whose positivity you have actually verified.
 """
-nrepaired(sim::Simulation) = sim.diag.floors_hydro + sim.diag.floors_rad
+nrepaired(sim::Simulation) = sim.diag.floors_hydro + sim.diag.floors_rad + sim.diag.floors_scalar
 
 """
     enforce_state!(sim) -> Int
 
-Project both subsystems onto their admissible sets and accumulate the repair
-count. Called at the end of every step and after the initial conditions, which
+Project both subsystems, and the mass scalars if there are any, onto their
+admissible sets and accumulate the repair count. Called at the end of every step and after the initial conditions, which
 is what lets the conversion kernels and every diagnostic path stay read-only.
 
 The analogue of Quokka's `EnforceLimits`, called from the same place in the
@@ -739,8 +930,15 @@ driver.
 function enforce_state!(sim::Simulation)
     n = 0
     if sim.hydro_enabled
-        m = enforce_floors!(sim.U, sim.eos, sim.grid, sim.floors)
+        m = enforce_floors!(sim.U, sim.eos, sim.grid, sim.floors, sim.nscalars)
         sim.diag.floors_hydro += m
+        n += m
+    end
+    # Also with hydro off: a Strang source or the initial conditions can still
+    # leave a scalar negative, and the scalars are not the gas's to repair.
+    if sim.nscalars > 0
+        m = enforce_scalar_floors!(sim.U, sim.grid, sim.nscalars, sim.chemistry !== nothing)
+        sim.diag.floors_scalar += m
         n += m
     end
     if has_radiation(sim)
@@ -819,6 +1017,8 @@ function _print_summary(sim::Simulation, elapsed)
     nfl = d.floors_hydro + d.floors_rad
     nfl > 0 && @printf("note: %d cell updates hit a positivity floor (%d gas, %d radiation)\n",
                        nfl, d.floors_hydro, d.floors_rad)
+    d.floors_scalar > 0 &&
+        @printf("note: %d cell updates clipped a negative mass scalar to zero\n", d.floors_scalar)
     if d.newton_cells > 0
         @printf("      implicit coupling: %.2f Newton iterations per cell, %d worst case, %d substeps\n",
                 d.newton_iterations / d.newton_cells, d.newton_max, d.rad_substeps)
@@ -828,6 +1028,15 @@ function _print_summary(sim::Simulation, elapsed)
         d.newton_failures > 0 &&
             @printf("WARNING: the implicit solve failed to converge in %d cell updates\n",
                     d.newton_failures)
+    end
+    if d.chem_cells > 0
+        @printf("      photochemistry: %.2f solver steps per cell, %d worst case\n",
+                d.chem_steps / d.chem_cells, d.chem_max)
+        # As for the implicit coupling: the state of a cell that did not converge is
+        # whatever the solver's last iterate was.
+        d.chem_failures > 0 &&
+            @printf("WARNING: the chemistry solve failed to converge in %d cell updates\n",
+                    d.chem_failures)
     end
     return nothing
 end
@@ -850,9 +1059,11 @@ end
     conserved_totals(sim)
 
 Volume integrals of the conserved quantities over the interior, returned as a
-`NamedTuple` `(mass, momentum, energy_gas, energy_rad, energy_total)`. Useful as
-a conservation check; note that the total energy is only conserved exactly when
-every boundary is periodic or reflecting and there are no sources.
+`NamedTuple` `(mass, momentum, energy_gas, energy_rad, energy_total, scalars)`.
+`scalars` is a vector with the mass of each passive scalar, `sum(rho X_s) dV`,
+and is empty without scalars. Useful as a conservation check; note that the
+total energy is only conserved exactly when every boundary is periodic or
+reflecting and there are no sources.
 """
 function conserved_totals(sim::Simulation{T}) where {T}
     g = sim.grid
@@ -863,12 +1074,16 @@ function conserved_totals(sim::Simulation{T}) where {T}
     pz = zero(T)
     egas = zero(T)
     erad = zero(T)
+    scalars = zeros(T, sim.nscalars)
     @inbounds for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
         mass += sim.U[IRHO, i, j, k]
         px += sim.U[IMX, i, j, k]
         py += sim.U[IMY, i, j, k]
         pz += sim.U[IMZ, i, j, k]
         egas += sim.U[IEGAS, i, j, k]
+        for s in 1:sim.nscalars
+            scalars[s] += sim.U[scalar_index(s), i, j, k]
+        end
         if has_radiation(sim)
             for gr in 1:ngroups(sim.radiation)
                 erad += sim.R[gbase(gr)+IERAD, i, j, k]
@@ -877,14 +1092,16 @@ function conserved_totals(sim::Simulation{T}) where {T}
     end
     (mass=mass * dV, momentum=(px * dV, py * dV, pz * dV),
      energy_gas=egas * dV, energy_rad=erad * dV,
-     energy_total=(egas + erad) * dV)
+     energy_total=(egas + erad) * dV, scalars=scalars .* dV)
 end
 
 """
     primitives(sim)
 
-A fresh `(NHYDRO, nx, ny, nz)` array of interior primitive variables
-`(rho, vx, vy, vz, p)`. Convenience for analysis and plotting.
+A fresh `(nhydrovars(sim), nx, ny, nz)` array of interior primitive variables
+`(rho, vx, vy, vz, p)`, followed by one row per mass scalar. Those rows hold the
+conserved density `rho X_s`, not the mass fraction `X_s`, exactly as the
+reconstruction sees them. Convenience for analysis and plotting.
 
 Does not modify `sim`. This is load-bearing, not incidental: it used to apply
 the positivity floors to `sim.U` as a side effect, so a run that was plotted
@@ -892,21 +1109,37 @@ every ten steps and one that was not could quietly disagree.
 """
 function primitives(sim::Simulation{T}) where {T}
     g = sim.grid
-    cons2prim!(sim.hw.prim, sim.U, sim.eos, g)
+    cons2prim!(sim.hw.prim, sim.U, sim.eos, g, sim.nscalars)
     sim.hw.prim[:, g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]]
 end
 
 """
     gas_temperature(sim)
 
-A fresh `(nx, ny, nz)` array of gas temperatures over the interior.
+A fresh `(nx, ny, nz)` array of gas temperatures over the interior. With
+`chemistry` it is the network's temperature, [`network_temperature`](@ref) of the
+cell's species and internal energy, because the constant-`mu` equation of state
+is wrong in partially ionized gas; otherwise it is the equation of state's.
 """
 function gas_temperature(sim::Simulation{T}) where {T}
     g = sim.grid
     out = Array{T,3}(undef, g.n...)
-    @inbounds for k in 1:g.n[3], j in 1:g.n[2], i in 1:g.n[1]
-        u = getstate(sim.U, Val(NHYDRO), i + g.ng[1], j + g.ng[2], k + g.ng[3])
-        out[i, j, k] = temperature(sim.eos, u[IRHO], internal_energy(u))
+    ch = sim.chemistry
+    if ch === nothing
+        @inbounds for k in 1:g.n[3], j in 1:g.n[2], i in 1:g.n[1]
+            u = getstate(sim.U, Val(NHYDRO), i + g.ng[1], j + g.ng[2], k + g.ng[3])
+            out[i, j, k] = temperature(sim.eos, u[IRHO], internal_energy(u))
+        end
+    else
+        net = ch.network
+        n = Vector{T}(undef, nspecies(net))
+        @inbounds for k in 1:g.n[3], j in 1:g.n[2], i in 1:g.n[1]
+            u = getstate(sim.U, Val(NHYDRO), i + g.ng[1], j + g.ng[2], k + g.ng[3])
+            for s in 1:nspecies(net)
+                n[s] = sim.U[scalar_index(s), i+g.ng[1], j+g.ng[2], k+g.ng[3]] / species_mass(net, s)
+            end
+            out[i, j, k] = network_temperature(net, n, internal_energy(u))
+        end
     end
     out
 end

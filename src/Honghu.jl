@@ -48,16 +48,32 @@ using Dates          # provenance timestamps only; a stdlib, not a package
 # a blanket `using` would make those definitions an error.
 using LinearAlgebra: lu!, ldiv!
 
-# Five names, not the package, and for the same reason: OrdinaryDiffEq exports
+# Nine names, not the package, and for the same reason: OrdinaryDiffEq exports
 # `step!`, which this package also exports, so a blanket `using` would leave that
 # one name ambiguous for anyone with both in scope -- `step!(sim)` would have to
 # be spelled `Honghu.step!`. Naming what is used keeps `step!` this package's.
 #
-# `AdaptiveCoupling` in `coupling_ode.jl` is the only thing that needs them:
-# `Rosenbrock23` is its default algorithm and the rest state the problem and read
-# the answer. All five come from the meta-package; the two sub-package
-# dependencies this file used to name went with `ImplicitEulerStepper`.
-using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23
+# `AdaptiveCoupling` in `coupling_ode.jl` and `RosenbrockChem` in
+# `chemistry_solvers.jl` are the only things that need them: `Rosenbrock23` is
+# the default algorithm of both and the rest state the problem and read the
+# answer. `init`, `solve!` and `reinit!` are for the chemistry integrator that is
+# created once per workspace and re-aimed at each cell rather than built anew.
+# `SciMLLogging` is the module holding OrdinaryDiffEq's verbosity presets, and the
+# last name: `RosenbrockChem` passes `SciMLLogging.None()` so that a failing cell
+# is reported through its `ChemStats` and not by a warning per cell. All nine come
+# from the meta-package; the two sub-package dependencies this file used to name
+# went with `ImplicitEulerStepper`.
+using OrdinaryDiffEq: ODEProblem, ODEFunction, solve, successful_retcode, Rosenbrock23,
+                      init, solve!, reinit!, SciMLLogging
+
+# `RosenbrockChem` solves the 4x4 linear systems of its integrator with LinearSolve's
+# `SimpleLUFactorization`, a dense LU written in Julia, and nothing else is used from
+# the package. The default factorisation and its solve call OpenBLAS, whose
+# `blas_memory_alloc` takes a global lock on every call: with four threads the
+# chemistry step ran 2.2 times slower than with one. Measured on a 24^3 step, the
+# default takes 85 ms on one thread and 184 ms on four; `GenericLUFactorization` takes
+# 76 and 176 ms (its solve is still `dgetrs`); this one takes 74 and 20 ms.
+using LinearSolve: SimpleLUFactorization
 
 # `BracketedCoupling` hands its one scalar equation to a bracketing root-finder
 # through SciMLBase's interface, and `Brent` is the default one. `solve` is
@@ -90,6 +106,11 @@ include("riemann_radiation.jl")
 include("hydro_system.jl")
 include("radiation_system.jl")
 include("source_terms.jl")
+include("chemistry.jl")            # per-cell chemical network interface
+include("chemistry_solvers.jl")    # ... and the two in-tree integrators
+include("networks/hydrogen_iliev1.jl")  # ... and the networks JAFF generates (networks/)
+include("networks/hydrogen_iliev2.jl")
+include("chemistry_step.jl")       # ... and the grid driver that runs a network in a simulation
 include("integrators.jl")
 include("simulation.jl")
 include("output.jl")
@@ -115,6 +136,10 @@ export LevermoreClosure, EddingtonClosure
 export RadiationGroups, ngroups, planck_integral, planck_fractions
 export AbstractCoupling, BracketedCoupling, QuokkaCoupling, AdaptiveCoupling
 export AbstractDustModel, NoDust, BateKetoDust
+export AbstractNetwork, AbstractChemSolver, RosenbrockChem, BackwardEulerChem
+export NetworkOptions, HydrogenIliev1, HydrogenIliev2
+export nspecies, nbands, species_names, species_masses, network_reactions, band_edges
+export Photochemistry
 export AbstractChatLimiter, ConstantChat, StabilityBound, OpticalDepthFit, per_group, flux_form
 export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 

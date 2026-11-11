@@ -53,6 +53,21 @@ end
     @test bytes_per_cell(() -> Honghu.hydro_timestep(hw.prim, sim.eos, g, 0.4), sim) < LIMIT
 end
 
+@testset "scalar kernels do not allocate per cell" begin
+    LIMIT = 8.0
+    sim = Simulation(n=(24, 24, 24), nscalars=2, boundaries=Boundaries(Periodic()))
+    set_initial_conditions!((x, y, z) -> (rho=1 + 0.2sinpi(2x), vx=0.3, p=1.0, X=(0.4, 0.6)), sim)
+    hw, g, nv = sim.hw, sim.grid, Honghu.nhydrovars(sim)
+    Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g, 2)
+    Honghu.reconstruct!(hw.qL, hw.qR, hw.prim, PPM(), Val(1), g, nv)
+    @test bytes_per_cell(() -> Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g, 2), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos,
+                                                    sim.riemann, Val(1), g, 2), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.enforce_floors!(sim.U, sim.eos, g, sim.floors, 2), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.enforce_scalar_floors!(sim.U, g, 2), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.enforce_scalar_floors!(sim.U, g, 2, true), sim) < LIMIT
+end
+
 @testset "radiation kernels do not allocate per cell" begin
     LIMIT = 8.0
 
@@ -117,4 +132,34 @@ end
     b32 = step_bytes(32)
     # 32^3 has 8x the cells; allocation must stay within a small constant factor
     @test b32 < 4 * b16 + 200_000
+end
+
+@testset "chemistry step does not allocate per cell (backward Euler)" begin
+    net = HydrogenIliev2(photon_energy=29.65 * Honghu.CGS.eV)
+    rad = RadiationPhysics(c=Honghu.CGS.c_light, chat=1e-3 * Honghu.CGS.c_light,
+                           a_rad=Honghu.CGS.a_rad, k_B=Honghu.CGS.k_B,
+                           opacity=ConstantOpacity(0.0), beta_order=0)
+    sim = Simulation(n=(16, 16, 16), xhi=(1e21, 1e21, 1e21), hydro=false, radiation=rad,
+                     chemistry=Photochemistry(net; solver=BackwardEulerChem()))
+    m = species_masses(net)
+    set_initial_conditions!((x, y, z) -> (rho=1e-3 * m[1], T=100.0,
+                                          X=(0.99, 0.01m[2] / m[1], 0.01m[3] / m[1]), Erad=1e-12), sim)
+    @test bytes_per_cell(() -> Honghu.chemistry_step!(sim, 1e10, 0.0), sim) < 8.0
+end
+
+@testset "chemistry step with the default RosenbrockChem: allocation is bounded" begin
+    # The one hot path that is allowed to allocate per cell: the reused OrdinaryDiffEq
+    # integrator allocates inside `reinit!` and `solve!` (~350 B per cell measured on this
+    # box), where `BackwardEulerChem` above allocates nothing. The bound is an upper limit,
+    # so a boxed closure or an integrator rebuilt per cell (~8 kB) still fails it.
+    net = HydrogenIliev2(photon_energy=29.65 * Honghu.CGS.eV)
+    rad = RadiationPhysics(c=Honghu.CGS.c_light, chat=1e-3 * Honghu.CGS.c_light,
+                           a_rad=Honghu.CGS.a_rad, k_B=Honghu.CGS.k_B,
+                           opacity=ConstantOpacity(0.0), beta_order=0)
+    sim = Simulation(n=(16, 16, 16), xhi=(1e21, 1e21, 1e21), hydro=false, radiation=rad,
+                     chemistry=Photochemistry(net))
+    m = species_masses(net)
+    set_initial_conditions!((x, y, z) -> (rho=1e-3 * m[1], T=100.0,
+                                          X=(0.99, 0.01m[2] / m[1], 0.01m[3] / m[1]), Erad=1e-12), sim)
+    @test bytes_per_cell(() -> Honghu.chemistry_step!(sim, 1e10, 0.0), sim) < 2048.0
 end

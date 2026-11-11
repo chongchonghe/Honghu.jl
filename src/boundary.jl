@@ -49,9 +49,10 @@ struct Reflecting <: BoundaryCondition end
     Fixed(state)
 
 Hold the ghost cells at a constant *conserved* state. `state` is a tuple or
-`SVec` covering the whole state vector: `NHYDRO` values on a hydro boundary, and
-on a radiation boundary `NRAD * ngroups`, the groups contiguous and four
-components each, so a two-group state is
+`SVec` covering the whole state vector: `NHYDRO + nscalars` values on a hydro
+boundary (the conserved `rho * X_s` of each mass scalar after the five gas
+variables), and on a radiation boundary `NRAD * ngroups`, the groups contiguous
+and four components each, so a two-group state is
 
     (E₁, Fx₁, Fy₁, Fz₁, E₂, Fx₂, Fy₂, Fz₂)
 
@@ -76,9 +77,9 @@ Fixed(state::AbstractVector) = Fixed(Tuple(state))
     FunctionBC(f)
 
 Hold the ghost cells at a *conserved* state computed from position and time,
-`f(x, y, z, t) -> NTuple` or `SVec` of length `NHYDRO` on a hydro boundary and
-`NRAD * ngroups` on a radiation one, with the same group-contiguous layout
-[`Fixed`](@ref) documents.
+`f(x, y, z, t) -> NTuple` or `SVec` of length `NHYDRO + nscalars` on a hydro
+boundary and `NRAD * ngroups` on a radiation one, with the same
+group-contiguous layout [`Fixed`](@ref) documents.
 
 The time-dependent counterpart of [`Fixed`](@ref), which ignores the `t` it is
 handed. Covers a driven inflow, a source that switches on, or a boundary profile
@@ -133,19 +134,37 @@ Boundaries(; x=(Outflow(), Outflow()), y=x, z=y) = Boundaries(x, y, z)
 end
 
 """
-    fill_ghosts!(A, boundaries, grid, t = 0)
+    fill_ghosts!(A, boundaries, grid, t = 0; momentum_blocks = size(A, 1) ÷ NRAD)
 
 Fill every ghost cell of the state array `A` according to `boundaries`.
 Inactive directions are skipped.
+
+`momentum_blocks` is how many `NRAD`-long blocks of `A` have the normal momentum
+or flux that [`Reflecting`](@ref) flips at row `dir + 1` of the block. The
+default, one block per group, is right for a radiation array and for a bare
+five-variable hydro array. A hydro array that carries mass scalars after its
+five rows is `NHYDRO + nscalars` long, and the default would count a scalar row
+as part of a second block and flip it; the simulation passes
+`momentum_blocks = 1` for `sim.U`, and so should any caller that fills the
+ghosts of such an array.
 """
-function fill_ghosts!(A::AbstractArray{T,4}, b::Boundaries, g::CartesianGrid, t=zero(T)) where {T}
+function fill_ghosts!(A::AbstractArray{T,4}, b::Boundaries, g::CartesianGrid, t=zero(T);
+                      momentum_blocks::Integer=size(A, 1) ÷ NRAD) where {T}
     for dir in 1:3
         g.active[dir] || continue
-        fill_face!(A, facebc(b, dir, 1), g, dir, 1, t)
-        fill_face!(A, facebc(b, dir, 2), g, dir, 2, t)
+        _fill_face!(A, facebc(b, dir, 1), g, dir, 1, t, momentum_blocks)
+        _fill_face!(A, facebc(b, dir, 2), g, dir, 2, t, momentum_blocks)
     end
     return A
 end
+
+# Only a reflecting wall needs to know the layout of `A`; every other condition
+# is the public `fill_face!`, so a user-defined `BoundaryCondition` keeps the
+# six-argument method it has always had to supply.
+@inline _fill_face!(A, bc, g, dir, side, t, momentum_blocks) =
+    fill_face!(A, bc, g, dir, side, t)
+@inline _fill_face!(A, ::Reflecting, g, dir, side, t, momentum_blocks) =
+    _reflect!(A, g, dir, side, momentum_blocks)
 
 """
     fill_face!(A, bc, grid, dir, side, t)
@@ -178,19 +197,25 @@ function fill_face!(A::AbstractArray{T,4}, ::Outflow, g::CartesianGrid, dir::Int
 end
 
 function fill_face!(A::AbstractArray{T,4}, ::Reflecting, g::CartesianGrid, dir::Int, side::Int, t) where {T}
+    _reflect!(A, g, dir, side, size(A, 1) ÷ NRAD)
+end
+
+# Mirror the interior and flip the normal momentum (hydro) / normal flux of every
+# group (radiation). The radiation state stores `NRAD` components per group
+# contiguously, so the normal flux of group `gr` is at `NRAD*(gr-1) + dir + 1`,
+# and `momentum_blocks` of them are flipped. It is a count rather than a stride
+# over the rows because a hydro array may carry scalars after its five rows, and
+# a stride would flip a scalar row whenever `dir + 1 + NRAD*m` landed on one.
+function _reflect!(A::AbstractArray{T,4}, g::CartesianGrid, dir::Int, side::Int,
+                   momentum_blocks::Integer) where {T}
     ng, lo, hi = g.ng[dir], g.lo[dir], g.hi[dir]
-    # Normal momentum (hydro) / normal radiation flux of every group. The
-    # radiation state stores `NRAD` components per group contiguously, so the
-    # normal flux of group `gr` is at `NRAD*(gr-1) + dir + 1`; striding by
-    # `NRAD` from `dir + 1` hits exactly those. The five-variable hydro vector
-    # is not a multiple of `NRAD`, so the same stride hits `dir + 1` and stops,
-    # which is why one implementation still serves both.
     for m in 1:ng
         dst = side == 1 ? lo - m : hi + m
         src = side == 1 ? lo + m - 1 : hi - m + 1
         d = _slab(A, dir, dst)
         copyto!(d, _slab(A, dir, src))
-        for nflip in (dir+1):NRAD:size(A, 1)
+        for blk in 1:momentum_blocks
+            nflip = dir + 1 + NRAD * (blk - 1)
             @views d[nflip, :, :] .= .-d[nflip, :, :]
         end
     end

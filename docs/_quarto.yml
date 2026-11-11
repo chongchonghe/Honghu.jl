@@ -8,10 +8,12 @@ project:
   render:
     - index.qmd
     - reference/*.qmd
+    - photochemistry.md
     - coupling-new-method.md
     - coupling-new-method-dust.md
     - coupling-findings.md
     - rsla-findings.md
+    - photoionization-findings.md
     - documentation.md
 
 website:
@@ -32,15 +34,22 @@ website:
           - reference/radiation.qmd
           - reference/rsla.qmd
           - reference/coupling.qmd
+          - reference/chemistry.qmd
           - reference/output.qmd
           - reference/problems.qmd
           - reference/utilities.qmd
+      # One guide per physics module: its physics, numerical method and code design,
+      # linking into the module's reference page.
+      - text: Physics
+        menu:
+          - photochemistry.md
       - text: Notes
         menu:
           - coupling-new-method.md
           - coupling-new-method-dust.md
           - coupling-findings.md
           - rsla-findings.md
+          - photoionization-findings.md
           - text: "---"
           - documentation.md
     right:

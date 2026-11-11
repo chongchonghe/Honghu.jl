@@ -178,10 +178,18 @@ Project one radiation state onto the admissible set of the M1 closure: energy
 density at or above the floor, and reduced flux `|F|/(cE)` strictly below one
 (the flux is rescaled, preserving its direction). Also returns the reduced flux
 components, which the caller usually wants anyway.
+
+`repaired` is true when the state was inadmissible: an energy density below the
+floor or NaN, or a flux that had to be rescaled. An energy density exactly at the
+floor is admissible and is not counted, where it would otherwise be a "repair" in
+every call for the dark cells of a photoionization run. The returned values are
+the projection either way, and a caller that writes them back for a cell at the
+floor, as [`enforce_rad_floors!`](@ref) does, leaves the energy as it was and
+passes the flux through `(F / cE) cE`.
 """
 @inline function amend_rad(er::T, Fx::T, Fy::T, Fz::T, c::T, erad_floor::T) where {T}
     repaired = false
-    if !(er > erad_floor)
+    if !(er >= erad_floor)
         er = erad_floor
         repaired = true
     end
@@ -308,16 +316,20 @@ function _amend_range!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
             local hit = false
             for gr in 1:NG
                 b = gbase(gr)
-                er, Fx, Fy, Fz, _, _, _, rep = amend_rad(R[b+IERAD, i, j, k], R[b+IFRX, i, j, k],
+                e0 = R[b+IERAD, i, j, k]
+                er, Fx, Fy, Fz, _, _, _, rep = amend_rad(e0, R[b+IFRX, i, j, k],
                                                          R[b+IFRY, i, j, k], R[b+IFRZ, i, j, k],
                                                          c, ef)
-                if rep
+                # A cell exactly at the floor is written back too, as it always was, so the
+                # state of a run is bit for bit what it was (its flux goes through the
+                # `(F / cE) cE` round trip); it is only not counted, because it did not change.
+                if rep || !(e0 > ef)
                     R[b+IERAD, i, j, k] = er
                     R[b+IFRX, i, j, k] = Fx
                     R[b+IFRY, i, j, k] = Fy
                     R[b+IFRZ, i, j, k] = Fz
-                    hit = true
                 end
+                rep && (hit = true)
             end
             hit && (bad += 1)
         end

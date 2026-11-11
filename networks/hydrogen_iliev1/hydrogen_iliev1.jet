@@ -1,0 +1,5 @@
+! Iliev et al. (2006) Test 1: hydrogen at a fixed 1e4 K ionized by a monochromatic
+! 13.6 eV source, on the spot. Honghu runs it with `isothermal = 1e4`, so no
+! reaction carries an energy.
+H  -> H+ + E                   []         PHOTO, 13.60
+H+ + E -> H                    []         2.59e-13

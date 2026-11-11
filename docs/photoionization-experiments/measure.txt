@@ -1,0 +1,81 @@
+# Honghu photoionization measurements, 2026-11-02; julia 1.12.6, 8 threads; apple-m1
+## 1. Microseconds per cell of chemistry_step!, 32^3 octant, chat = 3e-4 c, after 0.25 t_rec
+   median of 5 calls from one state; steps = solver steps per cell (Newton iterations for BackwardEuler)
+test  solver         threads  us/cell   steps/cell  max steps  failures  cells with x_HII > 0.5
+1     BackwardEuler  1        0.085     1.031       3          0         579
+1     BackwardEuler  8        0.016     1.031       3          0         579
+1     Rosenbrock     1        5.021     15.035      20         0         579
+1     Rosenbrock     8        0.728     15.035      20         0         579
+2     BackwardEuler  1        0.064     0.153       3          0         573
+2     BackwardEuler  8        0.014     0.153       3          0         573
+2     Rosenbrock     1        6.487     15.012      19         0         573
+2     Rosenbrock     8        0.939     15.012      19         0         573
+
+## 2. Test 2, n = 16, chat = 3e-4 c: the chemistry integrators
+   r_I in kpc; T_ion is the median temperature of the cells with x_HII > 0.9; the profiles are means over the
+   cells in 16 radial bins of width L/16 = 0.4125 kpc (corner cells beyond L are left out)
+Rosenbrock               wall 5.9 s (to 100 Myr 1.2 s), chemistry 16.00 steps/cell mean, 20 max, 0 failed cells of 4567040 solves, substep 0.45 Myr
+Rosenbrock reltol 1e-4   wall 6.0 s (to 100 Myr 1.2 s), chemistry 16.50 steps/cell mean, 31 max, 0 failed cells of 4567040 solves, substep 0.45 Myr
+BackwardEuler            wall 1.3 s (to 100 Myr 0.4 s), chemistry 1.33 steps/cell mean, 5 max, 0 failed cells of 4567040 solves, substep 0.45 Myr
+
+  t = 100 Myr
+  solver                  r_I (kpc)  T_ion (K)  profiles: T (K), then x_HI, bins 1 to 16
+  Rosenbrock               3.9947     14756      23874 22600 20586 18434 16786 15757 15066 14370 13923 13486 8961 1195 108 100 100 100
+                                                 7.525e-04 1.057e-03 1.989e-03 4.291e-03 8.704e-03 1.445e-02 2.093e-02 3.196e-02 8.061e-02 4.346e-01 8.799e-01 9.910e-01 9.999e-01 1.000e+00 1.000e+00 1.000e+00
+  Rosenbrock reltol 1e-4   3.9947     14754      23874 22600 20586 18435 16785 15757 15066 14370 13923 13485 8969 1198 106 100 100 100
+                                                 7.525e-04 1.057e-03 1.989e-03 4.290e-03 8.705e-03 1.445e-02 2.093e-02 3.196e-02 8.064e-02 4.347e-01 8.799e-01 9.909e-01 1.000e+00 1.000e+00 1.000e+00 1.000e+00
+  BackwardEuler            3.9940     14748      23874 22599 20585 18433 16783 15755 15061 14367 13906 13431 9401 1538 120 100 100 100
+                                                 7.526e-04 1.057e-03 1.990e-03 4.293e-03 8.712e-03 1.447e-02 2.098e-02 3.225e-02 8.644e-02 4.428e-01 8.742e-01 9.881e-01 9.998e-01 1.000e+00 1.000e+00 1.000e+00
+  Rosenbrock reltol 1e-2 against 1e-4: r_I +0.000%, T_ion +0.010%, max |dT|/T over bins 1.674%, max |dx_HI| 5.95e-05
+  BackwardEuler against Rosenbrock reltol 1e-2: r_I -0.018%, T_ion -0.055%, max |dT|/T over bins 28.760%, max |dx_HI| 8.14e-03
+
+  t = 500 Myr
+  solver                  r_I (kpc)  T_ion (K)  profiles: T (K), then x_HI, bins 1 to 16
+  Rosenbrock               5.9322     13704      23929 22625 20595 18436 16785 15766 15063 14393 13866 13387 12894 12467 11922 11399 10863 9318
+                                                 7.505e-04 1.057e-03 1.987e-03 4.289e-03 8.710e-03 1.439e-02 2.093e-02 3.089e-02 4.303e-02 5.904e-02 8.332e-02 1.135e-01 1.709e-01 2.591e-01 4.678e-01 7.764e-01
+  Rosenbrock reltol 1e-4   5.9323     13704      23929 22625 20595 18436 16785 15766 15063 14393 13866 13387 12894 12467 11922 11399 10863 9319
+                                                 7.505e-04 1.057e-03 1.987e-03 4.289e-03 8.710e-03 1.439e-02 2.093e-02 3.089e-02 4.303e-02 5.904e-02 8.332e-02 1.135e-01 1.709e-01 2.591e-01 4.678e-01 7.764e-01
+  BackwardEuler            5.9381     13696      23929 22624 20595 18435 16783 15763 15059 14388 13859 13378 12884 12454 11907 11383 10844 9545
+                                                 7.506e-04 1.057e-03 1.987e-03 4.291e-03 8.719e-03 1.441e-02 2.098e-02 3.100e-02 4.323e-02 5.939e-02 8.398e-02 1.146e-01 1.730e-01 2.628e-01 4.690e-01 7.681e-01
+  Rosenbrock reltol 1e-2 against 1e-4: r_I -0.000%, T_ion +0.000%, max |dT|/T over bins 0.009%, max |dx_HI| 1.58e-05
+  BackwardEuler against Rosenbrock reltol 1e-2: r_I +0.098%, T_ion -0.056%, max |dT|/T over bins 2.441%, max |dx_HI| 8.27e-03
+
+  Interior temperature against the heating per ionization (RosenbrockChem, same run to 100 and 500 Myr)
+  replica of the factory run at 100 Myr: r_I differs by 0.00e+00, T_ion by 0.00e+00 (relative)
+  heating per ionization t (Myr)  r_I (kpc)  T_ion (K) 
+  16.05 eV (default)     100      3.9947     14756     
+  16.05 eV (default)     500      5.9322     13704     
+  6.3 eV                 100      3.9630     12988     
+  6.3 eV                 500      5.8056     12317     
+
+## 3. Test 1, n = 16: ionized radius (kpc) against the finite-chat front equation and the chat = c curve
+   error = r_I / r_ref - 1; the Test 1 box is the octant and the background ionization is 1.2e-3
+chat/c   t (Myr)  r_I      finite-chat  error    analytic  error vs analytic
+1e-04     10        1.4753    0.3059        +382.27%  2.3090     -36.11%
+1e-04     30        1.7207    0.9012        +90.93%   3.2431     -46.94%
+1e-04     100       2.7653    2.5653        +7.80%    4.4411     -37.73%
+1e-04     500       5.3619    5.1290        +4.54%    5.3628     -0.02%
+  front (x_HII = 0.5, kpc) along the axis row / along the body diagonal: 10 Myr 1.575 / 1.427; 30 Myr 1.700 / 1.456; 100 Myr 2.843 / 2.856; 500 Myr 5.344 / 5.166
+  wall 1.7 s, 374 radiation substeps, 0 chemistry failures; at 500 Myr the radius of the recombination volume 8 sum(x^2) dV is 5.2210 kpc (-2.64% against the chat = c curve)
+  at 500 Myr: 295 of 4096 cells have 0.1 < x < 0.9; the mean neutral fraction of the cells with x > 0.5 is 0.063; 36% of sum(x (1 - x)) comes from the cells with x > 0.9
+3e-04     10        1.5360    0.8713        +76.29%   2.3090     -33.48%
+3e-04     30        2.2101    2.0720        +6.67%    3.2431     -31.85%
+3e-04     100       3.9212    3.8208        +2.63%    4.4411     -11.71%
+3e-04     500       5.4736    5.3170        +2.94%    5.3628     +2.07%
+  front (x_HII = 0.5, kpc) along the axis row / along the body diagonal: 10 Myr 1.643 / 1.430; 30 Myr 2.187 / 2.143; 100 Myr 3.986 / 3.641; 500 Myr 5.410 / 5.582
+  wall 4.9 s, 1117 radiation substeps, 0 chemistry failures; at 500 Myr the radius of the recombination volume 8 sum(x^2) dV is 5.3152 kpc (-0.89% against the chat = c curve)
+  at 500 Myr: 397 of 4096 cells have 0.1 < x < 0.9; the mean neutral fraction of the cells with x > 0.5 is 0.071; 30% of sum(x (1 - x)) comes from the cells with x > 0.9
+1e-03     10        1.8356    1.7490        +4.95%    2.3090     -20.50%
+1e-03     30        2.9182    2.8800        +1.32%    3.2431     -10.02%
+1e-03     100       4.3263    4.2663        +1.41%    4.4411     -2.58%
+1e-03     500       5.4964    5.3520        +2.70%    5.3628     +2.49%
+  front (x_HII = 0.5, kpc) along the axis row / along the body diagonal: 10 Myr 1.847 / 1.725; 30 Myr 2.935 / 2.856; 100 Myr 4.345 / 4.279; 500 Myr 5.437 / 5.606
+  wall 15.7 s, 3719 radiation substeps, 0 chemistry failures; at 500 Myr the radius of the recombination volume 8 sum(x^2) dV is 5.3330 kpc (-0.56% against the chat = c curve)
+  at 500 Myr: 415 of 4096 cells have 0.1 < x < 0.9; the mean neutral fraction of the cells with x > 0.5 is 0.076; 29% of sum(x (1 - x)) comes from the cells with x > 0.9
+3e-03     10        2.1381    2.1193        +0.88%    2.3090     -7.40%
+3e-03     30        3.1437    3.1232        +0.66%    3.2431     -3.07%
+3e-03     100       4.4287    4.3842        +1.02%    4.4411     -0.28%
+3e-03     500       5.5020    5.3594        +2.66%    5.3628     +2.59%
+  front (x_HII = 0.5, kpc) along the axis row / along the body diagonal: 10 Myr 2.144 / 2.143; 30 Myr 3.219 / 2.895; 100 Myr 4.472 / 4.280; 500 Myr 5.445 / 5.607
+  wall 46.9 s, 11150 radiation substeps, 0 chemistry failures; at 500 Myr the radius of the recombination volume 8 sum(x^2) dV is 5.3371 kpc (-0.48% against the chat = c curve)
+  at 500 Myr: 415 of 4096 cells have 0.1 < x < 0.9; the mean neutral fraction of the cells with x > 0.5 is 0.077; 29% of sum(x (1 - x)) comes from the cells with x > 0.9

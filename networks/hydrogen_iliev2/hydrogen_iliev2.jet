@@ -1,0 +1,6 @@
+! Iliev et al. (2006) Test 2: hydrogen ionized by a 1e5 K blackbody, on the spot,
+! with heating and cooling. The rates are those of Quokka's
+! photoionization_H_caseB_handwritten network.
+H  -> H+ + E                   []         PHOTO, 13.60
+H+ + E -> H                    []         2.63e-13*(Tgas/1e4)**(-0.7)
+H + E -> H+ + E + E            []         chemRate2(tgas)

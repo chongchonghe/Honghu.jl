@@ -1,12 +1,13 @@
 #!/usr/bin/env julia
 #
-# Regenerate the verification figures embedded in README.md.
+# Regenerate the verification figures embedded in README.md and in the physics guides.
 #
-#   julia --project=. -t auto docs/make_figures.jl
+#   julia --project=. -t auto docs/make_figures.jl              # all of them
+#   julia --project=. -t auto docs/make_figures.jl stromgren    # only the named ones
 #
 # Every panel compares the code against something independent: an exact Riemann
 # solution, an analytic diffusion solution, a measured convergence slope, or a
-# similarity solution. Takes a couple of minutes.
+# similarity solution. Takes a couple of minutes, plus a few for the Stromgren spheres.
 
 ENV["GKSwstype"] = "100"          # headless GR
 
@@ -207,13 +208,98 @@ function figure_sedov(n=96)
               plot_titlevspan=0.12, bottom_margin=6Plots.mm), "sedov.png")
 end
 
+# --- 8. Stromgren spheres: Iliev et al. (2006) Tests 1 and 2 --------------------
+const MYR = 1e6 * Honghu.CGS.year
+const KPC = 1e3 * Honghu.CGS.parsec
+
+# The spherical average of the (n, n, n) array `q` about the source at the origin, in `nb`
+# radial bins out to the box side. Returns the bin centres in kpc and the averages.
+function radial_average(sim, q; nb=32)
+    g = sim.grid
+    xs = [coordinates(g, d) for d in 1:3]
+    L = g.xhi[1] - g.xlo[1]
+    s, c = zeros(nb), zeros(Int, nb)
+    for k in axes(q, 3), j in axes(q, 2), i in axes(q, 1)
+        b = floor(Int, sqrt(xs[1][i]^2 + xs[2][j]^2 + xs[3][k]^2) / L * nb) + 1
+        b <= nb || continue
+        s[b] += q[i, j, k]
+        c[b] += 1
+    end
+    keep = c .> 0
+    return ((1:nb) .- 0.5)[keep] .* (L / nb / KPC), (s./max.(c, 1))[keep]
+end
+
+# The radius history against the two references, and spherically averaged profiles. Prints
+# the radii at the paper's output times, which the photochemistry guide tabulates; for Test 2
+# also the median temperature of the ionized gas (x_HII > 0.9). Test 2 has no analytic
+# solution, and its reference curves are Test 1's, for scale.
+function figure_stromgren(test; n=32, chat_factor=1e-3, snaps=(10, 100, 500))
+    sim, _ = P.stromgren_iliev(; test, n, chat_factor)
+    x0 = test == 1 ? 1.2e-3 : 0.0
+    chat = chat_factor * Honghu.CGS.c_light
+    ht, hr = [0.0], [0.0]
+    record(s) = (push!(ht, s.t / MYR); push!(hr, P.ionized_radius(s; x0) / KPC); true)
+    profiles = []
+    for tm in (10, 30, 100, 200, 500)
+        run!(sim; tmax=tm * MYR, verbose=false, callback=record)
+        rf = P.stromgren_radius_finite_c(tm * MYR; chat) / KPC
+        ra = P.stromgren_radius_analytic(tm * MYR) / KPC
+        @printf("  Test %d, %3d Myr: r_I = %.3f kpc, finite chat %.3f (%+.1f%%), chat = c %.3f (%+.1f%%)",
+                test, tm, hr[end], rf, 100 * (hr[end] / rf - 1), ra, 100 * (hr[end] / ra - 1))
+        T = gas_temperature(sim)
+        if test == 2
+            Tion = sort(T[first(field(sim, :X_2)).>0.9])
+            @printf(", median T(x > 0.9) = %.0f K", Tion[cld(length(Tion), 2)])
+        end
+        println()
+        if tm in snaps
+            r, xHI = radial_average(sim, first(field(sim, :X_1)))
+            push!(profiles, (tm, r, xHI, radial_average(sim, T)[2]))
+        end
+    end
+    println("  Test $test: $(sim.diag.chem_failures) failed chemistry solves")
+
+    tg = range(0.5, 500; length=200)
+    pre = test == 1 ? "" : "Test 1, "
+    pr = plot(tg, [P.stromgren_radius_analytic(t * MYR) / KPC for t in tg]; c=:black, lw=1.5,
+              label=pre * "analytic", xlabel="t (Myr)", ylabel="ionized radius (kpc)",
+              legend=:bottomright)
+    plot!(pr, tg, [P.stromgren_radius_finite_c(t * MYR; chat) / KPC for t in tg]; c=:black,
+          ls=:dash, label=pre * "finite chat")
+    plot!(pr, ht, hr; c=1, lw=2, label="Honghu")
+    px = plot(; xlabel="r (kpc)", ylabel="neutral fraction", yscale=:log10, ylims=(1e-5, 2),
+              legend=:bottomright)
+    for (m, (tm, r, xHI, _)) in enumerate(profiles)
+        plot!(px, r, max.(xHI, 1e-5); c=m, lw=1.5, label="$tm Myr")
+    end
+    panels = Any[pr, px]
+    if test == 2
+        pT = plot(; xlabel="r (kpc)", ylabel="temperature (K)", yscale=:log10, legend=:topright)
+        for (m, (tm, r, _, T)) in enumerate(profiles)
+            plot!(pT, r, T; c=m, lw=1.5, label="$tm Myr")
+        end
+        push!(panels, pT)
+    end
+    save(plot(panels...; layout=(1, length(panels)), size=(470 * length(panels), 400),
+              plot_title=@sprintf("Iliev et al. Test %d, %d^3 octant, chat = %g c", test, n,
+                                  chat_factor),
+              plot_titlevspan=0.08, bottom_margin=5Plots.mm, left_margin=8Plots.mm),
+         "stromgren_test$test.png")
+end
+
+# Names on the command line select figures; none selects all of them.
+want(name) = isempty(ARGS) || name in ARGS
+
 println("writing figures to $OUT")
-figure_sod()
-figure_convergence()
-figure_diffusion()
-figure_marshak()
-figure_radshock()
-figure_shadow()
-figure_kh()
-figure_sedov()
+want("sod") && figure_sod()
+want("convergence") && figure_convergence()
+want("diffusion") && figure_diffusion()
+want("marshak") && figure_marshak()
+want("radshock") && figure_radshock()
+want("shadow") && figure_shadow()
+want("kh") && figure_kh()
+want("sedov") && figure_sedov()
+for t in (1, 2)          # `stromgren` makes both, `stromgren1` or `stromgren2` one
+    (want("stromgren") || "stromgren$t" in ARGS) && figure_stromgren(t)
+end
 println("done")

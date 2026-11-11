@@ -39,15 +39,21 @@ const PAGES = [
     "coupling" => ("Matter-radiation coupling",
                    ["coupling.jl", "coupling_solvers.jl", "coupling_ode.jl", "source_terms.jl",
                     "dust.jl", "newton.jl"]),
+    "chemistry" => ("Photoionization chemistry",
+                    ["chemistry.jl", "chemistry_solvers.jl", "chemistry_step.jl",
+                     "networks/"]),
     "output" => ("Output, plotting and comparison",
                  ["output.jl", "plotting.jl", "metrics.jl", "compare.jl"]),
     "problems" => ("Test problems", ["problems/"]),
     "utilities" => ("Utilities and constants", ["staticvec.jl", "constants.jl"]),
 ]
 
-# Hand-written pages, in navigation order after the reference.
-const NOTES = ["coupling-new-method.md", "coupling-new-method-dust.md",
-               "coupling-findings.md", "rsla-findings.md", "documentation.md"]
+# Hand-written pages, in navigation order after the reference: the physics guides
+# first, then the notes.
+const NOTES = ["photochemistry.md",
+               "coupling-new-method.md", "coupling-new-method-dust.md",
+               "coupling-findings.md", "rsla-findings.md", "photoionization-findings.md",
+               "documentation.md"]
 
 const MODULES = (Honghu, Honghu.Problems, Honghu.CGS)
 

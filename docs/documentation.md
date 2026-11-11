@@ -8,7 +8,8 @@ This page explains how the documentation site of Honghu.jl is made, where each p
 |:---|:---|:---|
 | Home page | `README.md` | copied to `docs/index.qmd` by `docs/make.jl`, with a few links rewritten |
 | Reference | the docstrings in `src/` | written to `docs/reference/*.qmd` by `docs/make.jl` |
-| Notes | `docs/*.md`: the four technical notes and this page | rendered as they are |
+| Physics guides | `docs/*.md` listed in the Physics menu: one per physics module, such as `photochemistry.md` | rendered as they are |
+| Notes | `docs/*.md` listed in the Notes menu: the technical notes and this page | rendered as they are |
 | Figures | `docs/figures/` | made by `docs/make_figures.jl` and `docs/make_animations.jl`, except the logo images `honghu-*.png`, which no script makes |
 
 Every page is published twice, from the same source and in the same build: as HTML, and as Markdown. The Markdown copy of `x.html` is `x.md` in the same folder, and the line "Markdown: this page" at the top of each HTML page links to it. The copy is the page's source itself. The only change is that links to other pages point at their `.md` copies instead of their `.qmd` sources. Two more files sit at the site root: `honghu-docs.md`, which holds all pages in one file in navigation order, and `llms.txt`, an index of the Markdown pages in the llms.txt format. Both exist so that a person or a coding agent can read the whole documentation as plain text. Each page links to its own copy and to the bundle; `llms.txt` is not linked from the pages, because it is the same site-wide index everywhere and agents look for it at `/llms.txt` by convention.
@@ -76,6 +77,39 @@ The notes are plain Markdown files in `docs/` that also read well on GitHub. To 
 The build checks that every name in `NOTES` and every reference page also appears in `docs/_quarto.yml`. If you miss step 3, the build fails instead of leaving the page off the site.
 
 To link from one note to another, use a relative link to its `.md` file, such as `[the findings](rsla-findings.md)`. Quarto turns it into a link to the HTML page, and the Markdown copy keeps it, where it points at the other copy. Images go in `docs/figures/` and are linked as `figures/name.png`. A link to a file that is not on the site, such as a script in `examples/`, must be a full GitHub URL.
+
+### A physics guide
+
+A physics guide is a note that explains one physics module from the ground up. It starts with the governing equations, then gives the numerical method at the level of techniques (operator splitting, the method of lines, the time integrators and why they were chosen), and ends with the module's limitations. Which file or type does what, and the details of an implementation, belong to the reference page, not to the guide. `docs/photochemistry.md` is the first. It is added like any other note, except that step 3 puts it in the Physics menu instead of the Notes menu, and `NOTES` lists the guides before the notes. A guide does not repeat what the docstrings say. It links into the module's reference page instead, with a link to the generated page and the anchor of the entry, such as `[HydrogenIliev2](reference/chemistry.qmd#HydrogenIliev2)` (see the end of [What fails the build](#what-fails-the-build) for how anchors are formed). Those pages exist only after a build, so the links resolve on the site and in its Markdown copies, but not in GitHub's view of the repository. The link check of the build catches a wrong page or anchor.
+
+### A test problem
+
+Each test problem is documented in the Test problems section of its physics guide, as one subsection in this form:
+
+````markdown
+### N.M Name of the problem
+
+One or two sentences: what the problem tests, and what it is compared against.
+
+| Setup | |
+|:---|:---|
+| Physics | the modules that are on (hydrodynamics, radiation transport, photochemistry, passive scalars, ...) and their options |
+| Domain | the box and the resolution |
+| Initial condition | ... |
+| Boundary conditions | ... |
+| Source | if there is one |
+| Evolution | the start and end times, the Courant numbers, the reduced speed of light, the integrators |
+| Reference | the analytic, published or converged solution, or "none" |
+| Run | the problem function and its arguments |
+
+![What the figure shows.](figures/name.png)
+
+| an error table at a few times or resolutions |
+
+A few sentences on what the results show.
+````
+
+A problem that differs little from the one before it may write "as ..., but ..." in a row. Every figure and every number in the table is made by a function in `docs/make_figures.jl`, which runs only the figures named on its command line (`docs/make_figures.jl stromgren`) and prints the numbers it plots, so that both can be made again.
 
 ### The navigation and the look
 

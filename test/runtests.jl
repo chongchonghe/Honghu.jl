@@ -17,12 +17,15 @@ import BracketingNonlinearSolve
     include("test_reconstruction.jl")
     include("test_riemann.jl")
     include("test_hydro.jl")
+    include("test_scalars.jl")
     include("test_radiation.jl")
     include("test_rootfind.jl")
     include("test_radiation_multigroup.jl")
     include("test_dust.jl")
     include("test_rsla.jl")
     include("test_coupling_adaptive.jl")
+    include("test_chemistry.jl")
+    include("test_stromgren.jl")
     include("test_io.jl")
     include("test_plotting.jl")
     include("test_extensions.jl")
@@ -37,7 +40,7 @@ end
 #
 #   * the subprocess was there because `using OrdinaryDiffEq` in this session
 #     would have shadowed `step!`, which every other file here calls unqualified.
-#     `Honghu.jl` imports six names rather than the package, so there is nothing
+#     `Honghu.jl` imports its names one by one rather than the package, so there is nothing
 #     left to collide with.
 #   * the skip was there because the package was a weak dependency. It is a hard
 #     one now, and a test that quietly skips itself when a *required* dependency

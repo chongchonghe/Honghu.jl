@@ -3,7 +3,7 @@
 #
 # This ran in a subprocess until OrdinaryDiffEq became a hard dependency, because
 # `using OrdinaryDiffEq` would have shadowed `step!` for the whole session. The
-# package now imports six names rather than the package, so this is an ordinary
+# package now imports its names one by one rather than the package, so this is an ordinary
 # `include` from `runtests.jl` and `step!` still means what it means everywhere
 # else in the suite. `cell_state` comes from `test_radiation_multigroup.jl`,
 # which runs before this one.
