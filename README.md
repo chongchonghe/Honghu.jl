@@ -63,27 +63,58 @@ Radiation subcycles inside each hydro step at the reduced speed of light $\hat{c
 
 ## Install and run
 
-Requires Julia 1.10, the long-term-support release, or newer. The dependencies are three standard libraries — `Printf`, `Dates` and `LinearAlgebra` — plus `OrdinaryDiffEq`, `LinearSolve`, `SciMLBase` and `BracketingNonlinearSolve`. `OrdinaryDiffEq` supplies `AdaptiveCoupling`, the error-controlled reference solver of the matter-radiation coupling, and `RosenbrockChem`, the default chemistry integrator. `BracketedCoupling`, the default coupling solver, hands its one scalar equation through SciMLBase's `IntervalNonlinearProblem` interface to a root-finder, by default BracketingNonlinearSolve's `Brent`. Both already sit inside OrdinaryDiffEq's dependency closure, so naming them adds nothing to the manifest or the load time.
+Requires Julia 1.10, the long-term-support release, or newer. There are two ways to install Honghu.
 
-That is a real cost and it is worth stating plainly: `using Honghu` takes 1.5 s rather than 0.035 s, and a first install precompiles around 190 packages instead of none. What it does not cost is run time — no integrator is on the path of the default coupling solver, which allocates nothing per cell — and what it buys is an error-controlled solution of the coupling to check the one-step solvers against.
-
-`Plots` is optional: load it and the plotting methods appear (see [Plotting](#plotting)); leave it out and the ~100-package plotting stack never enters the picture, which matters on a compute node.
+**1. As a package.** In the Julia REPL, in the environment of your own project:
 
 ```julia
 using Pkg; Pkg.develop(url = "https://github.com/chongchonghe/Honghu.jl")
+using Honghu
+
+# optionally, install Plots package for plotting
+Pkg.add("Plots")
+```
+
+`Pkg.develop` clones the repository into `~/.julia/dev/Honghu`, so you can read and edit the source there.
+
+**2. From a clone.** Clone the repository and start Julia in it, with the repository as the active project:
+
+```bash
+# optionally, install Plots for plotting in the global environment
+julia -e 'using Pkg; Pkg.add("Plots")'
+
+git clone https://github.com/chongchonghe/Honghu.jl
+cd Honghu.jl
+julia --project=. -e 'using Pkg; Pkg.instantiate()'   # once, to install the dependencies
+julia --project=. -t auto                             # start Julia with threads
+```
+
+Then, in the Julia REPL:
+
+```julia
 using Honghu
 ```
 
 A shock tube in five lines:
 
 ```julia
-sim = Simulation(n = (256, 1, 1), eos = IdealGas(gamma = 1.4),
-                 boundaries = Boundaries(Outflow()))
+sim = Simulation(n = (256, 1, 1), eos = IdealGas(gamma = 1.4), boundaries = Boundaries(Outflow()))
 set_initial_conditions!(sim) do x, y, z
     x < 0.5 ? (rho = 1.0, p = 1.0) : (rho = 0.125, p = 0.1)
 end
 run!(sim, tmax = 0.2)
 ```
+
+Optionally, plot the result with `plotstate` (it needs `using Plots`, see [Plotting](#plotting)):
+
+```julia
+using Plots
+p = plotstate(sim)
+display(p)      # density against x
+plotpanels(sim) # density, speed, pressure, temperature
+```
+
+If no window opens, see [Plotting](#plotting).
 
 A 3D radiation-hydrodynamics run, writing snapshots for ParaView:
 
@@ -99,7 +130,35 @@ end
 run!(sim, tmax = 1e5, outdir = "out", dtout = 1e4)
 ```
 
-Run with threads: `julia -t auto script.jl`.
+Honghu has defined a set of standard test problems that are ready to run in `Honghu.Problems`, listed in [Built-in problems](#built-in-problems). Each returns `(sim, tmax)`, a simulation with its initial conditions set and the end time of the test, ready to `run!`. Here the 3D Sedov blast at $128^3$ runs to $t = 0.001$ (short of its `tmax`):
+
+```julia
+sim, tmax = Honghu.Problems.sedov_blast(n = 128)
+run!(sim; tmax = 0.001)
+display(plotstate(sim, var = :speed))
+plotpanels(sim) # density, speed, pressure, temperature
+```
+
+`run!` ends by printing its performance. On 4 threads of an Apple M5 Max it reads
+
+```
+done: 88 steps, t = 0.001, 16.29 s (1.13e+07 cell-updates/s) on 4 threads
+```
+
+`animate_run` takes the place of `run!` when you want an animation: it advances the simulation to `tmax`, draws a frame of `var` at `nframes` evenly spaced times, and writes a GIF. Here the 2D Kelvin-Helmholtz instability at $128^2$ first runs to $t = 1$ with `run!`, writing a VTK snapshot every 0.1 into `kh/` (`data_00000.vti`, ..., for ParaView), and is then animated from $t = 1$ to $t = 3$ into `kh.gif`. On 4 threads the two take about 4 s and 10 s:
+
+```julia
+sim, tmax = Honghu.Problems.kelvin_helmholtz(n = 128)
+run!(sim; tmax=1, outdir = "kh", dtout = 0.1)
+animate_run(sim; tmax=3, nframes = 100, var = :density, fps = 20, filename = "kh.gif", c = :plasma)
+```
+
+To run a script with threads (see [Threads](#threads)), for example one of the examples:
+
+```bash
+julia --project=. -t auto examples/sod_1d.jl   # from a clone
+julia -t auto script.jl                        # with the package installed
+```
 
 ## Built-in problems
 
@@ -257,6 +316,40 @@ Per-kernel breakdown at $64^3$, one sweep or one pass each:
 
 The implicit coupling dominates a radiation step, as it should: it is a Newton solve per cell. Allocation per step is flat in the grid size (152 KiB for hydrodynamics, 284 KiB with radiation, all of it threading overhead), and `test/test_performance.jl` asserts that every hot kernel stays below 8 bytes per cell — a regression test for a boxing bug that once cost 12 kB per cell.
 
+### Threads
+
+Honghu runs as one process and spreads its grid loops over Julia's threads, one row of cells, `(j, k)`, per task. The number of threads is set when Julia starts and cannot change in a running session:
+
+```bash
+julia --project=. -t 6 script.jl                  # 6 threads
+julia --project=. -t auto script.jl               # as many threads as Julia counts CPUs
+JULIA_NUM_THREADS=6 julia --project=. script.jl   # the same as -t 6
+```
+
+In the REPL, `Threads.nthreads()` gives the number, and the line `run!` prints at the end says how many threads the run used. A 1D run has a single row, so it runs on one thread whatever `-t` asks for; 2D and 3D runs use all of them. On the Apple M5 Max below, which has 6 performance and 12 efficiency cores, `-t auto` gives 6 threads.
+
+The 3D Sedov blast at $128^3$, `Honghu.Problems.sedov_blast(n = 128)` with its defaults, 20 steps after one warm-up step, Apple M5 Max, Julia 1.12, measured 2026-11-12:
+
+| Threads | 20 steps | per step | throughput |
+|:---|---:|---:|---:|
+| 1 | 11.2 s | 0.56 s | 3.75 Mcell-updates/s |
+| 6 | 3.01 s | 0.15 s | 13.9 Mcell-updates/s |
+
+Six threads are 3.7 times faster than one. To measure it on your machine, save this as `sedov_timing.jl` and run it with `-t 1` and with `-t 6`:
+
+```julia
+using Honghu
+sim, _ = Honghu.Problems.sedov_blast(n = 128)
+step!(sim)                                         # warm-up: compiles the step
+t = @elapsed for _ in 1:20; step!(sim); end
+println(Threads.nthreads(), " threads: ", t / 20, " s per step")
+```
+
+```bash
+julia --project=. -t 1 sedov_timing.jl
+julia --project=. -t 6 sedov_timing.jl
+```
+
 **Memory.** Buffers scale as roughly `72 * ncells * 8` bytes when grey radiation is enabled, `35 * ncells * 8` without, where `ncells` includes ghost cells. A $128^3$ radiation-hydrodynamics run needs about 1.4 GB; pure hydrodynamics at $128^3$ needs about 0.7 GB. Every radiation buffer is `4 * ngroups` components wide, so the radiation share of that figure — about half of it in a grey run — scales with the number of frequency groups.
 
 ## Output
@@ -281,16 +374,25 @@ Loading Plots activates a package extension that adds the plotting methods. They
 ```julia
 using Plots, Honghu
 
-sim, tmax = Honghu.Problems.kelvin_helmholtz(n = 256)
+sim, tmax = Honghu.Problems.kelvin_helmholtz(n = 128)
 run!(sim; tmax)
 
 plot(sim)                                  # a recipe, so plot/plot! work directly
 plotstate(sim, var = :Erad, logscale = true)
 plotpanels(sim)                            # density, speed, pressure, temperature (+ radiation)
-animate_run(sim; tmax = 4.0, var = :density, filename = "kh.gif")
+```
+
+`animate_run` makes an animation on the fly: it takes the place of `run!`, advancing the simulation to `tmax` and drawing a frame at `nframes` evenly spaced times, then writes a GIF. It needs no snapshots on disk:
+
+```julia
+sim, tmax = Honghu.Problems.kelvin_helmholtz(n = 256)
+animate_run(sim; tmax, nframes = 100, var = :density, fps = 20,
+            filename = "kh.gif", c = :magma)   # further keywords go to plotstate
 ```
 
 Call any of them without Plots loaded and you get an error telling you to load it, not a `MethodError`.
+
+In the REPL or VS Code a figure appears as soon as it is displayed; Plots' default backend, GR, opens it in a window. Two things can stop it. In a script run with `julia script.jl`, the window closes when the script ends, so add `readline()` after `display` to keep it open, or write the figure to a file with `savefig(plotstate(sim), "sod.png")`. The example scripts set `ENV["GKSwstype"] = "100"` (in `examples/common.jl`), which makes GR draw off-screen and open no window at all; remove that setting, or set it to `"gksqt"`, to see figures on screen.
 
 `docs/make_figures.jl` and `docs/make_animations.jl` regenerate everything shown above.
 

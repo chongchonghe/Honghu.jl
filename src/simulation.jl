@@ -1009,8 +1009,12 @@ end
 function _print_summary(sim::Simulation, elapsed)
     d = sim.diag
     ncell = prod(sim.grid.n)
-    @printf("done: %d steps, t = %.6g, %.2f s (%.3g cell-updates/s)\n",
-            sim.step, sim.t, elapsed, elapsed > 0 ? ncell * sim.step / elapsed : 0.0)
+    # The grid loops are threaded over (j, k) rows, so a run uses at most one
+    # thread per row: a 1D run is serial whatever `julia -t` asked for.
+    nthr = min(Threads.nthreads(), sim.grid.n[2] * sim.grid.n[3])
+    @printf("done: %d steps, t = %.6g, %.2f s (%.3g cell-updates/s) on %d thread%s\n",
+            sim.step, sim.t, elapsed, elapsed > 0 ? ncell * sim.step / elapsed : 0.0,
+            nthr, nthr == 1 ? "" : "s")
     # A handful of floor hits is normal wherever the solution genuinely reaches
     # vacuum (deep shadows, the interior of a blast). A count comparable to the
     # number of cell updates means the run is unphysical.

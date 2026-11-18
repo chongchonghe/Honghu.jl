@@ -20,6 +20,7 @@ All notable changes to Honghu.jl are recorded here. The format follows [Keep a C
 
 ### Changed
 
+- The summary line at the end of `run!` gives the number of threads the run used, `on N threads`. That is `Threads.nthreads()` capped at the number of `(j, k)` rows, since the grid loops are threaded over rows: a 1D run reports 1 thread whatever `julia -t` asked for.
 - `amend_rad` counts a radiation cell as repaired only when the state was inadmissible: an energy density below the floor or NaN, or a flux that had to be rescaled. An energy density exactly at the floor is admissible and is no longer counted, where it was counted in every call. `nrepaired(sim)` and `Diagnostics.floors_rad` therefore report fewer hits, only the exactly-at-floor ones, which matters for a run whose dark cells hold the floor, as in photoionization (101,969 counts for 10,240 cell updates in 20 steps of Stromgren Test 1 at $n = 8$, which `run!` called unphysical, now 0). Only the counts change: the state of every run is bit for bit what it was.
 
 ### Fixed
