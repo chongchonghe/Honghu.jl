@@ -25,6 +25,7 @@ All notable changes to Honghu.jl are recorded here. The format follows [Keep a C
 
 ### Fixed
 
+- `StabilityBound`, the ARSA limiter, keeps the inertia cap $K_F = (1 + T_{\max})\,E/(\rho c^2)\,c\,\Delta t\,\chi_F$ in the momentum condition, as in the paper's limiter, where it was dropped as small. In a thick cell the bound is a difference of two large terms, so dropping even $K_F \sim 10^{-4}$ could move it by more than $1 - \beta$ and let the limiter pick $\phi = 1$ where the momentum block is unstable (an example by B. Wibking is now a test in `test_rsla.jl`). `LocalCell` gains the field `rinert`, the ratio of radiation to gas inertia, which is zero, as before, when the gas momentum is frozen (`hydro = false`). The runs of the ARSA paper are unchanged.
 - `load_checkpoint!` read the clock (`sim.t`, `sim.dt`, `sim.step`) into the simulation before it checked the number of variables and the radiation setting, so a refused file moved the clock. It now assigns the clock after the checks and the read, and a refused file leaves the simulation as it was.
 
 ### Documentation
