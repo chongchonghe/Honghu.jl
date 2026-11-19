@@ -53,6 +53,7 @@ const PAGES = [
 const NOTES = ["photochemistry.md",
                "coupling-new-method.md", "coupling-new-method-dust.md",
                "coupling-findings.md", "rsla-findings.md", "photoionization-findings.md",
+               "parallel-findings.md",
                "documentation.md"]
 
 const MODULES = (Honghu, Honghu.Problems, Honghu.CGS)
