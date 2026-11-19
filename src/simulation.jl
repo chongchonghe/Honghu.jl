@@ -560,14 +560,14 @@ end
 
 # --- right-hand sides --------------------------------------------------------
 
-function _hydro_sweep!(dU, sim::Simulation, ::Val{D}) where {D}
+function _hydro_sweep!(dU, sim::Simulation, ::Val{D}, overwrite::Bool=false) where {D}
     hw = sim.hw
     g = sim.grid
     nvar = nhydrovars(sim)
     reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, nvar)
     hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g,
                   sim.nscalars)
-    flux_divergence!(dU, hw.flux, Val(D), g, nvar)
+    flux_divergence!(dU, hw.flux, Val(D), g, nvar, overwrite)
     return nothing
 end
 
@@ -584,21 +584,24 @@ function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
     sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars)
     sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars, sim.chemistry !== nothing)
     cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars)
-    threaded_fill!(dU, zero(T))
-    g.active[1] && _hydro_sweep!(dU, sim, Val(1))
-    g.active[2] && _hydro_sweep!(dU, sim, Val(2))
-    g.active[3] && _hydro_sweep!(dU, sim, Val(3))
+    # The first active direction overwrites `dU` rather than adding to it, which
+    # saves zeroing it first. Only the interior of `dU` is written or read.
+    first = findfirst(g.active)
+    first === nothing && threaded_fill!(dU, zero(T))     # a single cell: no sweep at all
+    g.active[1] && _hydro_sweep!(dU, sim, Val(1), first == 1)
+    g.active[2] && _hydro_sweep!(dU, sim, Val(2), first == 2)
+    g.active[3] && _hydro_sweep!(dU, sim, Val(3), first == 3)
     return dU
 end
 
-function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}) where {D}
+function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}, overwrite::Bool=false) where {D}
     rw = sim.rw
     g = sim.grid
     nrad = nradvars(sim.radiation)
     reconstruct!(rw.qL, rw.qR, rw.prim, sim.radiation_reconstruction, Val(D), g, nrad)
     rad_fluxes!(rw.flux, rw.qL, rw.qR, R, _sweep_chat(sim), sim.radiation, Val(D), g,
                 sim.radiation.wavespeed_correction ? rw.chiF : nothing)
-    flux_divergence!(dR, rw.flux, Val(D), g, nrad)
+    flux_divergence!(dR, rw.flux, Val(D), g, nrad, overwrite)
     return nothing
 end
 
@@ -614,10 +617,11 @@ function rad_rhs!(dR::Array{T,4}, R::Array{T,4}, sim::Simulation{T}, t::T) where
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
     sim.diag.floors_rad += enforce_rad_floors!(R, sim.radiation, g, sim.floors)
     rad_cons2prim!(sim.rw.prim, R, sim.radiation, g)
-    threaded_fill!(dR, zero(T))
-    g.active[1] && _rad_sweep!(dR, R, sim, Val(1))
-    g.active[2] && _rad_sweep!(dR, R, sim, Val(2))
-    g.active[3] && _rad_sweep!(dR, R, sim, Val(3))
+    first = findfirst(g.active)       # overwrites `dR`, as in `hydro_rhs!`
+    first === nothing && threaded_fill!(dR, zero(T))
+    g.active[1] && _rad_sweep!(dR, R, sim, Val(1), first == 1)
+    g.active[2] && _rad_sweep!(dR, R, sim, Val(2), first == 2)
+    g.active[3] && _rad_sweep!(dR, R, sim, Val(3), first == 3)
     _sweep_chat(sim) === nothing && scale_by_phi!(dR, sim.rw.chat, sim.radiation, g)
     return dR
 end

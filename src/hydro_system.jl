@@ -338,20 +338,32 @@ function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
 end
 
 """
-    flux_divergence!(dU, flux, Val(D), grid, nvar)
+    flux_divergence!(dU, flux, Val(D), grid, nvar, overwrite = false)
 
-Subtract `(F_{i+1/2} - F_{i-1/2}) / dx` from `dU` over the interior cells.
+Subtract `(F_{i+1/2} - F_{i-1/2}) / dx` from `dU` over the interior cells, or,
+with `overwrite = true`, store its negative there and ignore what `dU` held.
+
+The right-hand sides pass `overwrite = true` for the first active direction, in
+place of zeroing `dU` first: one fewer pass over a whole array per right-hand
+side. The result is the same to the bit, except that `0 - x` and `-x` differ in
+the sign of an exact zero, which no comparison sees.
 """
 function flux_divergence!(dU::A, flux::A, ::Val{D}, g::CartesianGrid{T},
-                          nvar::Int) where {T,A<:AbstractArray{T,4},D}
+                          nvar::Int, overwrite::Bool=false) where {T,A<:AbstractArray{T,4},D}
     e1, e2, e3 = _shift(Val(D))
     invdx = one(T) / g.dx[D]
     ir = g.lo[1]:g.hi[1]
     jr = g.lo[2]:g.hi[2]
     kr = g.lo[3]:g.hi[3]
     threaded_jk(jr, kr) do j, k
-        @inbounds for i in ir, n in 1:nvar
-            dU[n, i, j, k] -= invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])
+        if overwrite
+            @inbounds for i in ir, n in 1:nvar
+                dU[n, i, j, k] = -(invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k]))
+            end
+        else
+            @inbounds for i in ir, n in 1:nvar
+                dU[n, i, j, k] -= invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])
+            end
         end
     end
     return nothing

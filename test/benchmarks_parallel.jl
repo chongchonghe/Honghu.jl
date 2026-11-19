@@ -51,7 +51,7 @@ if passes
         "enforce_floors" => () -> Honghu.enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars),
         "cons2prim" => () -> Honghu.cons2prim!(hw.prim, U, sim.eos, g, sim.nscalars),
         "copy U0" => () -> Honghu.threaded_copyto!(hw.U0, U),
-        "sweep x" => () -> Honghu._hydro_sweep!(hw.dU, sim, Val(1)),
+        "sweep x" => () -> Honghu._hydro_sweep!(hw.dU, sim, Val(1), true),
         "sweep y" => () -> Honghu._hydro_sweep!(hw.dU, sim, Val(2)),
         "sweep z" => () -> Honghu._hydro_sweep!(hw.dU, sim, Val(3)),
         "combine" => () -> Honghu.combine!(U, 0.5, hw.U0, 0.5, U, 0.0, hw.dU, g, nv),

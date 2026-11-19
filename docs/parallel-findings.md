@@ -55,3 +55,7 @@ That is about 8 ms of serial work a step, 4% at 32 threads. The 1-thread step is
 ### 2. Ghost filling: not threaded, deliberately
 
 The plan was to split each built-in boundary face over threads. Measured first, the whole `fill_ghosts!` of the gas state costs 0.47 ms at 128³ on one thread, and it runs once per right-hand side, so at most 1.4 ms of a 131 ms step (1%) is there to be won. Ghost work scales with the surface (n²), not the volume (n³), so the fraction falls as the grid grows. That is within the noise of these measurements, and it is not worth complicating `fill_face!`, which users extend. It stays serial.
+
+### 3. Fold the zeroing of `dU` into the first sweep
+
+`flux_divergence!` takes `overwrite = true` for the first active direction, which stores `-ΔF/Δx` instead of subtracting it, so `hydro_rhs!` and `rad_rhs!` no longer zero `dU` and `dR` first. This removes one whole-array write per right-hand side, three per step. Only the sign of an exact zero can differ (`-0.0` against `0.0`), which `==` does not see, and nothing reads the ghost cells of `dU`. Measured: 131 → 130 ms at 32 threads, 1380 → 1366 ms at 1 thread. That is within the noise, as expected after change 1 had already made the zeroing 0.8 ms. It is kept because it costs nothing and removes a pass.
