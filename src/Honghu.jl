@@ -104,6 +104,7 @@ include("riemann/hllc.jl")
 include("riemann/llf.jl")
 include("riemann_radiation.jl")
 include("hydro_system.jl")
+include("tiling.jl")             # the cache-blocked hydro sweep, on the kernels above
 include("radiation_system.jl")
 include("source_terms.jl")
 include("chemistry.jl")            # per-cell chemical network interface

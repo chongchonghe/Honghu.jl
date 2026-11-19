@@ -88,3 +88,34 @@ All within the noise. The passes are bound by memory traffic, not by the schedul
 | 64 | 129–139 ms | 123 ms | |
 
 No code change. The README recommends it. Two caveats: it assumes the job has the whole node, or at least CPUs `0:N-1`, because a batch system that hands out other CPUs needs its own binding (`taskset`, or `srun --cpu-bind=cores`); and on a node with more than one NUMA domain the first-touch placement of the arrays would also matter, which this single-domain node cannot measure.
+
+### 7. The tiled hydrodynamic sweep
+
+`src/tiling.jl`. The sweep along `D` no longer makes three passes over whole-grid arrays. It goes box by box: reconstruct, solve the Riemann problems and take the divergence for one box, with the box's interface states and fluxes in a per-task scratch array that stays in cache. Only `dU` is written to the whole grid. This is AMReX's tiling, and Quokka's: box-local temporaries around the same pointwise kernels. Here the kernels are literally the same. Each kernel's per-row body became an `@inline` function (`_reconstruct_row!`, `_hydro_flux_row!`, `_divergence_row!`) that the whole-grid kernel and the tile driver both call, and the scratch is a `TileArray`, indexed with global cell indices like AMReX's `Array4`. Results are bit-identical, with any tile, to the untiled sweep and to the code before any change. `test/test_parallel.jl` checks this on 3D, 2D and 1D problems, with PCM, PLM and PPM, with and without mass scalars, and on grids that the tile does not divide.
+
+**Tile shape.** A box spans the whole interior along the sweep, so no face is computed twice, and blocks of `tile[e]` cells along each other direction `e`. Pinned, 32 threads:
+
+| tile | 64³ | 128³ | 256³ |
+|:---|---:|---:|---:|
+| untiled | 26.6 | 121 | 976 |
+| (8, 8, 8) | | 94 | 801 |
+| (4, 4, 4) | 17.2 | 92 | 691 |
+| (8, 2, 2) | 16.8 | 87–89 | 606–662 |
+| (16, 1, 1) | | 85 | 651 |
+| (32, 1, 1) | | 85–86 | 631–678 |
+| (128, 1, 1) | | 86 | 755 |
+
+Two things set the optimum. The scratch of a box is `3 nvar (n_D + 3) b b'` numbers, and it has to fit in a core's 1 MiB L2: (128, 1, 1) is as good as any at 128³, but at 256³ its 4 MB scratch spills and it loses. Short rows cost loop overhead: (2, 2, 2) is 112 ms. `DEFAULT_TILE = (32, 1, 1)` is among the best at both sizes, with a scratch of 0.5 MB at 128³ and 1 MB at 256³.
+
+**Not on one core.** On one thread every tile was 5–10% slower than untiled, repeatably (1276–1335 ms against 1211 ms at 128³). That holds in each direction, the `x` sweep included, whose rows are full length, so it is not row length. Wrapping the scratch as a plain `Array` made it worse (`x` sweep 182 ms against 131 ms). A single core has no contention on the memory bus for tiling to relieve. The crossover, untiled against `(32, 1, 1)`:
+
+| threads | 2 | 4 | 8 | 16 | 32 |
+|:---|---:|---:|---:|---:|---:|
+| untiled | 663 | 375 | 230 | 159 | 121 |
+| tiled | 693 | 382 | 219 | 147 | 85 |
+
+So `Simulation(tile = :auto)`, the default, tiles from `TILE_MIN_THREADS = 8` threads and not below. A tuple forces a tile, and `nothing` forces the untiled sweep.
+
+**A bug worth recording.** The first version picked up each task's scratch in the spawning loop, in the same function as the one-task branch, which assigned the same local names. The loop's assignments then rebound variables the spawned closures had captured (the boxing trap of CLAUDE.md's performance rules), so tasks shared one scratch and the result depended on timing. The allocation test could not see it, since it costs bytes per task and not per cell, and on one thread it cannot happen. The bit-identity tests at `-t 4` caught it at once. Each task now takes its scratch from its chunk number inside the task.
+
+**Where it stands.** At 128³, 32 threads: unpinned 97 ms, pinned 85.5 ms (from 137 and 121 before tiling). A sweep takes 6.4–8 ms, against 11 ms untiled. One more measurement puts that in proportion. The same HLLC row kernel on a cache-resident grid, one private copy per task, runs 1.47× slower per core with 32 tasks than with one (1.32× with 8, 2.40× per hardware thread with 64). Nothing is shared there, so this is the clock dropping from its single-core boost, plus the other users of the node, and it is a ceiling no software change moves. Scaled by it, the ideal 32-core step is 1217 × 1.47 / 32 ≈ 56 ms, and the sweeps, about 60 ms a step, are close to their share of it. What is left above that is the passes that still stream whole arrays: about 20 ms a step.

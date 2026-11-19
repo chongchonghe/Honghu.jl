@@ -136,11 +136,14 @@ struct HydroWorkspace{T<:AbstractFloat}
     flux::Array{T,4}
     dU::Array{T,4}
     U0::Array{T,4}
+    tiling::Union{Nothing,HydroTiles{T}}   # `nothing`: the untiled three-pass sweep
 end
 
-function HydroWorkspace(g::CartesianGrid{T}, nvar::Integer=NHYDRO) where {T}
+function HydroWorkspace(g::CartesianGrid{T}, nvar::Integer=NHYDRO;
+                        tile::Union{Nothing,NTuple{3,Int}}=nothing) where {T}
     HydroWorkspace(allocate(g, nvar), allocate(g, nvar), allocate(g, nvar),
-                   allocate(g, nvar), allocate(g, nvar), allocate(g, nvar))
+                   allocate(g, nvar), allocate(g, nvar), allocate(g, nvar),
+                   tile === nothing ? nothing : HydroTiles(g, nvar, tile))
 end
 
 """
@@ -230,6 +233,20 @@ A three-dimensional (radiation-)hydrodynamics simulation.
   - `max_radiation_substeps = 10` : if the hydro step would need more radiation
     substeps than this, the hydro step is shortened instead.
 
+# Parallel performance
+  - `tile = :auto` : a tuple `(b1, b2, b3)` makes the hydrodynamic sweeps run
+    one box of cells at a time, with the interface states and fluxes of a box in
+    a per-task scratch array that stays in cache, instead of three passes over
+    whole-grid arrays. A sweep along `d` takes the whole interior along `d` and
+    blocks of `b_e` cells along each other direction `e`. `nothing` gives the
+    untiled sweep, which is also what a reconstruction other than `PCM`, `PLM`
+    or `PPM` always gets. `:auto` is [`DEFAULT_TILE`](@ref) with
+    [`TILE_MIN_THREADS`](@ref) threads or more and `nothing` below. The answer
+    is the same to the bit whatever `tile` is: it changes speed only. On a
+    machine with different caches another tile may be faster, and
+    `test/benchmarks_parallel.jl --tile=a,b,c` measures one;
+    `docs/parallel-findings.md` says how the defaults were chosen.
+
 # Example
 ```julia
 sim = Simulation(n = (128, 128, 1), xhi = (1.0, 1.0, 1.0),
@@ -290,6 +307,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     max_radiation_substeps::Integer=10,
                     nscalars::Integer=0,
                     chemistry=nothing,
+                    tile::Union{Symbol,Nothing,NTuple{3,Int}}=:auto,
                     T::Type{<:AbstractFloat}=Float64)
     hydro || radiation !== nothing ||
         throw(ArgumentError("nothing to evolve: enable hydro, radiation, or both"))
@@ -317,7 +335,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                riemann, integrator, boundaries,
                radiation_boundaries, source, strang_sources, chemistry, fl, T(cfl),
                T(cfl_radiation), Int(max_radiation_substeps), hydro, Int(nscalars), U, Rarr,
-               HydroWorkspace(grid, nvar), rw, cw, Diagnostics(), zero(T), zero(T), 0)
+               HydroWorkspace(grid, nvar; tile=hydro ? _resolve_tile(tile) : nothing), rw, cw, Diagnostics(), zero(T), zero(T), 0)
 end
 
 # What a chemistry run needs of the rest of the simulation (see `Photochemistry`): the
@@ -564,6 +582,12 @@ function _hydro_sweep!(dU, sim::Simulation, ::Val{D}, overwrite::Bool=false) whe
     hw = sim.hw
     g = sim.grid
     nvar = nhydrovars(sim)
+    tiles = hw.tiling
+    if tiles !== nothing && has_tiled_method(sim.reconstruction)
+        hydro_sweep_tiled!(dU, hw.prim, tiles, sim.reconstruction, sim.eos, sim.riemann,
+                           Val(D), g, nvar, sim.nscalars, overwrite)
+        return nothing
+    end
     reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, nvar)
     hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g,
                   sim.nscalars)
