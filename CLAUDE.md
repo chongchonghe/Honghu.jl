@@ -20,6 +20,7 @@ networks/regenerate.sh --jaff-path ~/softwares/quokka/jaff  # regenerate the che
 julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
 julia --project=. docs/make.jl                      # build the docs site into docs/_site (needs quarto)
 julia --project=. -t 8 test/benchmarks.jl           # timing table (BenchmarkTools)
+julia --project=. -t 32 test/benchmarks_parallel.jl [n] [--passes] [--tile=a,b,c|none]  # Sedov thread scaling
 julia --project=. -e 'include("src/Honghu.jl")'     # syntax check without precompiling
 ```
 
@@ -202,6 +203,7 @@ Include order in `src/Honghu.jl` matters, because later files use types defined 
 | `riemann/hllc.jl`, `riemann/llf.jl` | One solver per file, mirroring Quokka's `HLLC.hpp` / `LLF.hpp`. Pointwise, canonical (normal = x) form. |
 | `riemann_radiation.jl` | M1 closure, Eddington tensor, `hll_radiation` (its `epsE` is the optional wave-speed correction). |
 | `hydro_system.jl` | `Floors`, `cons2prim!` / `enforce_floors!`, the flux sweep, flux divergence, hydro CFL. |
+| `tiling.jl` | The tiled hydro sweep: `TileArray` (global-index view of a box-local scratch, AMReX's `Array4`), `HydroTiles`, `tile_boxes`, `hydro_sweep_tiled!`. It calls the row bodies of the three whole-grid kernels, so it is bit-identical to them. `Simulation(tile = :auto)` tiles from `TILE_MIN_THREADS` threads. |
 | `radiation_system.jl` | `RadiationPhysics`, the group layout (`ngroups`, `nradvars`, `gbase`), state repair, the HLL flux sweep, radiation CFL, the two drivers of the `chat` limiter (`update_chat!`, `energy_exchange_dt`), `scale_by_phi!`, and `floor_rad_energy!`, the only repair allowed before a coupling solve. |
 | `source_terms.jl` | The implicit matter-radiation coupling — the hardest file. Two drivers, chosen by dispatch on `NG`: the grey 2×2 Newton written out inline, and `multigroup_source_step!`, which hands each cell to an `AbstractCoupling`. |
 | `chemistry.jl` | `AbstractNetwork`: what is evolved in one cell, with no integrator in it. The state is `u = [n_s, E, (N_b, f_b)]` in JAFF's order; this file holds what every network shares (`NetworkOptions`, unpacking with the clamp, the temperature with `isothermal` and `Tmin`, the frozen-temperature Jacobian correction, the tolerance scales) and calls the generated `jaff_rhs!` / `jaff_jacobian!`; also `ChemCell`, `ChemStats` and `AbstractChemSolver`. Emission, applying the flux factor and the clamp at zero are deliberately not terms of the ODE; they belong to the grid driver. |
@@ -239,12 +241,14 @@ Include order in `src/Honghu.jl` matters, because later files use types defined 
 
 ## Performance rules
 
-The inner loops must stay allocation-free. Two traps have already bitten this code:
+The inner loops must stay allocation-free, and the threaded ones race-free. Three traps have already bitten this code:
 
 1. **Closures inside the cell loop box their captured variables.** An `ntuple(Val(3)) do a … end` in `source_terms.jl` captured Newton-loop variables that were assigned in several places, so Julia boxed them; every assignment then heap-allocated. That cost 406 MB and 200 ms per source step at 32³. Write such kernels out component by component instead.
 2. **Threaded reductions must not use `threadid()`.** `Threads.@threads` defaults to dynamic scheduling, so `threadid()` is not stable across a chunk. `reduce_max_jk` writes partial results to distinct slots keyed by the loop index instead.
 
-`test/test_performance.jl` guards both: it asserts that every hot kernel allocates under 8 bytes per interior cell, and that allocation per step does not grow with the grid. Those are the tests that would have caught the boxing bug, so extend them whenever you add a kernel. The one accepted exception is the default chemistry integrator: `chemistry_step!` with `RosenbrockChem` allocates about 350 bytes per cell inside OrdinaryDiffEq's `reinit!` and `solve!`, and the test only bounds it (under 2 kB per cell); with `BackwardEulerChem` it is held to the 8 bytes.
+3. **A spawn loop must not assign a name the function also assigns elsewhere.** `hydro_sweep_tiled!` once destructured each task's scratch inside its `@sync for c … Threads.@spawn` loop, while its one-task branch assigned the same names: the locals were then shared across iterations, boxed, and the tasks raced on one scratch. Pass the chunk number and let the task fetch what it owns (`_sweep_chunk!`). The allocation test cannot see this (bytes per task, not per cell); the bit-identity tests of `test/test_parallel.jl` with several threads do.
+
+`test/test_performance.jl` guards the first two: it asserts that every hot kernel allocates under 8 bytes per interior cell, and that allocation per step does not grow with the grid. Those are the tests that would have caught the boxing bug, so extend them whenever you add a kernel. The one accepted exception is the default chemistry integrator: `chemistry_step!` with `RosenbrockChem` allocates about 350 bytes per cell inside OrdinaryDiffEq's `reinit!` and `solve!`, and the test only bounds it (under 2 kB per cell); with `BackwardEulerChem` it is held to the 8 bytes.
 
 When changing a hot kernel, check with
 
@@ -253,6 +257,8 @@ a = @allocated some_kernel!(args...)   # after one warm-up call
 ```
 
 and profile with `Profile.Allocs.@profile sample_rate=0.02` if it is non-zero. `test/benchmarks.jl` gives the per-kernel timing breakdown.
+
+**Whole-grid passes are bandwidth-bound past about 8 threads.** On a 32-core node a pass that only streams arrays scales 3-4 times, while the HLLC arithmetic scales 18 times. So the hydro sweep is tiled (`src/tiling.jl`), and a new kernel that adds a whole-grid pass costs more than its arithmetic suggests. A kernel body used by both the whole-grid kernel and the tile driver lives in an `@inline` row function (`_reconstruct_row!`, `_hydro_flux_row!`, `_divergence_row!`), written once. `test/benchmarks_parallel.jl` is the scaling benchmark and `docs/parallel-findings.md` the record.
 
 Directional kernels take `Val(D)` so `D` is a compile-time constant. Call them from an explicit `grid.active[1] && sweep!(…, Val(1))` chain, never `for D in 1:3` with a runtime `Val(D)`.
 

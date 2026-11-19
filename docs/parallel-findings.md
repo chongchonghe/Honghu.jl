@@ -2,6 +2,19 @@
 
 How Honghu uses the cores of one shared-memory node, what was changed to make it use them better, and what each change bought. Every number here is a step of the 3D Sedov blast (`Problems.sedov_blast`: PPM, HLLC, SSPRK3, outflow boundaries), timed by `test/benchmarks_parallel.jl`.
 
+## Summary
+
+The 3D Sedov blast at 128³, the same machine, the code before and after, run back to back:
+
+| | before | after | gain |
+|:---|---:|---:|---:|
+| 1 thread | 1381 ms | 1201 ms | 1.15× |
+| 32 threads | 141 ms | 93 ms | 1.52× |
+| 32 threads, pinned | 136 ms | 82 ms | 1.66× |
+| speedup over 1 thread (32, pinned) | 10.2× | 14.6× | |
+
+The answers are the same to the bit, on every problem checked, at every thread count. Three changes carry it. **Tiling** the hydrodynamic sweep (section 7) moves the interface states and fluxes out of whole-grid arrays and into cache. **Forming the Runge–Kutta stage in the last sweep** (section 8) removes a four-array pass per stage. **Splitting each kernel's body into a row function** that the tile driver shares made one thread 13% faster on its own (section 7). Pinning the threads is worth another 10% at 32 threads, but only when the job uses every core (section 6). The goal set at the outset, 70 ms at 32 threads, was not reached. The measurement in section 7 says why it could not have been: with every core busy, each core runs 1.47× slower than one core alone, so the ideal is about 56 ms, and the sweeps are now within 10–15% of their share of it. Section 9 lists what remains.
+
 ## Machine and method
 
 - AMD Ryzen Threadripper PRO 7975WX: 32 cores, 64 hardware threads, one socket, one NUMA node. 1 MiB L2 per core, 128 MiB L3 in four 32 MiB slices (one per 8-core CCD). 124 GB RAM. Julia 1.13.4, Linux 6.12.
@@ -123,3 +136,30 @@ So `Simulation(tile = :auto)`, the default, tiles from `TILE_MIN_THREADS = 8` th
 ### 8. The Runge–Kutta stage formed in the last sweep
 
 `combine!` formed each stage, `U = a U0 + b U + c Δt dU`, as a pass of its own over four whole arrays: 2.3 ms at 32 threads, three times a step. Now `hydro_rhs!(dU, U, sim; update = (a, U0, b, c Δt))` hands the stage to the last active sweep, whose divergence row forms `U` directly from the fluxes, with the same arithmetic as `combine!`, and never stores the final `dU`. This is safe because the sweeps read `prim`, never `U`. It is also how Quokka forms its stages: from the fluxes, with no stored right-hand side. Bit-identical, checked against `hydro_rhs!` followed by `combine!` in 3D, 2D and 1D, tiled and untiled. Pinned, 32 threads: 85.5 → 82.0 ms. Unpinned: 97 → 93.5 ms. 64 threads pinned: 78.4 ms.
+
+### 9. Final numbers, and what is left
+
+Sedov, final code, one run each (128³ before and after are also in the summary, run back to back):
+
+| threads | 128³ unpinned | 128³ pinned | 256³ unpinned | 256³ pinned |
+|---:|---:|---:|---:|---:|
+| 1 | 1201 | 1249 | 9526 | 9864 |
+| 2 | 628 | 657 | | |
+| 4 | 354 | 363 | | |
+| 8 | 198 | 216 | 1625 | 1747 |
+| 16 | 115 | 140 | 881 | 1064 |
+| 32 | 93 | 82 | 690 | 670 |
+| 64 | 90 | 78 | 634 | 640 |
+
+At 256³ the step went from 1037 ms to 690 ms at 32 threads (1.50×), and from 10.9 s to 9.5 s on one thread.
+
+**Pinning, revised.** Section 6 measured pinning before tiling, when it won at 16 threads as well. Measured again on the final code, it wins only when every core is used. `JULIA_EXCLUSIVE=1` puts thread `i` on CPU `i`, so a 16-thread run sits on CPUs 0–15: two of the four 8-core CCDs, with two of the four L3 slices and memory links. That made it 20% slower than unpinned at 16 threads (140 against 115 ms) and 9% slower at 8. Pin a run that has the whole node. Leave a smaller one unpinned, or bind it to cores spread over the CCDs.
+
+**Where a 32-thread step goes now** (pinned, 128³, 82 ms): three right-hand sides of 24.4 ms each. Each is three sweeps of 6.4–7.0 ms, plus the floors, the conversion and the ghost fill (2.5 ms together) and task start-up. The rest of the step is the stage copy (1.6 ms), the CFL scan, which converts the whole grid to primitives first (2.3 ms), and the end-of-step floors (0.3 ms).
+
+What is left, largest first:
+
+- **The kernels on one core.** The sweeps are within 10–15% of their clock-limited share, so further gains in them have to come from making each core faster, not from more parallelism. The HLLC row and the PPM row are scalar loops over faces. Vectorising them across `i` (SIMD, 8 doubles with AVX-512 on this CPU) is the largest remaining lever, and it is a separate piece of work.
+- **The remaining whole-grid passes**, about 10 ms a step: the floor pass, the ghost fill, the conversion, the stage copy and the CFL scan. Fusing the floors into the conversion, threading the ghost fill and reusing the conversion in the CFL scan would save perhaps 5 ms (6%). Each was set aside as too small to measure at the time (sections 2 and 4). Together they are no longer below the noise.
+- **The radiation sweep** is untouched. It has the same structure, reconstruct then HLL then divergence, so the same tiling would apply, but the implicit coupling dominates a radiation step.
+- **NUMA.** This node has one NUMA domain, so first-touch placement of the arrays, which matters on a two-socket node, could not be measured.
