@@ -245,93 +245,105 @@ function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
                        solver::AbstractRiemannSolver,
                        ::Val{D}, g::CartesianGrid{T},
                        nscalars::Integer=0) where {T,A<:AbstractArray{T,4},D}
-    e1, e2, e3 = _shift(Val(D))
-    s1 = _tshift1(Val(D))
-    s2 = _tshift2(Val(D))
     act1 = g.active[_tdir1(Val(D))]
     act2 = g.active[_tdir2(Val(D))]
-    iu = D + 1                    # normal velocity/momentum slot
-    iv = _tdir1(Val(D)) + 1       # first transverse slot
-    iw = _tdir2(Val(D)) + 1       # second transverse slot
     gam = T(adiabatic_index(eos))
     ir, jr, kr = face_ranges(g, Val(D))
 
     threaded_jk(jr, kr) do j, k
-        @inbounds for i in ir
-            im, jm, km = i - e1, j - e2, k - e3   # cell on the low side of the face
+        _hydro_flux_row!(flux, qL, qR, prim, eos, solver, Val(D), gam, act1, act2,
+                         ir, j, k, nscalars)
+    end
+    return nothing
+end
 
-            rhoL = qL[IRHO, i, j, k]
-            pL = qL[IPRE, i, j, k]
-            uL = qL[iu, i, j, k]
-            vL = qL[iv, i, j, k]
-            wL = qL[iw, i, j, k]
-            fallbackL = false
-            if !(rhoL > 0) || !(pL > 0)
-                fallbackL = true
-                rhoL = prim[IRHO, im, jm, km]
-                pL = prim[IPRE, im, jm, km]
-                uL = prim[iu, im, jm, km]
-                vL = prim[iv, im, jm, km]
-                wL = prim[iw, im, jm, km]
-            end
+# The body of `hydro_fluxes!` for the faces `ir` at `(j, k)`, shared with the tiled
+# sweep. `qL`, `qR` and `flux` may be tile-local; `prim` is always the whole grid,
+# because the fallback and the carbuncle inputs read cell-centred neighbours.
+@inline function _hydro_flux_row!(flux, qL, qR, prim, eos::AbstractEOS,
+                                  solver::AbstractRiemannSolver, ::Val{D}, gam::T,
+                                  act1::Bool, act2::Bool, ir, j, k,
+                                  nscalars::Integer) where {D,T}
+    e1, e2, e3 = _shift(Val(D))
+    s1 = _tshift1(Val(D))
+    s2 = _tshift2(Val(D))
+    iu = D + 1                    # normal velocity/momentum slot
+    iv = _tdir1(Val(D)) + 1       # first transverse slot
+    iw = _tdir2(Val(D)) + 1       # second transverse slot
+    @inbounds for i in ir
+        im, jm, km = i - e1, j - e2, k - e3   # cell on the low side of the face
 
-            rhoR = qR[IRHO, i, j, k]
-            pR = qR[IPRE, i, j, k]
-            uR = qR[iu, i, j, k]
-            vR = qR[iv, i, j, k]
-            wR = qR[iw, i, j, k]
-            fallbackR = false
-            if !(rhoR > 0) || !(pR > 0)
-                fallbackR = true
-                rhoR = prim[IRHO, i, j, k]
-                pR = prim[IPRE, i, j, k]
-                uR = prim[iu, i, j, k]
-                vR = prim[iv, i, j, k]
-                wR = prim[iw, i, j, k]
-            end
+        rhoL = qL[IRHO, i, j, k]
+        pL = qL[IPRE, i, j, k]
+        uL = qL[iu, i, j, k]
+        vL = qL[iv, i, j, k]
+        wL = qL[iw, i, j, k]
+        fallbackL = false
+        if !(rhoL > 0) || !(pL > 0)
+            fallbackL = true
+            rhoL = prim[IRHO, im, jm, km]
+            pL = prim[IPRE, im, jm, km]
+            uL = prim[iu, im, jm, km]
+            vL = prim[iv, im, jm, km]
+            wL = prim[iw, im, jm, km]
+        end
 
-            csL = soundspeed(eos, rhoL, pL)
-            csR = soundspeed(eos, rhoR, pR)
-            EL = internal_energy(eos, rhoL, pL) + rhoL * (uL * uL + vL * vL + wL * wL) / 2
-            ER = internal_energy(eos, rhoR, pR) + rhoR * (uR * uR + vR * vR + wR * wR) / 2
+        rhoR = qR[IRHO, i, j, k]
+        pR = qR[IPRE, i, j, k]
+        uR = qR[iu, i, j, k]
+        vR = qR[iv, i, j, k]
+        wR = qR[iw, i, j, k]
+        fallbackR = false
+        if !(rhoR > 0) || !(pR > 0)
+            fallbackR = true
+            rhoR = prim[IRHO, i, j, k]
+            pR = prim[IPRE, i, j, k]
+            uR = prim[iu, i, j, k]
+            vR = prim[iv, i, j, k]
+            wR = prim[iw, i, j, k]
+        end
 
-            # jump in normal velocity, and the smallest transverse velocity
-            # difference in the two adjoining cells (carbuncle correction)
-            du = prim[iu, i, j, k] - prim[iu, im, jm, km]
-            dw = T(Inf)
-            if act1
-                a = prim[iv, im+s1[1], jm+s1[2], km+s1[3]] - prim[iv, im, jm, km]
-                b = prim[iv, im, jm, km] - prim[iv, im-s1[1], jm-s1[2], km-s1[3]]
-                c = prim[iv, i+s1[1], j+s1[2], k+s1[3]] - prim[iv, i, j, k]
-                d = prim[iv, i, j, k] - prim[iv, i-s1[1], j-s1[2], k-s1[3]]
-                dw = min(dw, min(a, b), min(c, d))
-            end
-            if act2
-                a = prim[iw, im+s2[1], jm+s2[2], km+s2[3]] - prim[iw, im, jm, km]
-                b = prim[iw, im, jm, km] - prim[iw, im-s2[1], jm-s2[2], km-s2[3]]
-                c = prim[iw, i+s2[1], j+s2[2], k+s2[3]] - prim[iw, i, j, k]
-                d = prim[iw, i, j, k] - prim[iw, i-s2[1], j-s2[2], k-s2[3]]
-                dw = min(dw, min(a, b), min(c, d))
-            end
-            isfinite(dw) || (dw = zero(T))
+        csL = soundspeed(eos, rhoL, pL)
+        csR = soundspeed(eos, rhoR, pR)
+        EL = internal_energy(eos, rhoL, pL) + rhoL * (uL * uL + vL * vL + wL * wL) / 2
+        ER = internal_energy(eos, rhoR, pR) + rhoR * (uR * uR + vR * vR + wR * wR) / 2
 
-            sL = HydroState(rhoL, uL, vL, wL, pL, csL, EL)
-            sR = HydroState(rhoR, uR, vR, wR, pR, csR, ER)
-            F = riemann_flux(solver, sL, sR, gam, du, dw)
+        # jump in normal velocity, and the smallest transverse velocity
+        # difference in the two adjoining cells (carbuncle correction)
+        du = prim[iu, i, j, k] - prim[iu, im, jm, km]
+        dw = T(Inf)
+        if act1
+            a = prim[iv, im+s1[1], jm+s1[2], km+s1[3]] - prim[iv, im, jm, km]
+            b = prim[iv, im, jm, km] - prim[iv, im-s1[1], jm-s1[2], km-s1[3]]
+            c = prim[iv, i+s1[1], j+s1[2], k+s1[3]] - prim[iv, i, j, k]
+            d = prim[iv, i, j, k] - prim[iv, i-s1[1], j-s1[2], k-s1[3]]
+            dw = min(dw, min(a, b), min(c, d))
+        end
+        if act2
+            a = prim[iw, im+s2[1], jm+s2[2], km+s2[3]] - prim[iw, im, jm, km]
+            b = prim[iw, im, jm, km] - prim[iw, im-s2[1], jm-s2[2], km-s2[3]]
+            c = prim[iw, i+s2[1], j+s2[2], k+s2[3]] - prim[iw, i, j, k]
+            d = prim[iw, i, j, k] - prim[iw, i-s2[1], j-s2[2], k-s2[3]]
+            dw = min(dw, min(a, b), min(c, d))
+        end
+        isfinite(dw) || (dw = zero(T))
 
-            flux[IRHO, i, j, k] = F[1]
-            flux[iu, i, j, k] = F[2]
-            flux[iv, i, j, k] = F[3]
-            flux[iw, i, j, k] = F[4]
-            flux[IEGAS, i, j, k] = F[5]
+        sL = HydroState(rhoL, uL, vL, wL, pL, csL, EL)
+        sR = HydroState(rhoR, uR, vR, wR, pR, csR, ER)
+        F = riemann_flux(solver, sL, sR, gam, du, dw)
 
-            # passive scalars ride the mass flux, with the upwind mass fraction
-            for s in 1:nscalars
-                idx = scalar_index(s)
-                XL = (fallbackL ? prim[idx, im, jm, km] : qL[idx, i, j, k]) / rhoL
-                XR = (fallbackR ? prim[idx, i, j, k] : qR[idx, i, j, k]) / rhoR
-                flux[idx, i, j, k] = F[1] * (F[1] >= zero(T) ? XL : XR)
-            end
+        flux[IRHO, i, j, k] = F[1]
+        flux[iu, i, j, k] = F[2]
+        flux[iv, i, j, k] = F[3]
+        flux[iw, i, j, k] = F[4]
+        flux[IEGAS, i, j, k] = F[5]
+
+        # passive scalars ride the mass flux, with the upwind mass fraction
+        for s in 1:nscalars
+            idx = scalar_index(s)
+            XL = (fallbackL ? prim[idx, im, jm, km] : qL[idx, i, j, k]) / rhoL
+            XR = (fallbackR ? prim[idx, i, j, k] : qR[idx, i, j, k]) / rhoR
+            flux[idx, i, j, k] = F[1] * (F[1] >= zero(T) ? XL : XR)
         end
     end
     return nothing
@@ -350,20 +362,28 @@ the sign of an exact zero, which no comparison sees.
 """
 function flux_divergence!(dU::A, flux::A, ::Val{D}, g::CartesianGrid{T},
                           nvar::Int, overwrite::Bool=false) where {T,A<:AbstractArray{T,4},D}
-    e1, e2, e3 = _shift(Val(D))
     invdx = one(T) / g.dx[D]
     ir = g.lo[1]:g.hi[1]
     jr = g.lo[2]:g.hi[2]
     kr = g.lo[3]:g.hi[3]
     threaded_jk(jr, kr) do j, k
-        if overwrite
-            @inbounds for i in ir, n in 1:nvar
-                dU[n, i, j, k] = -(invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k]))
-            end
-        else
-            @inbounds for i in ir, n in 1:nvar
-                dU[n, i, j, k] -= invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])
-            end
+        _divergence_row!(dU, flux, Val(D), invdx, ir, j, k, nvar, overwrite)
+    end
+    return nothing
+end
+
+# The body of `flux_divergence!` for the cells `ir` at `(j, k)`, shared with the
+# tiled sweep, where `flux` is tile-local and `dU` the whole grid.
+@inline function _divergence_row!(dU, flux, ::Val{D}, invdx, ir, j, k, nvar,
+                                  overwrite::Bool) where {D}
+    e1, e2, e3 = _shift(Val(D))
+    if overwrite
+        @inbounds for i in ir, n in 1:nvar
+            dU[n, i, j, k] = -(invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k]))
+        end
+    else
+        @inbounds for i in ir, n in 1:nvar
+            dU[n, i, j, k] -= invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])
         end
     end
     return nothing
