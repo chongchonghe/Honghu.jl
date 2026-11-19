@@ -59,3 +59,20 @@ The plan was to split each built-in boundary face over threads. Measured first, 
 ### 3. Fold the zeroing of `dU` into the first sweep
 
 `flux_divergence!` takes `overwrite = true` for the first active direction, which stores `-ΔF/Δx` instead of subtracting it, so `hydro_rhs!` and `rad_rhs!` no longer zero `dU` and `dR` first. This removes one whole-array write per right-hand side, three per step. Only the sign of an exact zero can differ (`-0.0` against `0.0`), which `==` does not see, and nothing reads the ghost cells of `dU`. Measured: 131 → 130 ms at 32 threads, 1380 → 1366 ms at 1 thread. That is within the noise, as expected after change 1 had already made the zeroing 0.8 ms. It is kept because it costs nothing and removes a pass.
+
+### 4. Fusing the floors into the conversion: not done
+
+The plan was to fold `enforce_floors!` and `enforce_scalar_floors!` into `cons2prim!` in a single pass. The pass this would remove costs 0.45 ms at 32 threads (the scalar floors return at once without scalars), so at most 1.4 ms of a 130 ms step is there to be won. That is below the noise, and it would touch the split between projection and read-only conversion, which CLAUDE.md asks to preserve. Not done.
+
+### 5. Static, contiguous scheduling: no gain, reverted
+
+`Threads.@threads` defaults to dynamic scheduling. A variant of `threaded_jk` that gives each thread one contiguous block of `(j, k)` rows, so neighbouring rows share a core's cache, was tried on every hydrodynamic kernel (reconstruction, Riemann fluxes, divergence, floors, conversion, combine):
+
+| threads | dynamic | static |
+|---:|---:|---:|
+| 1 | 1366 ms | 1376 ms |
+| 8 | 250 ms | 241 ms |
+| 32 | 130 ms | 134 ms |
+| 64 | 139 ms | 129 ms |
+
+All within the noise. The passes are bound by memory traffic, not by the scheduler or by cache reuse between neighbouring rows: a row of 128 cells is 5 kB per variable array, and the stencil of a `y` or `z` sweep reaches rows a whole plane away. Reverted.
