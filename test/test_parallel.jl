@@ -136,3 +136,23 @@ end
         @test sum(seen) == prod(g.n)
     end
 end
+
+@testset "RK update fused into the last sweep equals rhs then combine!" begin
+    P = Honghu.Problems
+    for mk in (t -> P.sedov_blast(; n=13, tile=t)[1],
+               t -> P.kelvin_helmholtz(; n=24, tile=t)[1],
+               t -> P.sod_shock_tube(; n=40, tile=t)[1],
+               t -> scalar_blast(; tile=t)),
+        tile in ((4, 5, 3), nothing)
+        a, b = mk(tile), mk(tile)
+        g, nv = a.grid, Honghu.nhydrovars(a)
+        U0 = a.U .+ 0.01 .* rand(size(a.U)...)        # any stage-0 state
+        c1, c2, c3 = 0.75, 0.25, 0.25 * 1e-3
+        # reference: the right-hand side into dU, then the combine as its own pass
+        Honghu.hydro_rhs!(b.hw.dU, b.U, b)
+        Honghu.combine!(b.U, c1, U0, c2, b.U, c3, b.hw.dU, g, nv)
+        # fused: the last active sweep writes U itself
+        Honghu.hydro_rhs!(a.hw.dU, a.U, a; update=(c1, U0, c2, c3))
+        @test interior(a.U, g) == interior(b.U, g)
+    end
+end

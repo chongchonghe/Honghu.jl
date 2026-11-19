@@ -350,10 +350,18 @@ end
 end
 
 """
-    flux_divergence!(dU, flux, Val(D), grid, nvar, overwrite = false)
+    flux_divergence!(dU, flux, Val(D), grid, nvar, overwrite = false, update = nothing)
 
 Subtract `(F_{i+1/2} - F_{i-1/2}) / dx` from `dU` over the interior cells, or,
 with `overwrite = true`, store its negative there and ignore what `dU` held.
+
+With `update = (a, U0, b, U, c)` the result is not stored in `dU` at all: it is
+the last term of the Runge-Kutta stage `U = a U0 + b U + c dU`, which is formed
+on the spot, with the same arithmetic as [`combine!`](@ref). That saves the
+stage a pass over four whole arrays, and is how Quokka forms its stages too,
+from the fluxes and not from a stored right-hand side. Only the last direction
+of a right-hand side may do it, and only because the sweeps read `prim`, never
+`U`.
 
 The right-hand sides pass `overwrite = true` for the first active direction, in
 place of zeroing `dU` first: one fewer pass over a whole array per right-hand
@@ -361,13 +369,14 @@ side. The result is the same to the bit, except that `0 - x` and `-x` differ in
 the sign of an exact zero, which no comparison sees.
 """
 function flux_divergence!(dU::A, flux::A, ::Val{D}, g::CartesianGrid{T},
-                          nvar::Int, overwrite::Bool=false) where {T,A<:AbstractArray{T,4},D}
+                          nvar::Int, overwrite::Bool=false,
+                          update=nothing) where {T,A<:AbstractArray{T,4},D}
     invdx = one(T) / g.dx[D]
     ir = g.lo[1]:g.hi[1]
     jr = g.lo[2]:g.hi[2]
     kr = g.lo[3]:g.hi[3]
     threaded_jk(jr, kr) do j, k
-        _divergence_row!(dU, flux, Val(D), invdx, ir, j, k, nvar, overwrite)
+        _divergence_row!(dU, flux, Val(D), invdx, ir, j, k, nvar, overwrite, update)
     end
     return nothing
 end
@@ -375,7 +384,19 @@ end
 # The body of `flux_divergence!` for the cells `ir` at `(j, k)`, shared with the
 # tiled sweep, where `flux` is tile-local and `dU` the whole grid.
 @inline function _divergence_row!(dU, flux, ::Val{D}, invdx, ir, j, k, nvar,
-                                  overwrite::Bool) where {D}
+                                  overwrite::Bool, update::Tuple) where {D}
+    e1, e2, e3 = _shift(Val(D))
+    a, U0, b, U, c = update
+    @inbounds for i in ir, n in 1:nvar
+        d = overwrite ? -(invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])) :
+            dU[n, i, j, k] - invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])
+        U[n, i, j, k] = a * U0[n, i, j, k] + b * U[n, i, j, k] + c * d
+    end
+    return nothing
+end
+
+@inline function _divergence_row!(dU, flux, ::Val{D}, invdx, ir, j, k, nvar,
+                                  overwrite::Bool, ::Nothing=nothing) where {D}
     e1, e2, e3 = _shift(Val(D))
     if overwrite
         @inbounds for i in ir, n in 1:nvar

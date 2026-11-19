@@ -578,31 +578,38 @@ end
 
 # --- right-hand sides --------------------------------------------------------
 
-function _hydro_sweep!(dU, sim::Simulation, ::Val{D}, overwrite::Bool=false) where {D}
+function _hydro_sweep!(dU, sim::Simulation, ::Val{D}, overwrite::Bool=false,
+                       update=nothing) where {D}
     hw = sim.hw
     g = sim.grid
     nvar = nhydrovars(sim)
     tiles = hw.tiling
     if tiles !== nothing && has_tiled_method(sim.reconstruction)
         hydro_sweep_tiled!(dU, hw.prim, tiles, sim.reconstruction, sim.eos, sim.riemann,
-                           Val(D), g, nvar, sim.nscalars, overwrite)
+                           Val(D), g, nvar, sim.nscalars, overwrite, update)
         return nothing
     end
     reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, nvar)
     hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g,
                   sim.nscalars)
-    flux_divergence!(dU, hw.flux, Val(D), g, nvar, overwrite)
+    flux_divergence!(dU, hw.flux, Val(D), g, nvar, overwrite, update)
     return nothing
 end
 
 """
-    hydro_rhs!(dU, U, sim)
+    hydro_rhs!(dU, U, sim; update = nothing)
 
 Method-of-lines right-hand side of the Euler equations: fill ghost cells,
 convert to primitives (applying floors), then accumulate `-div F` from a
 directional sweep per active dimension.
+
+With `update = (a, U0, b, c)` it takes the Runge-Kutta stage as well,
+`U = a U0 + b U + c dU` over the interior, in the last sweep (see
+[`flux_divergence!`](@ref)), and leaves `dU` incomplete: what `combine!` would
+then do, without the pass over four whole arrays.
 """
-function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
+function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T};
+                    update=nothing) where {T}
     g = sim.grid
     fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
     sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars)
@@ -610,11 +617,17 @@ function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
     cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars)
     # The first active direction overwrites `dU` rather than adding to it, which
     # saves zeroing it first. Only the interior of `dU` is written or read.
-    first = findfirst(g.active)
-    first === nothing && threaded_fill!(dU, zero(T))     # a single cell: no sweep at all
-    g.active[1] && _hydro_sweep!(dU, sim, Val(1), first == 1)
-    g.active[2] && _hydro_sweep!(dU, sim, Val(2), first == 2)
-    g.active[3] && _hydro_sweep!(dU, sim, Val(3), first == 3)
+    dfirst = findfirst(g.active)
+    dlast = findlast(g.active)
+    upd = update === nothing ? nothing : (update[1], update[2], update[3], U, update[4])
+    if dfirst === nothing                                 # a single cell: no sweep at all
+        threaded_fill!(dU, zero(T))
+        upd === nothing ||
+            combine!(U, upd[1], upd[2], upd[3], U, upd[5], dU, g, nhydrovars(sim))
+    end
+    g.active[1] && _hydro_sweep!(dU, sim, Val(1), dfirst == 1, dlast == 1 ? upd : nothing)
+    g.active[2] && _hydro_sweep!(dU, sim, Val(2), dfirst == 2, dlast == 2 ? upd : nothing)
+    g.active[3] && _hydro_sweep!(dU, sim, Val(3), dfirst == 3, dlast == 3 ? upd : nothing)
     return dU
 end
 
@@ -641,11 +654,11 @@ function rad_rhs!(dR::Array{T,4}, R::Array{T,4}, sim::Simulation{T}, t::T) where
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
     sim.diag.floors_rad += enforce_rad_floors!(R, sim.radiation, g, sim.floors)
     rad_cons2prim!(sim.rw.prim, R, sim.radiation, g)
-    first = findfirst(g.active)       # overwrites `dR`, as in `hydro_rhs!`
-    first === nothing && threaded_fill!(dR, zero(T))
-    g.active[1] && _rad_sweep!(dR, R, sim, Val(1), first == 1)
-    g.active[2] && _rad_sweep!(dR, R, sim, Val(2), first == 2)
-    g.active[3] && _rad_sweep!(dR, R, sim, Val(3), first == 3)
+    dfirst = findfirst(g.active)       # overwrites `dR`, as in `hydro_rhs!`
+    dfirst === nothing && threaded_fill!(dR, zero(T))
+    g.active[1] && _rad_sweep!(dR, R, sim, Val(1), dfirst == 1)
+    g.active[2] && _rad_sweep!(dR, R, sim, Val(2), dfirst == 2)
+    g.active[3] && _rad_sweep!(dR, R, sim, Val(3), dfirst == 3)
     _sweep_chat(sim) === nothing && scale_by_phi!(dR, sim.rw.chat, sim.radiation, g)
     return dR
 end
@@ -669,8 +682,8 @@ function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
     hw = sim.hw
     threaded_copyto!(hw.U0, sim.U)
     for (a, b, c) in tableau(sim.integrator)
-        hydro_rhs!(hw.dU, sim.U, sim)
-        combine!(sim.U, T(a), hw.U0, T(b), sim.U, T(c) * dt, hw.dU, g, nhydrovars(sim))
+        # the stage `U = a U0 + b U + c dt dU` is formed in the last sweep
+        hydro_rhs!(hw.dU, sim.U, sim; update=(T(a), hw.U0, T(b), T(c) * dt))
     end
     return sim
 end

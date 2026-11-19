@@ -138,7 +138,7 @@ end
 
 """
     hydro_sweep_tiled!(dU, prim, tiles, reconstruction, eos, solver, Val(D), grid,
-                       nvar, nscalars, overwrite)
+                       nvar, nscalars, overwrite, update = nothing)
 
 The hydrodynamic sweep along `D`, box by box: for each box of
 [`tile_boxes`](@ref), reconstruct the interface states, solve the Riemann
@@ -149,7 +149,8 @@ in the task's scratch. Bit-identical to `reconstruct!`, `hydro_fluxes!` and
 function hydro_sweep_tiled!(dU::Array{T,4}, prim::Array{T,4}, tiles::HydroTiles{T},
                             recon::AbstractReconstruction, eos::AbstractEOS,
                             solver::AbstractRiemannSolver, ::Val{D}, g::CartesianGrid{T},
-                            nvar::Int, nscalars::Int, overwrite::Bool) where {T,D}
+                            nvar::Int, nscalars::Int, overwrite::Bool,
+                            update=nothing) where {T,D}
     boxes = tiles.boxes[D]
     nbox = length(boxes)
     nch = min(length(tiles.scratch), nbox)
@@ -159,7 +160,7 @@ function hydro_sweep_tiled!(dU::Array{T,4}, prim::Array{T,4}, tiles::HydroTiles{
     invdx = one(T) / g.dx[D]
     if nch <= 1
         _sweep_chunk!(dU, prim, tiles, 1, 1, recon, eos, solver, Val(D), g, gam, act1, act2,
-                      invdx, nvar, nscalars, overwrite)
+                      invdx, nvar, nscalars, overwrite, update)
     else
         # Each task picks its scratch and its boxes from its chunk number `c`, the
         # loop variable, which is a fresh binding per iteration. Destructuring the
@@ -167,25 +168,27 @@ function hydro_sweep_tiled!(dU::Array{T,4}, prim::Array{T,4}, tiles::HydroTiles{
         # and box them, and the tasks would share one scratch.
         @sync for c in 1:nch
             Threads.@spawn _sweep_chunk!(dU, prim, tiles, c, nch, recon, eos, solver, Val(D),
-                                         g, gam, act1, act2, invdx, nvar, nscalars, overwrite)
+                                         g, gam, act1, act2, invdx, nvar, nscalars, overwrite,
+                                         update)
         end
     end
     return nothing
 end
 
 function _sweep_chunk!(dU, prim, tiles::HydroTiles, c::Int, nch::Int, recon, eos, solver,
-                       ::Val{D}, g, gam, act1, act2, invdx, nvar, nscalars, overwrite) where {D}
+                       ::Val{D}, g, gam, act1, act2, invdx, nvar, nscalars, overwrite,
+                       update) where {D}
     qL, qR, fl = tiles.scratch[c]
     boxes = tiles.boxes[D]
     _sweep_boxes!(dU, prim, qL, qR, fl, tiles.dims[D], boxes, _chunk(length(boxes), nch, c),
                   recon, eos, solver, Val(D), g, gam, act1, act2, invdx, nvar, nscalars,
-                  overwrite)
+                  overwrite, update)
     return nothing
 end
 
 function _sweep_boxes!(dU, prim, qL::V, qR::V, fl::V, dims, boxes, r, recon, eos,
                        solver, ::Val{D}, g, gam, act1, act2, invdx, nvar, nscalars,
-                       overwrite) where {V,D}
+                       overwrite, update) where {V,D}
     for b in r
         box = boxes[b]
         off = ntuple(d -> d == D ? g.lo[d] - 2 : first(box[d]) - 1, Val(3))
@@ -204,7 +207,7 @@ function _sweep_boxes!(dU, prim, qL::V, qR::V, fl::V, dims, boxes, r, recon, eos
                              fr[1], j, k, nscalars)
         end
         for k in box[3], j in box[2]
-            _divergence_row!(dU, tF, Val(D), invdx, box[1], j, k, nvar, overwrite)
+            _divergence_row!(dU, tF, Val(D), invdx, box[1], j, k, nvar, overwrite, update)
         end
     end
     return nothing
