@@ -39,3 +39,15 @@ Per pass, 128³ (each step runs three right-hand sides, each with one sweep per 
 The arithmetic scales: HLLC reaches 18× on 32 cores. The passes that only move memory do not, and two of them do not run in parallel at all. Each sweep writes the full-grid interface states `qL` and `qR` and the full-grid `flux`, 84 MB each at 128³, and reads them back in the next pass, so past about 8 threads a step is bound by memory traffic and serial code, not by arithmetic. The 64 hardware threads give nothing over 32 cores.
 
 ## Changes, in the order they were made
+
+### 1. Thread the serial whole-array copies
+
+`hydro_rhs!` zeroed `dU` with `fill!`, `advance_hydro!` saved the stage-0 state with `copyto!`, and the radiation path did the same with `dR` and `Utmp`. All four were serial, and a single core cannot saturate the memory bus. `threaded_fill!` and `threaded_copyto!` (`src/grid.jl`) split the array into one contiguous chunk per thread through `threaded_chunks`.
+
+| pass, 128³, 32 threads | before | after |
+|:---|---:|---:|
+| `copyto!(U0, U)` | 4.4 ms | 1.6 ms |
+| `fill!(dU, 0)` | 2.5 ms | 0.8 ms |
+| step | 137 ms | 131–133 ms |
+
+That is about 8 ms of serial work a step, 4% at 32 threads. The 1-thread step is unchanged (1380 ms). Results are bit-identical.

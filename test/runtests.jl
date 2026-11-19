@@ -30,6 +30,7 @@ import BracketingNonlinearSolve
     include("test_plotting.jl")
     include("test_extensions.jl")
     include("test_compare.jl")
+    include("test_parallel.jl")
     include("test_performance.jl")
     include("test_metadata.jl")
 end

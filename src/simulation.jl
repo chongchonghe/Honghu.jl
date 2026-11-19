@@ -584,7 +584,7 @@ function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
     sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars)
     sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars, sim.chemistry !== nothing)
     cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars)
-    fill!(dU, zero(T))
+    threaded_fill!(dU, zero(T))
     g.active[1] && _hydro_sweep!(dU, sim, Val(1))
     g.active[2] && _hydro_sweep!(dU, sim, Val(2))
     g.active[3] && _hydro_sweep!(dU, sim, Val(3))
@@ -614,7 +614,7 @@ function rad_rhs!(dR::Array{T,4}, R::Array{T,4}, sim::Simulation{T}, t::T) where
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
     sim.diag.floors_rad += enforce_rad_floors!(R, sim.radiation, g, sim.floors)
     rad_cons2prim!(sim.rw.prim, R, sim.radiation, g)
-    fill!(dR, zero(T))
+    threaded_fill!(dR, zero(T))
     g.active[1] && _rad_sweep!(dR, R, sim, Val(1))
     g.active[2] && _rad_sweep!(dR, R, sim, Val(2))
     g.active[3] && _rad_sweep!(dR, R, sim, Val(3))
@@ -639,7 +639,7 @@ One explicit SSP-RK step of the Euler equations.
 function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
     g = sim.grid
     hw = sim.hw
-    copyto!(hw.U0, sim.U)
+    threaded_copyto!(hw.U0, sim.U)
     for (a, b, c) in tableau(sim.integrator)
         hydro_rhs!(hw.dU, sim.U, sim)
         combine!(sim.U, T(a), hw.U0, T(b), sim.U, T(c) * dt, hw.dU, g, nhydrovars(sim))
@@ -717,7 +717,7 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     rad_rhs!(rw.dR, sim.R, sim, t)
     combine!(rw.Rtmp, one(T), sim.R, zero(T), sim.R, T(IMEX_AEX_21) * dt, rw.dR, g,
              nradvars(sim.radiation))
-    copyto!(rw.Utmp, sim.U)
+    threaded_copyto!(rw.Utmp, sim.U)
     # The transport stage's state goes to the solve as it is: the flux of a thick
     # cell at a large local CFL number is turned into the diffusion flux by the
     # solve, and a negative energy is absorbed by it (see floor_rad_energy!).

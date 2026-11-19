@@ -50,7 +50,7 @@ if passes
         "fill_ghosts" => () -> Honghu.fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1),
         "enforce_floors" => () -> Honghu.enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars),
         "cons2prim" => () -> Honghu.cons2prim!(hw.prim, U, sim.eos, g, sim.nscalars),
-        "copy U0" => () -> copyto!(hw.U0, U),
+        "copy U0" => () -> Honghu.threaded_copyto!(hw.U0, U),
         "sweep x" => () -> Honghu._hydro_sweep!(hw.dU, sim, Val(1)),
         "sweep y" => () -> Honghu._hydro_sweep!(hw.dU, sim, Val(2)),
         "sweep z" => () -> Honghu._hydro_sweep!(hw.dU, sim, Val(3)),
