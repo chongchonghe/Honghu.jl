@@ -156,3 +156,15 @@ end
         @test interior(a.U, g) == interior(b.U, g)
     end
 end
+
+@testset ":auto tiles only where every sweep has a box per thread" begin
+    auto(n, nt) = Honghu._auto_tile(CartesianGrid(n=n), nt)
+    @test auto((128, 128, 128), 32) == Honghu.DEFAULT_TILE
+    @test auto((128, 128, 128), 4) === nothing                  # below TILE_MIN_THREADS
+    # 2D: the y sweep has ceil(n1 / 32) boxes, too few for 32 threads below 1024^2
+    @test auto((256, 256, 1), 32) === nothing
+    @test auto((512, 512, 1), 32) === nothing
+    @test auto((1024, 1024, 1), 32) == Honghu.DEFAULT_TILE
+    @test auto((1024, 1024, 1), 64) === nothing
+    @test auto((1, 256, 256), 32) == Honghu.DEFAULT_TILE        # x inactive: 256 one-row boxes per sweep
+end

@@ -35,7 +35,9 @@ const DEFAULT_TILE = (32, 1, 1)
 """
     TILE_MIN_THREADS
 
-Below this many threads, `Simulation(tile = :auto)` (the default) does not tile.
+Below this many threads, `Simulation(tile = :auto)` (the default) does not tile,
+nor on a grid where a sweep would have fewer boxes than threads (a 2D run below
+about 1024^2 at 32 threads).
 Tiling pays by relieving the memory bus that many cores share, and costs 4-7% on
 one core, so on this node it loses at 2 and 4 threads and wins from 8 on (5% at
 8, 8% at 16, 30% at 32). The answer is the same either way.
@@ -43,10 +45,25 @@ one core, so on this node it loses at 2 and 4 threads and wins from 8 on (5% at
 const TILE_MIN_THREADS = 8
 
 # The tile the `tile` keyword of `Simulation` resolves to.
-_resolve_tile(tile::Union{Nothing,NTuple{3,Int}}) = tile
-function _resolve_tile(tile::Symbol)
+_resolve_tile(tile::Union{Nothing,NTuple{3,Int}}, g::CartesianGrid) = tile
+function _resolve_tile(tile::Symbol, g::CartesianGrid)
     tile === :auto || throw(ArgumentError("tile must be :auto, nothing or a tuple of three Ints, got :$tile"))
-    return Threads.nthreads() >= TILE_MIN_THREADS ? DEFAULT_TILE : nothing
+    return _auto_tile(g, Threads.nthreads())
+end
+
+# `:auto`: `DEFAULT_TILE` with `TILE_MIN_THREADS` threads or more, and only if the
+# sweep along every active direction has at least one box per thread. A sweep's
+# tasks are its boxes, and a 2D run's transverse sweep has few: at 512^2 the `y`
+# sweep has 16 boxes of (32, 1, 1), half of 32 threads idle, and the step was 4%
+# slower than untiled; at 1024^2, 32 boxes, it was 18% faster.
+function _auto_tile(g::CartesianGrid, nthreads::Integer)
+    nthreads >= TILE_MIN_THREADS || return nothing
+    for D in 1:3
+        g.active[D] || continue
+        nbox = prod(d -> d == D ? 1 : cld(g.n[d], DEFAULT_TILE[d]), 1:3)
+        nbox >= nthreads || return nothing
+    end
+    return DEFAULT_TILE
 end
 
 """

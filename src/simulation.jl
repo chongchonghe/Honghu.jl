@@ -241,7 +241,8 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     blocks of `b_e` cells along each other direction `e`. `nothing` gives the
     untiled sweep, which is also what a reconstruction other than `PCM`, `PLM`
     or `PPM` always gets. `:auto` is [`DEFAULT_TILE`](@ref) with
-    [`TILE_MIN_THREADS`](@ref) threads or more and `nothing` below. The answer
+    [`TILE_MIN_THREADS`](@ref) threads or more, if the sweep along every active
+    direction has at least one box per thread, and `nothing` otherwise. The answer
     is the same to the bit whatever `tile` is: it changes speed only. On a
     machine with different caches another tile may be faster, and
     `test/benchmarks_parallel.jl --tile=a,b,c` measures one;
@@ -335,7 +336,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                riemann, integrator, boundaries,
                radiation_boundaries, source, strang_sources, chemistry, fl, T(cfl),
                T(cfl_radiation), Int(max_radiation_substeps), hydro, Int(nscalars), U, Rarr,
-               HydroWorkspace(grid, nvar; tile=hydro ? _resolve_tile(tile) : nothing), rw, cw, Diagnostics(), zero(T), zero(T), 0)
+               HydroWorkspace(grid, nvar; tile=hydro ? _resolve_tile(tile, grid) : nothing), rw, cw, Diagnostics(), zero(T), zero(T), 0)
 end
 
 # What a chemistry run needs of the rest of the simulation (see `Photochemistry`): the
