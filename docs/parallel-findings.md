@@ -51,3 +51,7 @@ The arithmetic scales: HLLC reaches 18× on 32 cores. The passes that only move 
 | step | 137 ms | 131–133 ms |
 
 That is about 8 ms of serial work a step, 4% at 32 threads. The 1-thread step is unchanged (1380 ms). Results are bit-identical.
+
+### 2. Ghost filling: not threaded, deliberately
+
+The plan was to split each built-in boundary face over threads. Measured first, the whole `fill_ghosts!` of the gas state costs 0.47 ms at 128³ on one thread, and it runs once per right-hand side, so at most 1.4 ms of a 131 ms step (1%) is there to be won. Ghost work scales with the surface (n²), not the volume (n³), so the fraction falls as the grid grows. That is within the noise of these measurements, and it is not worth complicating `fill_face!`, which users extend. It stays serial.
