@@ -76,3 +76,15 @@ The plan was to fold `enforce_floors!` and `enforce_scalar_floors!` into `cons2p
 | 64 | 139 ms | 129 ms |
 
 All within the noise. The passes are bound by memory traffic, not by the scheduler or by cache reuse between neighbouring rows: a row of 128 cells is 5 kB per variable array, and the stencil of a `y` or `z` sweep reaches rows a whole plane away. Reverted.
+
+### 6. Thread pinning: 10–16%, for free
+
+`JULIA_EXCLUSIVE=1` pins Julia's thread `i` to CPU `i`. On this node CPUs 0–31 are the 32 physical cores and 32–63 their hyperthread siblings (`lscpu -e`), so `-t 32` gets one thread per core. Unpinned, the OS migrates threads between cores, and each thread loses the L2 contents its rows left behind. Measured twice at 32 threads:
+
+| threads | unpinned | `JULIA_EXCLUSIVE=1` | gain |
+|---:|---:|---:|---:|
+| 16 | 194 ms | 164 ms | 16% |
+| 32 | 132, 131 ms | 119, 119 ms | 10% |
+| 64 | 129–139 ms | 123 ms | |
+
+No code change. The README recommends it. Two caveats: it assumes the job has the whole node, or at least CPUs `0:N-1`, because a batch system that hands out other CPUs needs its own binding (`taskset`, or `srun --cpu-bind=cores`); and on a node with more than one NUMA domain the first-touch placement of the arrays would also matter, which this single-domain node cannot measure.
