@@ -39,7 +39,8 @@ The named fields written by [`write_vtk`](@ref): `(name, ncomponents, data)`
 where `data` is laid out with the component index first and then `x, y, z`.
 
 A run with mass scalars adds `mass_fraction_1`, ... after `gas_temperature`: the
-mass fraction `X_s`, not the conserved density `rho X_s`.
+mass fraction `X_s`, not the conserved density `rho X_s`. A run with MHD adds
+`magnetic_field`, the cell-centred field, after them.
 
 `radiation_energy` and `radiation_flux` are summed over the frequency groups.
 A multigroup run adds `radiation_energy_1`, `radiation_flux_1`, ... per group
@@ -60,6 +61,7 @@ function output_fields(sim::Simulation{T}) where {T}
         push!(fields, ("mass_fraction_$s", 1,
                        prim[scalar_index(s):scalar_index(s), :, :, :] ./ prim[IRHO:IRHO, :, :, :]))
     end
+    has_mhd(sim) && push!(fields, ("magnetic_field", 3, _cell_centred_field(sim)))
     if has_radiation(sim)
         push!(fields, ("radiation_energy", 1, _rad_group_sum(sim, IERAD:IERAD)))
         push!(fields, ("radiation_flux", 3, _rad_group_sum(sim, IFRX:IFRZ)))

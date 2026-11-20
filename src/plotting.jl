@@ -35,11 +35,13 @@ array as `:Erad`, `:Fx`, ..., and advertising both would suggest a distinction
 that is not there.
 
 A run with mass scalars also lists `:X_1`, ..., `:X_ns`, the mass fraction of
-each scalar.
+each scalar, and a run with MHD lists `:bx`, `:by`, `:bz`, the cell-centred field
+(the average of each cell's two faces), and `:magnetic_pressure`, `|b|^2 / 2`.
 """
 function available_fields(sim::Simulation)
     hydro = (:density, :vx, :vy, :vz, :speed, :pressure, :temperature,
-             :internal_energy, :mach, ntuple(s -> Symbol(:X_, s), sim.nscalars)...)
+             :internal_energy, :mach, ntuple(s -> Symbol(:X_, s), sim.nscalars)...,
+             (has_mhd(sim) ? (:bx, :by, :bz, :magnetic_pressure) : ())...)
     has_radiation(sim) || return hydro
     rad = (:Erad, :Fx, :Fy, :Fz, :Trad, :reduced_flux)
     ng = ngroups(sim.radiation)
@@ -83,6 +85,13 @@ function field(sim::Simulation{T}, name::Symbol) where {T}
     ir, jr, kr = g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]
     if name === :temperature
         return gas_temperature(sim), "gas temperature"
+    elseif name in (:bx, :by, :bz, :magnetic_pressure)
+        has_mhd(sim) || throw(ArgumentError("field $name needs a simulation with mhd = true"))
+        b = _cell_centred_field(sim)
+        name === :magnetic_pressure &&
+            return dropdims(sum(abs2, b; dims=1); dims=1) ./ 2, "magnetic pressure"
+        d = name === :bx ? 1 : name === :by ? 2 : 3
+        return b[d, :, :, :], "$(String(name)[2]) magnetic field"
     elseif name === :Trad
         _require_radiation(sim, name)
         return radiation_temperature(sim), "radiation temperature"
@@ -259,3 +268,13 @@ plotstate(::Any...; kwargs...) = error("plotstate: ", _PLOTS_HINT)
 plotpanels(::Any...; kwargs...) = error("plotpanels: ", _PLOTS_HINT)
 animate_run(::Any...; kwargs...) = error("animate_run: ", _PLOTS_HINT)
 plotcompare(::Any...; kwargs...) = error("plotcompare: ", _PLOTS_HINT)
+
+# The cell-centred magnetic field over the interior, `(3, nx, ny, nz)`.
+function _cell_centred_field(sim::Simulation{T}) where {T}
+    g = sim.grid
+    out = Array{T,4}(undef, 3, g.n...)
+    for k in 1:g.n[3], j in 1:g.n[2], i in 1:g.n[1], d in 1:3
+        out[d, i, j, k] = cell_centred_field(sim.B, d, i + g.ng[1], j + g.ng[2], k + g.ng[3])
+    end
+    return out
+end

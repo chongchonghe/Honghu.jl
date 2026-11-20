@@ -537,3 +537,77 @@ end
         @test worst < 1e-14
     end
 end
+
+@testset "MHD fields and output" begin
+    sim = Simulation(n=(8, 6, 1), mhd=true, boundaries=Boundaries(Periodic()))
+    set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0, bx=0.3, by=-0.4, bz=0.5), sim)
+    @test all(f -> f in available_fields(sim), (:bx, :by, :bz, :magnetic_pressure))
+    @test :bx ∉ available_fields(Simulation(n=(8, 1, 1)))
+    @test all(==(-0.4), first(field(sim, :by)))
+    @test all(≈(0.25), first(field(sim, :magnetic_pressure)))
+    f = Dict(name => data for (name, _, data) in Honghu.output_fields(sim))
+    @test size(f["magnetic_field"]) == (3, 8, 6, 1)
+    @test all(==(0.5), f["magnetic_field"][3, :, :, :])
+    @test_throws ArgumentError field(Simulation(n=(8, 1, 1)), :bx)
+end
+
+@testset "oblique Alfven wave converges at second order" begin
+    # one period of Toth's circularly polarised wave at 63 degrees to the grid, PLM +
+    # SSPRK2 with Quokka's default limiter; L1 error of b_z over the amplitude
+    function err(n)
+        sim, tmax = P.alfven_wave(n=n, reconstruction=PLM(Sweby(1.5)), integrator=SSPRK2())
+        g = sim.grid
+        bz(s) = [Honghu.cell_centred_field(s.B, 3, i, j, 1) for i in g.lo[1]:g.hi[1], j in g.lo[2]:g.hi[2]]
+        b0 = bz(sim)
+        run!(sim; tmax, verbose=false)
+        @test divb_norm(sim) < 1e-13
+        @test nrepaired(sim) == 0
+        return sum(abs, bz(sim) .- b0) / length(b0) / 0.1
+    end
+    e32, e64 = err(32), err(64)
+    @test e64 < 0.01
+    @test log2(e32 / e64) > 1.8          # measured 1.87; 2.00 from 64 to 128
+end
+
+# The x line of a Quokka MHD shock tube, as test/data/quokka holds it: columns
+# x rho vx vy vz p by bz.
+read_quokka_line(name) =
+    permutedims(reduce(hcat, [parse.(Float64, split(l))
+                              for l in eachline(joinpath(@__DIR__, "data", "quokka", name * ".txt"))
+                              if !startswith(l, "#")]))
+
+@testset "shock tubes against Quokka" begin
+    # Quokka's MHDBrioWuShockTube and MHDRyuJones2aShockTube at 256 cells (in 256x16x16
+    # boxes) with Q26 + LD04, RK2 and a constant step of 2.5e-4, against the same in 1D.
+    # With PCM the two codes are the same scheme and agree to round-off. With PLM (same
+    # limiter, Sweby 1.5) and PPM they differ by Quokka's shock flattening, which is
+    # always on there and absent here: the bound is the measured L1 difference with a
+    # margin. Quokka holds the initial states at the boundaries and this run has outflow,
+    # which differs once Ryu-Jones's fast shock reaches x = 1, so that tube is compared
+    # on x < 0.9.
+    cases = (("bw", P.brio_wu, 1.0), ("rj", P.ryu_jones_2a, 0.9))
+    recons = (("pcm", PCM(), nothing), ("plm", PLM(Sweby(1.5)), (bw=0.025, rj=0.003)),
+              ("ppm", PPM(), (bw=0.04, rj=0.005)))
+    for (tag, problem, xmax) in cases, (rtag, recon, bound) in recons
+        ref = read_quokka_line(tag * "_" * rtag)
+        sim, tmax = problem(n=size(ref, 1), reconstruction=recon, integrator=SSPRK2())
+        for _ in 1:round(Int, tmax / 2.5e-4)
+            step!(sim, 2.5e-4)
+        end
+        @test nrepaired(sim) == 0
+        g = sim.grid
+        pr = primitives(sim)
+        bcc(d) = [Honghu.cell_centred_field(sim.B, d, i, 1, 1) for i in g.lo[1]:g.hi[1]]
+        mine = hcat(pr[1, :, 1, 1], pr[2, :, 1, 1], pr[3, :, 1, 1], pr[4, :, 1, 1],
+                    pr[5, :, 1, 1], bcc(2), bcc(3))
+        w = ref[:, 1] .< xmax
+        for c in 1:7
+            q, m = ref[w, c+1], mine[w, c]
+            if bound === nothing
+                @test maximum(abs, m .- q) < 1e-9
+            elseif any(!=(0), q)
+                @test sum(abs, m .- q) / sum(abs, q) < bound[Symbol(tag)]
+            end
+        end
+    end
+end
