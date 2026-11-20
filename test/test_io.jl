@@ -5,7 +5,7 @@
         f = save_checkpoint(sim, joinpath(dir, "chk"))
         @test isfile(f)
         @test endswith(f, ".honghu")
-        @test read(f)[1:8] == b"HONGHU\x00\x02"
+        @test read(f)[1:8] == b"HONGHU\x00\x03"
 
         sim2, _ = P.sod_shock_tube(nx=64)
         load_checkpoint!(sim2, f)
@@ -32,16 +32,32 @@
     end
 end
 
+@testset "format-2 checkpoints still load" begin
+    # format 2 has the variable counts and no MHD flag after the radiation flag
+    mktempdir() do dir
+        sim, _ = P.sod_shock_tube(nx=32)
+        run!(sim; tmax=0.02, verbose=false)
+        raw = read(save_checkpoint(sim, joinpath(dir, "chk")))
+        v2 = joinpath(dir, "v2.honghu")
+        write(v2, vcat(b"HONGHU\x00\x02", raw[9:112], raw[121:end]))
+        sim2, _ = P.sod_shock_tube(nx=32)
+        load_checkpoint!(sim2, v2)
+        @test sim2.U == sim.U
+        @test (sim2.t, sim2.step) == (sim.t, sim.step)
+    end
+end
+
 @testset "checkpoints written as Hydro3D still load" begin
     # The package was called Hydro3D, and wrote `.h3d` files that began with the
     # magic `HYDRO3D\x01`; the bytes after it are laid out as format 1, that is
-    # as now without the two variable counts that follow the radiation flag.
+    # as now without the two variable counts and the MHD flag that follow the
+    # radiation flag.
     mktempdir() do dir
         sim, _ = P.sod_shock_tube(nx=32)
         run!(sim; tmax=0.02, verbose=false)
         raw = read(save_checkpoint(sim, joinpath(dir, "chk")))
         old = joinpath(dir, "chk.h3d")
-        write(old, vcat(b"HYDRO3D\x01", raw[9:96], raw[113:end]))
+        write(old, vcat(b"HYDRO3D\x01", raw[9:96], raw[121:end]))
 
         sim2, _ = P.sod_shock_tube(nx=32)
         load_checkpoint!(sim2, old)
@@ -58,7 +74,7 @@ end
         # works: the path is kept as given, and the file is in the new format
         f = save_checkpoint(sim, joinpath(dir, "run.h3d"))
         @test f == joinpath(dir, "run.h3d")
-        @test read(f)[1:8] == b"HONGHU\x00\x02"
+        @test read(f)[1:8] == b"HONGHU\x00\x03"
         sim3, _ = P.sod_shock_tube(nx=32)
         load_checkpoint!(sim3, joinpath(dir, "run.h3d"))
         @test sim3.U == sim.U

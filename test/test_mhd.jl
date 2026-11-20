@@ -616,15 +616,52 @@ read_quokka_line(name) =
     end
 end
 
-@testset "MHD checkpoints are refused, not written without the field" begin
-    sim = Simulation(n=(8, 1, 1), mhd=true)
-    set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0, by=1.0), sim)
-    path = joinpath(mktempdir(), "mhd")
-    @test_throws ArgumentError save_checkpoint(sim, path)
-    plain = Simulation(n=(8, 1, 1))
-    set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0), plain)
-    file = save_checkpoint(plain, path)
-    @test_throws ArgumentError load_checkpoint!(sim, file)
+# A checkpoint file in format 2, which holds no magnetic field: what main wrote before MHD.
+function write_format2(path, sim)
+    open(path, "w") do f
+        write(f, b"HONGHU\x00\x02", Int64(8))
+        foreach(d -> write(f, Int64(sim.grid.n[d])), 1:3)
+        foreach(d -> write(f, Int64(sim.grid.ng[d])), 1:3)
+        write(f, 0.0, 0.0, Int64(0), Int64(0), Int64(size(sim.U, 1)), Int64(0), sim.U)
+    end
+    return path
+end
+
+@testset "MHD checkpoints hold the face-centred field" begin
+    mktempdir() do dir
+        sim = orszag_tang(n=16)
+        for _ in 1:5
+            step!(sim)
+        end
+        f = save_checkpoint(sim, joinpath(dir, "ot"))
+        @test read(f)[1:8] == b"HONGHU\x00\x03"
+        sim2 = orszag_tang(n=16)
+        load_checkpoint!(sim2, f)
+        @test sim2.U == sim.U
+        @test all(sim2.B[d] == sim.B[d] for d in 1:3)     # ghost faces included
+        @test (sim2.t, sim2.dt, sim2.step) == (sim.t, sim.dt, sim.step)
+        # continuing from the checkpoint reproduces an uninterrupted run, to the bit
+        for _ in 1:5
+            step!(sim)
+            step!(sim2)
+        end
+        @test sim2.U == sim.U && all(sim2.B[d] == sim.B[d] for d in 1:3)
+
+        # a field is neither dropped nor invented: an MHD file does not load into a
+        # simulation without MHD, nor a file without a field into an MHD one, even
+        # where the grids match (PLM MHD and PPM hydro both have three ghost cells)
+        mhd = orszag_tang(n=16, reconstruction=PLM())
+        plain = Simulation(n=(16, 16, 1), boundaries=Boundaries(Periodic()))
+        set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0), plain)
+        @test mhd.grid.ng == plain.grid.ng
+        fm = save_checkpoint(mhd, joinpath(dir, "mhd"))
+        fp = save_checkpoint(plain, joinpath(dir, "plain"))
+        plain.t, mhd.t = 7.0, 7.0
+        @test_throws ErrorException load_checkpoint!(plain, fm)
+        @test_throws ErrorException load_checkpoint!(mhd, fp)
+        @test_throws ErrorException load_checkpoint!(mhd, write_format2(joinpath(dir, "v2.honghu"), mhd))
+        @test plain.t == 7.0 && mhd.t == 7.0              # a refused file leaves the clock alone
+    end
 end
 
 @testset "low-beta Orszag-Tang runs: the floors keep the pressure positive" begin

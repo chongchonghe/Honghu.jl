@@ -166,6 +166,7 @@ The unit tests check properties rather than tuned numbers:
 - a static current-free field at rest in an outflow box, and an Orszag-Tang run at plasma $\beta \approx 0.3$ that needs the floors;
 - HLLD's flux exact at a stationary contact and a rotational discontinuity, a contact that stays sharp with HLLD and smears with LLF, and LD04 equal to the HLL flux of $b_t$ in 1D;
 - radiation and chemistry steps in a magnetised cell that give the internal energy of the same run without a field;
+- a checkpoint, which holds the face-centred field as well as the cells, from which a run continues to the bit;
 - the comparisons with Quokka and the convergence of section 3, and a 2D comparison: Quokka's `OrszagTang` with PCM for 40 steps, which this code reproduces to $2\times10^{-15}$ (with PPM they differ by $2\times10^{-3}$; the PPM kernels are the same, and Quokka's flattening, whose shock detector can fire at pressure extrema at this resolution, is the likely cause, not isolated).
 
 ## 5. Limitations
@@ -175,7 +176,6 @@ The unit tests check properties rather than tuned numbers:
 - **No dual energy.** The internal energy is $E - \rho u^2/2 - b^2/2$, accurate only to the round-off of $b^2/2$ at low plasma $\beta$ (Quokka evolves it separately as well).
 - **Boundaries:** periodic and outflow (Quokka's diode condition for outflowing gas, applied whatever the direction of the flow) only.
 - **No resistivity, AMR or tiling;** the MHD sweep runs on the CPU only.
-- **No checkpoints:** `save_checkpoint` refuses an MHD run, because the format does not hold the face-centred field.
 
 ## References
 

@@ -185,10 +185,15 @@ end
 
 # --- checkpoints -------------------------------------------------------------
 
-# Format 2 adds the row counts of `U` and `R` after the radiation flag, so a
+# Format 3 adds a flag for the magnetic field after the row counts, and after `R`
+# the three face-centred arrays of `sim.B`, ghost faces included, so that an MHD
+# run restarts with its field and a file with a field is not read into a
+# simulation without one (or the reverse).
+const _CHECKPOINT_MAGIC = b"HONGHU\x00\x03"
+# Format 2: the row counts of `U` and `R` after the radiation flag, so that a
 # file written with mass scalars cannot be read into a simulation without them
-# (or the reverse) and come out as shifted garbage.
-const _CHECKPOINT_MAGIC = b"HONGHU\x00\x02"
+# (or the reverse) and come out as shifted garbage. No magnetic field.
+const _CHECKPOINT_MAGIC_V2 = b"HONGHU\x00\x02"
 # Format 1: the same layout without the counts, so it can only hold a
 # simulation with no mass scalars.
 const _CHECKPOINT_MAGIC_V1 = b"HONGHU\x00\x01"
@@ -200,15 +205,23 @@ const _CHECKPOINT_MAGIC_HYDRO3D = b"HYDRO3D\x01"
     save_checkpoint(sim, path) -> String
 
 Write a raw binary checkpoint (grid metadata plus the full conserved state,
-ghost cells included) that [`load_checkpoint!`](@ref) can restore. The file
-extension `.honghu` is added unless the path already ends in `.honghu`, or in
-`.h3d`, the extension from the package's old name: a script that saves to and
-loads from a fixed `.h3d` path keeps working. The file is written in the
-current format either way. A simulation with `mhd = true` is refused with an
-`ArgumentError`: the format does not hold the face-centred field yet.
+ghost cells included) that [`load_checkpoint!`](@ref) can restore. With MHD
+the state is the cell-centred `U` and the face-centred field `sim.B`, ghost
+faces included. The file extension `.honghu` is added unless the path already
+ends in `.honghu`, or in `.h3d`, the extension from the package's old name: a
+script that saves to and loads from a fixed `.h3d` path keeps working. The file
+is written in the current format either way, format 3:
+
+| bytes | content |
+|:---|:---|
+| 8 | the magic `HONGHU\x00\x03` |
+| 8 | `sizeof(T)`, the precision |
+| 24, 24 | the interior cell counts and the ghost widths, three `Int64` each |
+| 24 | `t`, `dt` (`Float64`) and `step` (`Int64`) |
+| 8, 16, 8 | flags and counts (`Int64`): radiation, the rows of `U` and `R`, MHD |
+| ... | `U`, then `R` with radiation, then `B[1]`, `B[2]`, `B[3]` with MHD, each in native byte order |
 """
 function save_checkpoint(sim::Simulation{T}, path::AbstractString) where {T}
-    _refuse_mhd_checkpoint(sim)
     fn = endswith(path, ".honghu") || endswith(path, ".h3d") ? String(path) : path * ".honghu"
     g = sim.grid
     open(fn, "w") do f
@@ -223,37 +236,36 @@ function save_checkpoint(sim::Simulation{T}, path::AbstractString) where {T}
         write(f, Float64(sim.t), Float64(sim.dt), Int64(sim.step))
         write(f, Int64(has_radiation(sim) ? 1 : 0))
         write(f, Int64(size(sim.U, 1)), Int64(size(sim.R, 1)))
+        write(f, Int64(has_mhd(sim) ? 1 : 0))
         write(f, sim.U)
         has_radiation(sim) && write(f, sim.R)
+        if has_mhd(sim)
+            for d in 1:3
+                write(f, sim.B.b[d])
+            end
+        end
     end
     return fn
 end
-
-# The checkpoint format holds the cell-centred state only, so an MHD run would
-# restart without its face-centred field. Refused rather than written incomplete.
-_refuse_mhd_checkpoint(sim) =
-    has_mhd(sim) && throw(ArgumentError("checkpoints do not hold the face-centred magnetic " *
-                                        "field yet, so a simulation with mhd = true cannot " *
-                                        "be saved or restored"))
 
 """
     load_checkpoint!(sim, path) -> sim
 
 Restore a simulation from a checkpoint written by [`save_checkpoint`](@ref).
-The grid, floating-point precision, presence of radiation, and the number of
-gas and radiation variables (hence of mass scalars) must match those of `sim`,
-or it throws before touching `sim.t`, `sim.dt`, `sim.step` or the state.
-A checkpoint of format 1 and a `.h3d` checkpoint, written when the package was
-called Hydro3D, carry no variable counts, so they load only into a simulation
-with `nscalars == 0`.
+The grid, floating-point precision, presence of radiation and of a magnetic
+field, and the number of gas and radiation variables (hence of mass scalars) must
+match those of `sim`, or it throws before touching `sim.t`, `sim.dt`, `sim.step`
+or the state. A checkpoint of format 2 holds no magnetic field, so it loads only
+into a simulation without MHD; one of format 1 and a `.h3d` checkpoint, written
+when the package was called Hydro3D, carry no variable counts either, so they
+load only into a simulation without MHD and with `nscalars == 0`.
 """
 function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
-    _refuse_mhd_checkpoint(sim)
     g = sim.grid
     open(path, "r") do f
         magic = read(f, length(_CHECKPOINT_MAGIC))
-        magic == _CHECKPOINT_MAGIC || magic == _CHECKPOINT_MAGIC_V1 ||
-            magic == _CHECKPOINT_MAGIC_HYDRO3D || error("$path is not a Honghu checkpoint")
+        magic in (_CHECKPOINT_MAGIC, _CHECKPOINT_MAGIC_V2, _CHECKPOINT_MAGIC_V1,
+                  _CHECKPOINT_MAGIC_HYDRO3D) || error("$path is not a Honghu checkpoint")
         read(f, Int64) == sizeof(T) || error("checkpoint precision does not match the simulation")
         for d in 1:3
             read(f, Int64) == g.n[d] || error("checkpoint grid size does not match the simulation")
@@ -269,7 +281,7 @@ function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
         hasrad = read(f, Int64) == 1
         hasrad == has_radiation(sim) ||
             error("checkpoint radiation setting does not match the simulation")
-        if magic == _CHECKPOINT_MAGIC
+        if magic == _CHECKPOINT_MAGIC || magic == _CHECKPOINT_MAGIC_V2
             nu, nr = read(f, Int64), read(f, Int64)
             nu == size(sim.U, 1) ||
                 error("checkpoint has $nu hydro variables, the simulation has $(size(sim.U, 1))")
@@ -279,8 +291,17 @@ function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
             sim.nscalars == 0 ||
                 error("checkpoint has no variable counts (format 1), so it cannot be read into a simulation with $(sim.nscalars) mass scalars")
         end
+        hasmhd = magic == _CHECKPOINT_MAGIC && read(f, Int64) == 1
+        hasmhd == has_mhd(sim) ||
+            error(hasmhd ? "checkpoint holds a magnetic field, the simulation has mhd = false" :
+                  "checkpoint holds no magnetic field, the simulation has mhd = true")
         read!(f, sim.U)
         hasrad && read!(f, sim.R)
+        if hasmhd
+            for d in 1:3
+                read!(f, sim.B.b[d])
+            end
+        end
         sim.t, sim.dt, sim.step = t, dt, step
     end
     return sim

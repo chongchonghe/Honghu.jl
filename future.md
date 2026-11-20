@@ -180,7 +180,6 @@ The MHD module (`src/magnetic_field.jl`, `src/mhd_system.jl`, `docs/mhd.md`) is 
 - **First-order flux correction (FOFC).** Quokka caches LLF fluxes and EMFs and falls back to them in cells a high-order stage leaves invalid (paper Sec. 2.5). Here a bad cell is only floored.
 - **Shock flattening.** Quokka flattens the reconstructed states at shocks (Miller & Colella 2002) with every reconstruction, which is the whole of the PLM and PPM difference from Quokka on the shock tubes.
 - **B25b averaging, the FS18 and B25a EMFs, PPM-EP.** Quokka's other choices; the paper compares all pairings.
-- **Checkpoints.** The format holds the cell-centred state only, so `save_checkpoint` refuses an MHD run. A format 3 would add the three face arrays and an MHD flag.
 - **More boundary conditions.** Only periodic and outflow faces are defined, the latter as Quokka's diode condition for outflowing gas (div-free normal ghost faces, ghost energies at the source's pressure) whatever the flow direction; Quokka's inflow branch mirrors the transverse field instead. A reflecting wall flips the normal field's ghost faces and a fixed state needs face values.
 - **Dual energy.** At low plasma beta the internal energy is the round-off of `E - E_kin - E_mag`; the floors keep it positive (`_floored_energy`) but not accurate. Quokka evolves the internal energy as well.
 - **Tiling and the GPU.** The MHD sweep is one whole-grid box on `CPUThreads`: its faces reach into the ghost rows across the sweep, which `tile_boxes` does not cover, and `MagneticField` holds `Array`s.
