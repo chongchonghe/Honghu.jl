@@ -4,19 +4,21 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Overview
 
-Honghu is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations with a method-of-lines scheme (HLLC or LLF) and two-moment (M1) radiation — grey, or in `NG` frequency groups — with an HLL solver and an IMEX PD-ARS integrator. It exists as a bench for prototyping algorithms and test problems destined for Quokka, so structural fidelity to Quokka is a design goal: a kernel written here should transliterate across, and back. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `/Users/u1149259/softwares/quokka/quokka-local` and is the reference to check against when a numerical detail is in doubt.
+Honghu is a 3D radiation-hydrodynamics code in pure Julia. It solves the Euler equations, or ideal MHD with constrained transport (HLLD or LLF, Quokka's Q26 EMF and LD04 averaging), with a method-of-lines scheme (HLLC or LLF) and two-moment (M1) radiation — grey, or in `NG` frequency groups — with an HLL solver and an IMEX PD-ARS integrator. It exists as a bench for prototyping algorithms and test problems destined for Quokka, so structural fidelity to Quokka is a design goal: a kernel written here should transliterate across, and back. The algorithms follow [Quokka](https://github.com/quokka-astro/quokka), whose source sits at `/Users/u1149259/softwares/quokka/quokka-local` and is the reference to check against when a numerical detail is in doubt.
 
 ## Commands
 
 ```bash
 julia --project=test/ka -e 'using Pkg; Pkg.instantiate()'  # once: KernelAbstractions for test_portable.jl
-julia --project=. -t 4 test/runtests.jl             # full suite, ~95 s
+julia --project=. -t 4 test/runtests.jl             # full suite, ~2.5 min
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw docs/figures/
 julia --project=. -t auto examples/sod_1d.jl        # run an example (writes a figure)
 julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]  # every number of the ARSA paper's Sec. 5
 julia --project=. -t 8 examples/stromgren_sphere.jl [1|2] [n] [octant]  # Iliev et al. (2006) Test 1 or 2, centred 64^3 by default
 julia --project=. -t 8 docs/photoionization-experiments/measure.jl  # the tables of docs/photoionization-findings.md, parts 1 to 3 (writes measure.txt)
-julia --project=. -t auto docs/make_figures.jl      # regenerate README and guide figures (names select some)
+julia --project=. -t auto docs/make_figures.jl      # regenerate README and guide figures (names select some; `mhd` the MHD guide's)
+julia --project=. examples/mhd_shock_tubes.jl       # Brio-Wu and Ryu-Jones 2a against Quokka's runs in test/data/quokka
+julia --project=. -t auto examples/orszag_tang.jl [n]  # the Orszag-Tang vortex to t = 0.5
 networks/regenerate.sh --jaff-path ~/softwares/quokka/jaff  # regenerate the chemical networks with JAFF
 julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
 julia --project=. docs/make.jl                      # build the docs site into docs/_site (needs quarto)
@@ -201,12 +203,15 @@ Include order in `src/Honghu.jl` matters, because later files use types defined 
 | `launch.jl` | `launch!(backend, box, f, args...)`, the one launch point of the cell kernels (AMReX's `ParallelFor`), and its backends: `CPUThreads` (rows over threads, the default), `CPUSerial` (inside a tile's task), `KABackend` (KernelAbstractions; its method is in `ext/HonghuKernelAbstractionsExt.jl`). |
 | `variables.jl` | State-vector layout and pointwise conversions. |
 | `boundary.jl` | `BoundaryCondition` subtypes and ghost filling. |
+| `magnetic_field.jl` | `MagneticField` (`sim.B`, the face-centred field), `cell_centred_field`, `magnetic_energy` (the one helper every internal-energy site calls), `fast_magnetosonic_speed`, the face ghost fill (periodic, and outflow as Quokka's diode condition) with `mhd_ghost_energy!`, the initial field from keys or a vector potential, and `divergence_b`. |
 | `limiters.jl`, `reconstruction.jl` | Slope limiters; `PCM` / `PLM` / `PPM`. |
-| `riemann/state.jl` | `HydroState` (field names match `quokka::HydroState`), `AbstractRiemannSolver`, the `riemann_flux` generic, and the direction permutation helpers. |
+| `riemann/state.jl` | `HydroState` (field names match `quokka::HydroState`, the transverse field `by`, `bz` included), `AbstractRiemannSolver`, the `riemann_flux` generic, `AbstractMHDRiemannSolver` and its `mhd_flux` generic, and the direction permutation helpers. |
 | `riemann/hllc.jl`, `riemann/llf.jl` | One solver per file, mirroring Quokka's `HLLC.hpp` / `LLF.hpp`. Pointwise, canonical (normal = x) form. |
+| `riemann/llf_mhd.jl`, `riemann/hlld.jl` | The MHD solvers, Quokka's `LLF_mhd.hpp` / `HLLD.hpp` line for line; each returns the flux and the two bounding speeds. |
 | `riemann_radiation.jl` | M1 closure, Eddington tensor, `hll_radiation` (its `epsE` is the optional wave-speed correction). |
-| `hydro_system.jl` | `Floors`, `cons2prim!` / `enforce_floors!`, the flux sweep, flux divergence, hydro CFL. |
+| `hydro_system.jl` | `Floors`, `cons2prim!` / `enforce_floors!`, the flux sweep, flux divergence, hydro CFL; the carbuncle input `_transverse_jump`, shared with the MHD sweep. |
 | `tiling.jl` | The hydro sweep driver: `hydro_sweep!` runs the three cell kernels box by box (`_sweep_box!`), either tiled on the CPU (`tile_boxes`, a `TileArray` per task, AMReX's `Array4`) or as one whole-grid box on the workspace's backend, which is how a GPU runs it. Bit-identical either way. `Simulation(tile = :auto)` tiles from `TILE_MIN_THREADS` threads, and never on Apple Silicon, where it was measured slower. |
+| `mhd_system.jl` | Constrained transport: `MHDWorkspace` (the face arrays of `alpha^±` and `u*`, the edge EMFs, `B0`), the untiled MHD sweep (`_mhd_sweep!`, `_mhd_flux_cell!`), the Q26 + LD04 EMF kernel (`_emf_cell!`), the induction update, and `mhd_riemann_ghosts`. |
 | `radiation_system.jl` | `RadiationPhysics`, the group layout (`ngroups`, `nradvars`, `gbase`), state repair, the HLL flux sweep, radiation CFL, the two drivers of the `chat` limiter (`update_chat!`, `energy_exchange_dt`), `scale_by_phi!`, and `floor_rad_energy!`, the only repair allowed before a coupling solve. |
 | `source_terms.jl` | The implicit matter-radiation coupling — the hardest file. Two drivers, chosen by dispatch on `NG`: the grey 2×2 Newton written out inline, and `multigroup_source_step!`, which hands each cell to an `AbstractCoupling`. |
 | `chemistry.jl` | `AbstractNetwork`: what is evolved in one cell, with no integrator in it. The state is `u = [n_s, E, (N_b, f_b)]` in JAFF's order; this file holds what every network shares (`NetworkOptions`, unpacking with the clamp, the temperature with `isothermal` and `Tmin`, the frozen-temperature Jacobian correction, the tolerance scales) and calls the generated `jaff_rhs!` / `jaff_jacobian!`; also `ChemCell`, `ChemStats` and `AbstractChemSolver`. Emission, applying the flux factor and the clamp at zero are deliberately not terms of the ODE; they belong to the grid driver. |
@@ -215,12 +220,13 @@ Include order in `src/Honghu.jl` matters, because later files use types defined 
 | `chemistry_step.jl` | `Photochemistry` and `chemistry_step!`, the grid driver: one workspace per interior `(j, k)` row, and in each cell the emission, the solve and the write-back to the scalars, the gas energy, the band and its flux. |
 | `integrators.jl` | SSP-RK tableaux and the IMEX PD-ARS constants. |
 | `simulation.jl` | `Simulation`, workspaces, right-hand sides, stage drivers, `run!`. |
-| `output.jl` | VTK, text line-outs, checkpoints. |
+| `output.jl` | VTK, text line-outs, checkpoints (format 3: the face-centred field after `U` and `R`). |
 | `plotting.jl` | `field` / `available_fields` / `coordinates`, plus the stubs and no-Plots fallbacks for the four plotting entry points. |
 | `metrics.jl` | `relative_l1` / `relative_l2` and the `default_metrics` generic. |
 | `compare.jl` | `compare`, `ComparisonTable`, and the table reader/writer. |
 | `problems/` | Built-in test problems and the exact Riemann solver. |
 | `problems/stromgren.jl` | The Stromgren tests of Iliev et al. (2006): `stromgren_iliev`, `ionized_radius`, and the two reference radii `stromgren_radius_analytic` and `stromgren_radius_finite_c`. |
+| `problems/mhd.jl` | `brio_wu`, `ryu_jones_2a` (Quokka's states), `orszag_tang`, `alfven_wave` (Toth's oblique circularly polarised wave). |
 
 `ext/HonghuPlotsExt.jl` sits outside `src/` and is loaded by Julia's extension mechanism when Plots is present; `ext/HonghuKernelAbstractionsExt.jl` likewise with KernelAbstractions.
 
@@ -232,7 +238,7 @@ Include order in `src/Honghu.jl` matters, because later files use types defined 
 
 **Degenerate directions.** `n[d] == 1` means direction `d` is inactive: zero ghost cells, skipped sweeps, no boundary condition needed. Anything that indexes `j±1` must check `grid.active[d]` first, or it will read out of bounds.
 
-**Ghost width.** `nghost = max(required_ghosts(reconstruction), required_ghosts(radiation_reconstruction))`, minimum 2. The minimum-2 rule exists so the reconstruction sweep can write `qL` at cell `hi+1` without leaving the array; PCM does not need the extra cell but gets it anyway.
+**Ghost width.** `nghost = max(required_ghosts(reconstruction), required_ghosts(radiation_reconstruction))`, minimum 2, and with MHD at least `mhd_riemann_ghosts(reconstruction) + 1` (2, 3, 4 for PCM, PLM, PPM): the MHD sweep solves Riemann problems that many rows into the ghosts across it, and the carbuncle input of the outermost row reads one cell further. The minimum-2 rule exists so the reconstruction sweep can write `qL` at cell `hi+1` without leaving the array; PCM does not need the extra cell but gets it anyway.
 
 **Momentum index.** The momentum component for direction `d` is at index `d+1` in *both* the hydro and the radiation state vector. `fill_ghosts!` relies on this to serve both systems with one implementation. The hydro arrays now carry the mass-scalar rows after the five hydro variables, so every internal ghost fill of the gas state (`sim.U` and its Runge-Kutta stage copies) passes `momentum_blocks = 1`: the default, `size(A, 1) ÷ NRAD`, would read the scalar rows as extra momentum blocks and flip them on a `Reflecting` wall.
 
@@ -350,6 +356,19 @@ Two properties the tests pin, and that a change here must keep:
 - **The flux is carried by one factor per band.** JAFF writes one flux row per band, `d rflux/dt = -c_hat sigma n_H0 rflux`, linear, so it is a factor `f` that starts at 1 (0 where the band has no flux, or a dark cell would need a solve for nothing) and multiplies all three flux components after the solve; without emission in the ODE it equals `N_end / N_start` (Quokka's `SKIP_PHOTOCHEMFLUX`). The emission, applying `f` and the clamp at zero belong to the grid driver and are not terms of `chem_rhs!`; put any of them in the ODE and the two integrators stop solving the same problem. The emission is injected at the start of the substep, before the burn, so the step is first order: an opaque cell sits below its equilibrium ionization by about `alpha n x^2 dt / 2`.
 - **Set `Erad` in the initial conditions.** Its default is `a_r T^4`, which puts about `1e12` ionizing photons per cm^3 in a `1e4` K box. A photoionization problem passes `Erad = 0.0` (the floor makes it `1e-30`), as `stromgren_iliev` does.
 - **The heating per ionization of Test 2 overheats, and it is tied to the photon energy by hand.** `deltaE0` in `networks/hydrogen_iliev2` is `photon_energy - 13.6 eV`, Quokka's choice: 16.05 eV for the 29.65 eV band of Test 2, which Honghu passes as `photon_energy` and JAFF never sees, so the two are kept consistent by hand; the optically thin value for the `1e5` K blackbody is about 6.3 eV. Measured on Test 2, 2.5 times the heating raises the temperature of the ionized gas by only 11% to 14% and the radius by 0.8% to 2.2%. A single band has no spectral hardening either, so the Test 2 temperature profile is checked for its shape and not against data.
+
+## Magnetohydrodynamics
+
+`Simulation(mhd = true)` evolves ideal MHD with constrained transport, Quokka's scheme (Kriel et al., in preparation): `HLLD` (the default) or `LLFMHD`, the Q26 EMF and LD04 averaging. `docs/mhd.md` is the guide, and `agent-chats/20261120-mhd-minimal-plan.md` the plan it was built from. Things that are not obvious from the code:
+
+- **The EMF has Quokka's sign, `eps = u x b`**, the opposite of Ohm's law in the papers, so that every line of `mhd_system.jl` matches a line of `mhd_system.hpp`, and the induction update is `d b/dt = curl eps`.
+- **The total energy holds `|b_cc|^2/2`**, `b_cc` the average of a cell's two faces. Every read of the internal energy subtracts `magnetic_energy(bfield, i, j, k)` and every write adds it back: `cons2prim!`, `enforce_floors!`, both coupling drivers, `combine_gas!`, the chemistry step, the `chat` limiters, `floor_rad_energy!`, `gas_temperature`. A new site that writes `eint + ekin` deletes the field's energy without a word. Without MHD the helper returns `false`, a zero of every float type (`x - false === x`), so the hydrodynamic numbers are unchanged; pass it as the `bfield` keyword.
+- **Inactive directions are one convention, not special cases.** Along an inactive `d` a cell has one face, its low and high face are the same (`sim.B.o[d] == (0, 0, 0)`), so averages, differences and reconstructions along `d` return the value itself; the faces normal to `d` carry the cell's velocity as `u*` and speeds of one, which cancel out of LD04 exactly. A 2D run equals the same problem in a periodic box four cells deep to the bit, a 1D run to `1e-15`, and `test_mhd.jl` holds that. Quokka is 3D only.
+- **The MHD sweep is untiled and reaches into the ghosts.** Its faces span the interior along the sweep and `mhd_riemann_ghosts` rows across it, because Q26 reconstructs `u*` across to the edges; the face arrays are whole-grid because an edge reads two directions of them. `Simulation` forces `tile = nothing` with MHD and accepts only PCM, PLM or PPM, the reconstructions `_recon_pair` has.
+- **Rotational discontinuities smear with either solver.** Along one direction LD04 is the HLL flux of the transverse field, so `b` gets HLL-level dissipation from the edge averaging whatever the Riemann solver; HLLD resolves a rotational discontinuity only in its flux. Do not write a test that expects it sharp; an EMF consistent with HLLD (UCT-HLLD) is in `future.md`.
+- **Ghost cells of `U` need current ghost faces of `B`.** Fill `B`'s ghosts first and `U`'s through `_fill_gas_ghosts!`, which applies `mhd_ghost_energy!`: an outflow ghost cell keeps the internal energy of the cell it copies, because its normal ghost faces are integrated outward with `div b = 0` (Quokka's diode condition) and its magnetic energy differs from the source's. `advance_hydro!` refills both at the end of a step, or `enforce_state!` counts repairs in stale ghost cells.
+- **The floors work to round-off at low beta.** `E - E_kin - E_mag` can round below zero once `E_mag` dwarfs the floor energy, so `_floored_energy` raises a floored `E` an ulp at a time until `cons2prim!`'s own arithmetic reads it above the floor. There is no dual energy, and the internal energy there is only as good as that round-off.
+- **Agreement with Quokka is pinned in `test/data/quokka`**: Quokka's `MHDBrioWuShockTube`, `MHDRyuJones2aShockTube` and `OrszagTang` (quokka-local `6c76fd788`, with `constant_dt` so both codes take the same steps; the header of each file has the command). With PCM the codes agree to round-off, in 1D and 2D; with PLM and PPM by Quokka's shock flattening, which Honghu does not have. Ryu-Jones is compared on `x < 0.9`, because Quokka holds the boundary states and Honghu has outflow. To make a reference again, build the target in `quokka-local/build/3d-apple` with `ninja`, run it with the command in the header, and extract the line or slice with yt.
 
 ## Style
 
