@@ -6,6 +6,22 @@
 # has one task and one scratch, and a bug that lets two tasks share a scratch --
 # it happened once, through a boxed variable in the spawn loop -- cannot show.
 
+_mark!(i, j, k, A) = (A[i, j, k] += 1; nothing)
+
+@testset "launch! visits every cell once" begin
+    for backend in (Honghu.CPUThreads(), Honghu.CPUSerial())
+        for box in ((2:5, 3:4, 1:1), (1:3, 1:3, 2:4), (4:3, 1:2, 1:1))
+            A = zeros(Int, 6, 5, 4)
+            Honghu.launch!(backend, box, _mark!, A)
+            inside = [i in box[1] && j in box[2] && k in box[3] for i in 1:6, j in 1:5, k in 1:4]
+            @test A == Int.(inside)
+        end
+    end
+    # without KernelAbstractions loaded there is no device launch, and saying so
+    A = zeros(Int, 2, 2, 2)
+    @test_throws ErrorException Honghu.launch!(Honghu.KABackend(:none), (1:1, 1:1, 1:1), _mark!, A)
+end
+
 @testset "threaded fill and copy" begin
     A = rand(5, 10, 11, 13)
     B = similar(A)

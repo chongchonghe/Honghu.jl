@@ -95,6 +95,7 @@ include("coupling.jl")            # per-cell matter-radiation coupling interface
 include("coupling_solvers.jl")    # ... and the two in-tree solvers
 include("coupling_ode.jl")        # ... and the error-controlled reference solve
 include("grid.jl")
+include("launch.jl")
 include("variables.jl")
 include("boundary.jl")
 include("limiters.jl")
