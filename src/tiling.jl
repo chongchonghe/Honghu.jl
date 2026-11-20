@@ -11,9 +11,10 @@
 # enough to stay in cache, and only `dU` is written to the whole grid. This is
 # AMReX's `MFIter` tiling, which is how Quokka itself does it: box-local
 # temporaries, the same pointwise kernels. Here the kernels are literally the
-# same, the row bodies `_reconstruct_row!`, `_hydro_flux_row!` and
-# `_divergence_row!`, called with a `TileArray` in place of the whole-grid
-# array, so the result is bit-identical to the untiled sweep.
+# same, the cell kernels `_reconstruct_cell!`, `_hydro_flux_cell!` and
+# `_divergence_cell!` launched with a `TileArray` in place of the whole-grid
+# array, so the result is bit-identical to the untiled sweep. Untiled is the same
+# driver with one box, the whole grid, which is also how a GPU runs it.
 #
 # A box spans the whole interior along the sweep direction and a block of
 # `tile[d]` cells along each transverse direction `d`. A box along the sweep
@@ -72,7 +73,7 @@ end
 A box-local array indexed with *global* cell indices: `A[n, i, j, k]` is element
 `(n, i - offset[1], j - offset[2], k - offset[3])` of the column-major array of
 size `dims` stored at the start of `buf`. It is the counterpart of AMReX's
-`Array4`, and lets the whole-grid kernels' row bodies write the interface states
+`Array4`, and lets the cell kernels write the interface states
 and fluxes of one tile without a change. One buffer serves the sweeps in every
 direction, each with its own `dims`.
 
@@ -100,7 +101,7 @@ Base.@propagate_inbounds Base.setindex!(A::TileArray, v, n::Int, i::Int, j::Int,
     has_tiled_method(reconstruction) -> Bool
 
 Whether the tiled sweep can run `reconstruction`. True for `PCM`, `PLM` and
-`PPM`, whose row bodies it calls. A reconstruction defined outside the package
+`PPM`, which have cell kernels. A reconstruction defined outside the package
 owns its whole sweep through `reconstruct!`, so it runs untiled.
 """
 has_tiled_method(::AbstractReconstruction) = false
@@ -154,40 +155,73 @@ function HydroTiles(g::CartesianGrid{T}, nvar::Integer, tile::NTuple{3,Int}) whe
 end
 
 """
-    hydro_sweep_tiled!(dU, prim, tiles, reconstruction, eos, solver, Val(D), grid,
-                       nvar, nscalars, overwrite, update = nothing)
+    hydro_sweep!(dU, prim, scratch, reconstruction, eos, solver, Val(D), grid, nvar,
+                 nscalars, overwrite, update, backend, tiles)
 
-The hydrodynamic sweep along `D`, box by box: for each box of
-[`tile_boxes`](@ref), reconstruct the interface states, solve the Riemann
-problems and take the flux divergence into `dU`, with the states and fluxes kept
-in the task's scratch. Bit-identical to `reconstruct!`, `hydro_fluxes!` and
-`flux_divergence!` in turn, because it runs their row bodies.
+The hydrodynamic sweep along `D`: reconstruct the interface states, solve the
+Riemann problems and take the flux divergence into `dU` (overwriting it if
+`overwrite`, or forming the Runge-Kutta stage `update`, as
+[`flux_divergence!`](@ref) does). It is the same three launches whatever runs
+them, box by box ([`_sweep_box!`](@ref)):
+
+  - **tiled**, when `tiles` is a [`HydroTiles`](@ref), the reconstruction has
+    cell kernels and the backend is [`CPUThreads`](@ref): each task takes a run
+    of [`tile_boxes`](@ref) and launches them serially into its own
+    cache-sized scratch, a [`TileArray`](@ref);
+  - otherwise as **one box**, the whole interior, with `scratch = (qL, qR, flux)`
+    three whole-grid arrays and the launches spread over `backend`. This is
+    how a GPU runs it, and a CPU below `TILE_MIN_THREADS` threads.
+
+A reconstruction defined outside the package has no cell kernel, so it runs as
+one box with its own `reconstruct!`.
 """
-function hydro_sweep_tiled!(dU::Array{T,4}, prim::Array{T,4}, tiles::HydroTiles{T},
-                            recon::AbstractReconstruction, eos::AbstractEOS,
-                            solver::AbstractRiemannSolver, ::Val{D}, g::CartesianGrid{T},
-                            nvar::Int, nscalars::Int, overwrite::Bool,
-                            update=nothing) where {T,D}
-    boxes = tiles.boxes[D]
-    nbox = length(boxes)
-    nch = min(length(tiles.scratch), nbox)
+function hydro_sweep!(dU::AbstractArray{T,4}, prim::AbstractArray{T,4}, scratch::Tuple,
+                      recon::AbstractReconstruction, eos::AbstractEOS,
+                      solver::AbstractRiemannSolver, ::Val{D}, g::CartesianGrid{T},
+                      nvar::Int, nscalars::Int, overwrite::Bool, update,
+                      backend::AbstractBackend, tiles::Union{Nothing,HydroTiles}) where {T,D}
+    # `overwrite` becomes a type here, so that no kernel tests it per cell
+    if overwrite
+        _hydro_sweep!(dU, prim, scratch, recon, eos, solver, Val(D), g, nvar, nscalars,
+                      Val(true), update, backend, tiles)
+    else
+        _hydro_sweep!(dU, prim, scratch, recon, eos, solver, Val(D), g, nvar, nscalars,
+                      Val(false), update, backend, tiles)
+    end
+    return nothing
+end
+
+# Whether the sweep runs tiled: only a CPU tiles, as in AMReX, where tiling is a
+# cache policy and a GPU's box is the whole grid.
+_uses_tiles(tiles, recon::AbstractReconstruction, backend::AbstractBackend) =
+    tiles !== nothing && has_tiled_method(recon) && backend isa CPUThreads
+
+function _hydro_sweep!(dU, prim, scratch, recon, eos, solver, ::Val{D}, g::CartesianGrid{T},
+                       nvar, nscalars, ow::Val, update, backend, tiles) where {T,D}
     gam = T(adiabatic_index(eos))
     act1 = g.active[_tdir1(Val(D))]
     act2 = g.active[_tdir2(Val(D))]
     invdx = one(T) / g.dx[D]
-    ow = Val(overwrite)                 # a type from here on, so no kernel tests it
-    if nch <= 1
-        _sweep_chunk!(dU, prim, tiles, 1, 1, recon, eos, solver, Val(D), g, gam, act1, act2,
-                      invdx, nvar, nscalars, ow, update)
-    else
-        # Each task picks its scratch and its boxes from its chunk number `c`, the
-        # loop variable, which is a fresh binding per iteration. Destructuring the
-        # scratch out here instead would assign the same locals on every iteration
-        # and box them, and the tasks would share one scratch.
-        @sync for c in 1:nch
-            Threads.@spawn _sweep_chunk!(dU, prim, tiles, c, nch, recon, eos, solver, Val(D),
-                                         g, gam, act1, act2, invdx, nvar, nscalars, ow, update)
+    if _uses_tiles(tiles, recon, backend)
+        nch = min(length(tiles.scratch), length(tiles.boxes[D]))
+        if nch <= 1
+            _sweep_chunk!(dU, prim, tiles, 1, 1, recon, eos, solver, Val(D), g, gam, act1,
+                          act2, invdx, nvar, nscalars, ow, update)
+        else
+            # Each task picks its scratch and its boxes from its chunk number `c`, the
+            # loop variable, which is a fresh binding per iteration. Destructuring the
+            # scratch out here instead would assign the same locals on every iteration
+            # and box them, and the tasks would share one scratch.
+            @sync for c in 1:nch
+                Threads.@spawn _sweep_chunk!(dU, prim, tiles, c, nch, recon, eos, solver,
+                                             Val(D), g, gam, act1, act2, invdx, nvar,
+                                             nscalars, ow, update)
+            end
         end
+    else
+        qL, qR, fl = scratch
+        _sweep_box!(backend, interior_box(g), qL, qR, fl, dU, prim, recon, eos, solver,
+                    Val(D), g, gam, act1, act2, invdx, nvar, nscalars, ow, update)
     end
     return nothing
 end
@@ -197,30 +231,42 @@ function _sweep_chunk!(dU, prim, tiles::HydroTiles, c::Int, nch::Int, recon, eos
                        update) where {D}
     qL, qR, fl = tiles.scratch[c]
     boxes = tiles.boxes[D]
-    _sweep_boxes!(dU, prim, qL, qR, fl, tiles.dims[D], boxes, _chunk(length(boxes), nch, c),
-                  recon, eos, solver, Val(D), g, gam, act1, act2, invdx, nvar, nscalars,
-                  ow, update)
+    dims = tiles.dims[D]
+    for b in _chunk(length(boxes), nch, c)
+        box = boxes[b]
+        off = ntuple(d -> d == D ? g.lo[d] - 2 : first(box[d]) - 1, Val(3))
+        _sweep_box!(CPUSerial(), box, TileArray(qL, dims, off), TileArray(qR, dims, off),
+                    TileArray(fl, dims, off), dU, prim, recon, eos, solver, Val(D), g, gam,
+                    act1, act2, invdx, nvar, nscalars, ow, update)
+    end
     return nothing
 end
 
-function _sweep_boxes!(dU, prim, qL::V, qR::V, fl::V, dims, boxes, r, recon, eos,
-                       solver, ::Val{D}, g, gam, act1, act2, invdx, nvar, nscalars,
-                       ow::Val, update) where {V,D}
-    for b in r
-        box = boxes[b]
-        off = ntuple(d -> d == D ? g.lo[d] - 2 : first(box[d]) - 1, Val(3))
-        tL = TileArray(qL, dims, off)
-        tR = TileArray(qR, dims, off)
-        tF = TileArray(fl, dims, off)
-        # cells extended by one along D, as `cell_ranges` does for the whole grid
+"""
+    _sweep_box!(backend, box, qL, qR, flux, dU, prim, reconstruction, eos, solver,
+                Val(D), grid, gam, act1, act2, invdx, nvar, nscalars, Val(overwrite),
+                update)
+
+The sweep along `D` over the interior cells `box`, as three launches on
+`backend`: reconstruction over the cells of `box` extended by one along `D` (as
+[`cell_ranges`](@ref) does for the whole grid), the Riemann solves over its
+faces `lo:hi+1` along `D` (as [`face_ranges`](@ref)), and the divergence over
+`box`. `qL`, `qR` and `flux` need only cover those cells and faces: a tile's
+[`TileArray`](@ref), or three whole-grid arrays.
+"""
+function _sweep_box!(backend::AbstractBackend, box::NTuple{3,UnitRange{Int}}, qL, qR, fl, dU,
+                     prim, recon, eos, solver, ::Val{D}, g, gam, act1, act2, invdx, nvar,
+                     nscalars, ow::Val, update) where {D}
+    if has_tiled_method(recon)
         cr = ntuple(d -> d == D ? ((first(box[d]) - 1):(last(box[d]) + 1)) : box[d], Val(3))
-        launch!(CPUSerial(), cr, _reconstruct_cell!, tL, tR, prim, recon, Val(D), nvar)
-        # faces lo:hi+1 along D, as `face_ranges` does
-        fr = ntuple(d -> d == D ? (first(box[d]):(last(box[d]) + 1)) : box[d], Val(3))
-        launch!(CPUSerial(), fr, _hydro_flux_cell!, tF, tL, tR, prim, eos, solver, Val(D), gam,
-                act1, act2, nscalars)
-        launch!(CPUSerial(), box, _divergence_cell!, dU, tF, Val(D), invdx, nvar,
-                ow, update)
+        launch!(backend, cr, _reconstruct_cell!, qL, qR, prim, recon, Val(D), nvar)
+    else
+        # no cell kernel: the reconstruction's own whole-grid sweep (never tiled)
+        reconstruct!(qL, qR, prim, recon, Val(D), g, nvar)
     end
+    fr = ntuple(d -> d == D ? (first(box[d]):(last(box[d]) + 1)) : box[d], Val(3))
+    launch!(backend, fr, _hydro_flux_cell!, fl, qL, qR, prim, eos, solver, Val(D), gam, act1,
+            act2, nscalars)
+    launch!(backend, box, _divergence_cell!, dU, fl, Val(D), invdx, nvar, ow, update)
     return nothing
 end

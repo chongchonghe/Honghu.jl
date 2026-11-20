@@ -139,6 +139,23 @@ end
     @test a.U == b.U
 end
 
+@testset "hydro_sweep! tiled equals one whole-grid box" begin
+    sim = Honghu.Problems.sedov_blast(; n=19, tile=(4, 5, 3))[1]
+    g, hw = sim.grid, sim.hw
+    @test Honghu._uses_tiles(hw, sim.reconstruction)
+    @test !Honghu._uses_tiles(hw, UntiledPCM())
+    Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g)
+    scratch = (hw.qL, hw.qR, hw.flux)
+    for D in 1:3, ow in (true, false)
+        a = fill(0.5, size(sim.U)); b = copy(a)
+        Honghu.hydro_sweep!(a, hw.prim, scratch, PPM(), sim.eos, sim.riemann, Val(D), g, 5, 0,
+                            ow, nothing, Honghu.CPUThreads(), hw.tiling)
+        Honghu.hydro_sweep!(b, hw.prim, scratch, PPM(), sim.eos, sim.riemann, Val(D), g, 5, 0,
+                            ow, nothing, Honghu.CPUThreads(), nothing)
+        @test interior(a, g) == interior(b, g)
+    end
+end
+
 @testset "tile boxes partition the interior" begin
     for n in ((37, 20, 9), (16, 1, 1), (1, 13, 7)), tile in ((4, 5, 3), (8, 8, 8)), D in 1:3
         g = CartesianGrid(n=n)

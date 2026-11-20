@@ -128,23 +128,35 @@ Quokka's `enum class SourceOrder { forward, reverse }`.
     HydroWorkspace{T}
 
 Scratch arrays for the hydrodynamic sweeps. Allocated once per simulation.
+
+`backend` is the [`AbstractBackend`](@ref) the sweeps launch their cell kernels
+on, [`CPUThreads`](@ref) unless the constructor's `backend` keyword says
+otherwise; it is the one field that may be changed after construction, which is
+how the tests run a whole simulation's sweeps through [`KABackend`](@ref). Any
+backend but `CPUThreads` runs the sweep as one whole-grid box, never tiled.
 """
-struct HydroWorkspace{T<:AbstractFloat}
-    prim::Array{T,4}
-    qL::Array{T,4}
-    qR::Array{T,4}
-    flux::Array{T,4}
-    dU::Array{T,4}
-    U0::Array{T,4}
-    tiling::Union{Nothing,HydroTiles{T}}   # `nothing`: the untiled three-pass sweep
+mutable struct HydroWorkspace{T<:AbstractFloat}
+    const prim::Array{T,4}
+    const qL::Array{T,4}
+    const qR::Array{T,4}
+    const flux::Array{T,4}
+    const dU::Array{T,4}
+    const U0::Array{T,4}
+    const tiling::Union{Nothing,HydroTiles{T}}   # `nothing`: one whole-grid box
+    backend::AbstractBackend
 end
 
 function HydroWorkspace(g::CartesianGrid{T}, nvar::Integer=NHYDRO;
-                        tile::Union{Nothing,NTuple{3,Int}}=nothing) where {T}
+                        tile::Union{Nothing,NTuple{3,Int}}=nothing,
+                        backend::AbstractBackend=CPUThreads()) where {T}
     HydroWorkspace(allocate(g, nvar), allocate(g, nvar), allocate(g, nvar),
                    allocate(g, nvar), allocate(g, nvar), allocate(g, nvar),
-                   tile === nothing ? nothing : HydroTiles(g, nvar, tile))
+                   tile === nothing ? nothing : HydroTiles(g, nvar, tile), backend)
 end
+
+# Whether this workspace's sweeps run tiled with `reconstruction`.
+_uses_tiles(hw::HydroWorkspace, recon::AbstractReconstruction) =
+    _uses_tiles(hw.tiling, recon, hw.backend)
 
 """
     RadiationWorkspace{T}
@@ -582,18 +594,9 @@ end
 function _hydro_sweep!(dU, sim::Simulation, ::Val{D}, overwrite::Bool=false,
                        update=nothing) where {D}
     hw = sim.hw
-    g = sim.grid
-    nvar = nhydrovars(sim)
-    tiles = hw.tiling
-    if tiles !== nothing && has_tiled_method(sim.reconstruction)
-        hydro_sweep_tiled!(dU, hw.prim, tiles, sim.reconstruction, sim.eos, sim.riemann,
-                           Val(D), g, nvar, sim.nscalars, overwrite, update)
-        return nothing
-    end
-    reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, nvar)
-    hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g,
-                  sim.nscalars)
-    flux_divergence!(dU, hw.flux, Val(D), g, nvar, overwrite, update)
+    hydro_sweep!(dU, hw.prim, (hw.qL, hw.qR, hw.flux), sim.reconstruction, sim.eos,
+                 sim.riemann, Val(D), sim.grid, nhydrovars(sim), sim.nscalars, overwrite,
+                 update, hw.backend, hw.tiling)
     return nothing
 end
 

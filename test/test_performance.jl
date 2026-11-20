@@ -55,10 +55,12 @@ end
     # spawn loop costs bytes per task, not per cell, so this cannot see the race
     # that would follow; `test_parallel.jl`'s bit-identity tests can, with threads.)
     @test hw.tiling !== nothing
-    for D in 1:3
-        @test bytes_per_cell(() -> Honghu.hydro_sweep_tiled!(hw.dU, hw.prim, hw.tiling, PPM(),
-                                                             sim.eos, sim.riemann, Val(D), g,
-                                                             Honghu.NHYDRO, 0, D == 1), sim) < LIMIT
+    scratch = (hw.qL, hw.qR, hw.flux)
+    for D in 1:3, tiles in (hw.tiling, nothing)     # tiled, and one whole-grid box
+        @test bytes_per_cell(() -> Honghu.hydro_sweep!(hw.dU, hw.prim, scratch, PPM(), sim.eos,
+                                                       sim.riemann, Val(D), g, Honghu.NHYDRO, 0,
+                                                       D == 1, nothing, Honghu.CPUThreads(),
+                                                       tiles), sim) < LIMIT
     end
 end
 
