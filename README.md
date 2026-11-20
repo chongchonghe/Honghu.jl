@@ -332,10 +332,10 @@ The 3D Sedov blast at $128^3$, `Honghu.Problems.sedov_blast(n = 128)` with its d
 
 | Threads | 20 steps | per step | throughput |
 |:---|---:|---:|---:|
-| 1 | 10.6 s | 0.53 s | 3.96 Mcell-updates/s |
-| 6 | 2.58 s | 0.129 s | 16.3 Mcell-updates/s |
+| 1 | 10.7 s | 0.534 s | 3.93 Mcell-updates/s |
+| 4 | 3.30 s | 0.165 s | 12.7 Mcell-updates/s |
 
-Six threads are 4.1 times faster than one. To measure it on your machine, save this as `sedov_timing.jl` and run it with `-t 1` and with `-t 6`:
+Four threads are 3.2 times faster than one. To measure it on your machine, save this as `sedov_timing.jl` and run it with `-t 1` and with `-t 4`:
 
 ```julia
 using Honghu
@@ -347,7 +347,7 @@ println(Threads.nthreads(), " threads: ", t / 20, " s per step")
 
 ```bash
 julia --project=. -t 1 sedov_timing.jl
-julia --project=. -t 6 sedov_timing.jl
+julia --project=. -t 4 sedov_timing.jl
 ```
 
 #### On a compute node
