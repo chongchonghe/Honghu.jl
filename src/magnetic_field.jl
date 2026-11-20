@@ -119,36 +119,43 @@ end
 """
     fill_ghosts!(B::MagneticField, boundaries, grid)
 
-Fill the ghost faces of all three field components. Across a component's own
-direction its faces are laid out like cells, and [`fill_face!`](@ref) fills them
-as it fills cells. Along it there is one more face than cells:
+Fill the ghost faces of all three field components, one boundary at a time. Across
+a component's own direction its faces are laid out like cells, and
+[`fill_face!`](@ref) fills them as it fills cells. Along it there is one more face
+than cells:
 
   - [`Periodic`](@ref): face `hi + 1` is face `lo`, so ghost face `lo - m` is
     face `hi + 1 - m` and ghost face `hi + 1 + m` is face `lo + m`. Faces `lo` and
     `hi + 1` are both evolved, and stay equal because their updates read the same
     numbers.
-  - [`Outflow`](@ref): ghost faces copy the boundary face, `lo` or `hi + 1`.
+  - [`Outflow`](@ref): the transverse components are copied from the boundary
+    row, and the normal component is integrated outward from the boundary face so
+    that `div b = 0` in every ghost cell, as Quokka's MHD diode condition
+    (`applyMHDDiodeBC`) does for an outflowing boundary. A copied normal face would
+    leave a ghost cell a divergence wherever the transverse field varies along the
+    boundary, and the field of a static equilibrium out of balance there.
 
 Only these two are defined; [`check_mhd_boundaries`](@ref) refuses the others
-when the simulation is built.
+when the simulation is built. The ghost cells of the gas state then need
+[`mhd_ghost_energy!`](@ref).
 """
-function fill_ghosts!(B::MagneticField, b::Boundaries, g::CartesianGrid)
-    for d in 1:3
-        A = B.b[d]
-        for dir in 1:3
-            g.active[dir] || continue
-            for side in 1:2
-                bc = facebc(b, dir, side)
-                dir == d ? _fill_normal_faces!(A, bc, g, dir, side) :
-                fill_face!(A, bc, g, dir, side, zero(eltype(A)))
+function fill_ghosts!(B::MagneticField{T}, b::Boundaries, g::CartesianGrid) where {T}
+    for dir in 1:3
+        g.active[dir] || continue
+        for side in 1:2
+            bc = facebc(b, dir, side)
+            # the components across `dir` first: the normal one is integrated from them
+            for d in 1:3
+                d == dir || fill_face!(B.b[d], bc, g, dir, side, zero(T))
             end
+            _fill_normal_faces!(B, bc, g, dir, side)
         end
     end
     return B
 end
 
-function _fill_normal_faces!(A::AbstractArray{T,4}, ::Periodic, g::CartesianGrid, dir::Int,
-                             side::Int) where {T}
+function _fill_normal_faces!(B::MagneticField, ::Periodic, g::CartesianGrid, dir::Int, side::Int)
+    A = B.b[dir]
     lo, hi = g.lo[dir], g.hi[dir]
     for m in 1:g.ng[dir]
         if side == 1
@@ -160,14 +167,79 @@ function _fill_normal_faces!(A::AbstractArray{T,4}, ::Periodic, g::CartesianGrid
     return nothing
 end
 
-function _fill_normal_faces!(A::AbstractArray{T,4}, ::Outflow, g::CartesianGrid, dir::Int,
+# Quokka's step 2 of `applyMHDDiodeBC`: from the boundary face outward, each ghost
+# cell's new normal face closes `div b = 0` with the transverse faces of that cell,
+# `b_new = b_known - s dx (sum_t (b_t[high] - b_t[low]) / dx_t)`, `s` the outward sign.
+function _fill_normal_faces!(B::MagneticField{T}, ::Outflow, g::CartesianGrid, dir::Int,
                              side::Int) where {T}
-    lo, hi = g.lo[dir], g.hi[dir]
-    src = side == 1 ? lo : hi + 1
-    for m in 1:g.ng[dir]
-        copyto!(_slab(A, dir, side == 1 ? lo - m : hi + 1 + m), _slab(A, dir, src))
+    A = B.b[dir]
+    o = B.o[dir]
+    sgn = side == 1 ? -1 : 1
+    across = ntuple(e -> e == dir ? (1:1) : (1:g.dims[e]), 3)
+    @inbounds for m in 1:g.ng[dir]
+        c = side == 1 ? g.lo[dir] - m : g.hi[dir] + m
+        for I in CartesianIndices(across)
+            i, j, k = Base.setindex(Tuple(I), c, dir)
+            divt = zero(T)
+            for t in 1:3
+                (t == dir || !g.active[t]) && continue
+                ot = B.o[t]
+                Bt = B.b[t]
+                divt += (Bt[1, i+ot[1], j+ot[2], k+ot[3]] - Bt[1, i, j, k]) / g.dx[t]
+            end
+            if side == 1          # the new face is the cell's low face
+                A[1, i, j, k] = A[1, i+o[1], j+o[2], k+o[3]] - sgn * g.dx[dir] * divt
+            else
+                A[1, i+o[1], j+o[2], k+o[3]] = A[1, i, j, k] - sgn * g.dx[dir] * divt
+            end
+        end
     end
     return nothing
+end
+
+"""
+    mhd_ghost_energy!(U, B, boundaries, grid)
+
+Give every ghost cell beyond an [`Outflow`](@ref) boundary the internal energy of
+the interior cell it was copied from, by replacing that cell's magnetic energy in
+the copied total energy with the ghost cell's own: Quokka's step 3 of
+`applyMHDDiodeBC`. Its ghost faces differ from the source cell's (the normal one
+is integrated, see [`fill_ghosts!`](@ref)), so a plain copy of the total energy
+would give the ghost cell another pressure. Call it after the ghost cells of `U`
+and the ghost faces of `B` are filled. Without an outflow boundary it does nothing:
+a periodic ghost cell's faces are images of its source's, and so is its energy.
+"""
+function mhd_ghost_energy!(U::AbstractArray{T,4}, B::MagneticField{T}, b::Boundaries,
+                           g::CartesianGrid) where {T}
+    outflow = ntuple(d -> g.active[d] && (facebc(b, d, 1) isa Outflow || facebc(b, d, 2) isa Outflow), 3)
+    any(outflow) || return U
+    n1, n2, n3 = g.dims
+    threaded_jk(1:n2, 1:n3) do j, k
+        @inbounds for i in 1:n1
+            si, sj, sk = _ghost_source(g, b, i, j, k)
+            (si, sj, sk) == (i, j, k) && continue
+            U[IEGAS, i, j, k] += magnetic_energy(B, i, j, k) - magnetic_energy(B, si, sj, sk)
+        end
+    end
+    return U
+end
+
+# The interior cell whose state the ghost fill copied into cell (i, j, k): along each
+# direction, a periodic ghost index wraps and an outflow one clamps to the boundary
+# cell. Interior cells are their own source.
+@inline function _ghost_source(g::CartesianGrid, b::Boundaries, i, j, k)
+    idx = (i, j, k)
+    return ntuple(Val(3)) do d
+        x = idx[d]
+        lo, hi = g.lo[d], g.hi[d]
+        if x < lo
+            facebc(b, d, 1) isa Periodic ? x + g.n[d] : lo
+        elseif x > hi
+            facebc(b, d, 2) isa Periodic ? x - g.n[d] : hi
+        else
+            x
+        end
+    end
 end
 
 # --- initial conditions and diagnostics ---------------------------------------
@@ -214,6 +286,12 @@ function _set_face_field!(f::F, B::MagneticField{T}, A, g::CartesianGrid{T},
             end
             Bd[1, i, j, k] = val
         end
+    end
+    # Along a periodic direction face hi + 1 is face lo: make the two the same number,
+    # which `f` or `A` evaluated at both ends of the box gives only to round-off.
+    for d in 1:3
+        g.active[d] && facebc(b, d, 1) isa Periodic || continue
+        copyto!(_slab(B.b[d], d, g.hi[d] + 1), _slab(B.b[d], d, g.lo[d]))
     end
     fill_ghosts!(B, b, g)
     return B

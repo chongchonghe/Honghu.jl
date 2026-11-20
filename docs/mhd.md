@@ -52,7 +52,13 @@ with $\nabla_h\times$ the circulation of the edge EMFs around each face. The dis
 
 Quokka runs MHD in 3D only. Here a direction with one cell carries one face per cell, whose low and high face are the same face, so averages, differences and reconstructions along it return the value itself. Its faces carry $u^* = u_d$ and $\alpha^\pm = 1$, which cancel out of LD04. A 2D run then equals the same problem in a periodic box four cells deep to the bit, and a 1D run to $10^{-15}$.
 
-### 2.6 Radiation and chemistry
+### 2.6 Boundaries and floors
+
+Periodic boundaries treat face $hi + 1$ as face $lo$. An outflow boundary is Quokka's MHD diode condition for outflowing gas: ghost cells copy the boundary cell and the transverse ghost faces the boundary row, the normal ghost faces are integrated outward so that $\nabla\cdot\mathbf b = 0$ in every ghost cell, and each ghost cell's total energy is corrected by the difference of its magnetic energy and its source's, so that it has the source's pressure. A static equilibrium then stays at rest up to the boundary.
+
+The total energy contains $b^2/2$, so where $b^2 \gg p$ the internal energy is a small difference of large numbers. A cell floored to the minimum pressure is given the smallest total energy whose internal energy, computed as the conversion to primitives computes it, is above the floor.
+
+### 2.7 Radiation and chemistry
 
 The matter-radiation coupling and the chemistry change the internal energy $e = E - \rho u^2/2 - b^2/2$ and leave the field alone: every solve subtracts the magnetic energy from $E$ before it starts and adds it back after.
 
@@ -156,16 +162,18 @@ The unit tests check properties rather than tuned numbers:
 - $\nabla\cdot\mathbf b$ below $10^{-13}$ after many steps, with both solvers and every reconstruction and tableau, in 2D and in 3D;
 - conservation of mass, momentum and energy on a periodic box, and a uniform oblique state preserved;
 - periodic face images that stay equal to the bit, and the same shock tube along $x$, $y$ and $z$;
-- 1D and 2D runs equal to thin periodic 3D boxes;
+- 1D and 2D runs equal to thin periodic 3D boxes, and periodic face images that stay equal to the bit with noisy 2D data, which pins how far into the ghost cells the Riemann solves reach;
+- a static current-free field at rest in an outflow box, and an Orszag-Tang run at plasma $\beta \approx 0.3$ that needs the floors;
 - HLLD's flux exact at a stationary contact and a rotational discontinuity, a contact that stays sharp with HLLD and smears with LLF, and LD04 equal to the HLL flux of $b_t$ in 1D;
 - radiation and chemistry steps in a magnetised cell that give the internal energy of the same run without a field;
-- the comparisons with Quokka and the convergence of section 3.
+- the comparisons with Quokka and the convergence of section 3, and a 2D comparison: Quokka's `OrszagTang` with PCM for 40 steps, which this code reproduces to $2\times10^{-15}$ (with PPM they differ by $2\times10^{-3}$; the PPM kernels are the same, and Quokka's flattening, whose shock detector can fire at pressure extrema at this resolution, is the likely cause, not isolated).
 
 ## 5. Limitations
 
 - **One EMF scheme.** Q26 with LD04; not Quokka's B25b averaging or FS18 and B25a EMFs, and no EMF consistent with HLLD (UCT-HLLD, Mignone & Del Zanna 2021), so rotational discontinuities smear (section 2.3).
 - **No first-order flux correction and no shock flattening,** both of which Quokka has.
-- **Boundaries:** periodic and outflow only.
+- **No dual energy.** The internal energy is $E - \rho u^2/2 - b^2/2$, accurate only to the round-off of $b^2/2$ at low plasma $\beta$ (Quokka evolves it separately as well).
+- **Boundaries:** periodic and outflow (Quokka's diode condition for outflowing gas, applied whatever the direction of the flow) only.
 - **No resistivity, AMR or tiling;** the MHD sweep runs on the CPU only.
 - **No checkpoints:** `save_checkpoint` refuses an MHD run, because the format does not hold the face-centred field.
 

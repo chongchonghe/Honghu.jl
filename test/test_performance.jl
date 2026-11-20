@@ -108,6 +108,13 @@ end
     upd = (0.5, nothing, 0.5, 1e-4)
     @test bytes_per_cell(() -> Honghu.constrained_transport!(sim, upd), sim) < LIMIT
     @test bytes_per_cell(() -> Honghu.hydro_rhs!(hw.dU, sim.U, sim), sim) < LIMIT
+
+    # outflow: the ghost faces integrated across the boundary, and the ghost energies
+    out = Simulation(n=(24, 24, 24), mhd=true, boundaries=Boundaries(Outflow()))
+    set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0, bx=x, by=-y), out)
+    @test bytes_per_cell(() -> Honghu.fill_ghosts!(out.B, out.boundaries, out.grid), out) < LIMIT
+    @test bytes_per_cell(() -> Honghu.mhd_ghost_energy!(out.U, out.B, out.boundaries, out.grid),
+                         out) < LIMIT
 end
 
 @testset "radiation kernels do not allocate per cell" begin

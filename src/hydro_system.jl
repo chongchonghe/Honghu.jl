@@ -29,7 +29,9 @@ their momentum and have only the thermal part reset.
 
 With MHD, `bfield` is the simulation's [`MagneticField`](@ref): the total energy
 then holds the magnetic energy as well, which a floor keeps, and only the internal
-energy is reset.
+energy is reset, to a value that [`cons2prim!`](@ref) is guaranteed to read as
+above the floor. Where the magnetic energy is large the internal energy is then
+known only to its round-off, which is what a dual-energy formalism would cure.
 
 Returns the number of cells repaired, which the driver accumulates so that a
 silently unphysical run is visible. Only the hydro repairs are counted: a
@@ -83,13 +85,29 @@ function enforce_floors!(U::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGr
             emag = magnetic_energy(bfield, i, j, k)
             emin = internal_energy(eos, rho, floors.pressure)
             if !(U[IEGAS, i, j, k] - ekin - emag > emin)
-                U[IEGAS, i, j, k] = ekin + emin + emag
+                U[IEGAS, i, j, k] = _floored_energy(bfield, ekin, emin, emag)
                 bad += 1
             end
         end
         bad > 0 && Threads.atomic_add!(nbad, bad)
     end
     return nbad[]
+end
+
+# The total energy of a cell whose internal energy is reset to `emin`. Without a field
+# it is `ekin + emin`. With one, `ekin + emin + emag` minus `ekin` and `emag`, which is
+# what cons2prim! computes, rounds to below `emin`, even below zero, once `emag` is
+# large enough that `emin` is below its round-off; the energy is then raised an ulp at
+# a time until the internal energy cons2prim! will see is above `emin`. Each ulp raises
+# that internal energy by about one ulp of `E`, so the loop stops within a few.
+@inline _floored_energy(::Nothing, ekin, emin, emag) = ekin + emin
+
+@inline function _floored_energy(::MagneticField, ekin, emin, emag)
+    E = ekin + emin + emag
+    while !(E - ekin - emag > emin)
+        E = nextfloat(E)
+    end
+    return E
 end
 
 """

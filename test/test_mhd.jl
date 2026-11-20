@@ -99,18 +99,22 @@ end
         @test B1[:, :, hi[2]+m, :] == B1[:, :, lo[2]-1+m, :]
     end
 
-    # outflow: a ghost face copies the boundary face, the face itself along the
-    # field's direction and the boundary row across it
+    # outflow: across a component's direction a ghost face copies the boundary row;
+    # along it the ghost faces are integrated from the boundary face so that every
+    # ghost cell beyond the boundary has div b = 0
     sim = Simulation(n=(8, 6, 1), mhd=true, boundaries=Boundaries(Outflow()))
     set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0), sim; vector_potential=mhd_potential)
     g = sim.grid
     B1, B2 = sim.B[1], sim.B[2]
+    ry = g.lo[2]:(g.hi[2]+1)       # the corners are the y boundary's, integrated after this copy
     for m in 1:g.ng[1]
-        @test B1[:, g.lo[1]-m, :, :] == B1[:, g.lo[1], :, :]
-        @test B1[:, g.hi[1]+1+m, :, :] == B1[:, g.hi[1]+1, :, :]
-        @test B2[:, g.lo[1]-m, :, :] == B2[:, g.lo[1], :, :]
-        @test B2[:, g.hi[1]+m, :, :] == B2[:, g.hi[1], :, :]
+        @test B2[:, g.lo[1]-m, ry, :] == B2[:, g.lo[1], ry, :]
+        @test B2[:, g.hi[1]+m, ry, :] == B2[:, g.hi[1], ry, :]
     end
+    divb(i, j) = (B1[1, i+1, j, 1] - B1[1, i, j, 1]) / g.dx[1] + (B2[1, i, j+1, 1] - B2[1, i, j, 1]) / g.dx[2]
+    ghosts = [i for i in 1:g.dims[1] if !(g.lo[1] <= i <= g.hi[1])]
+    @test maximum(abs(divb(i, j)) for i in ghosts, j in g.lo[2]:g.hi[2]) < 1e-13 * maximum(abs, B1) / g.dx[1]
+    @test maximum(abs, B1[:, g.lo[1]-1, :, :] .- B1[:, g.lo[1], :, :]) > 1e-3   # not a copy
 end
 
 @testset "MHD floors and time step see the magnetic energy" begin
@@ -621,4 +625,108 @@ end
     set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0), plain)
     file = save_checkpoint(plain, path)
     @test_throws ArgumentError load_checkpoint!(sim, file)
+end
+
+@testset "low-beta Orszag-Tang runs: the floors keep the pressure positive" begin
+    # Orszag-Tang with a tenth of the pressure (plasma beta about 0.3). A floored cell
+    # holds E = E_kin + e_min + E_mag, and E - E_kin - E_mag in cons2prim! can round
+    # to a negative pressure when E_mag dwarfs e_min; the fallback interface state then
+    # took the square root of it. The floor must leave a pressure cons2prim! sees as positive.
+    sim, _ = P.orszag_tang(n=64, integrator=SSPRK2())
+    sim.U[5, :, :, :] .-= (1 - 0.1) * 5 / (12pi) / (5 / 3 - 1)   # remove 90% of the thermal energy
+    Honghu.enforce_state!(sim)
+    run!(sim; tmax=0.5, verbose=false)
+    @test sim.t ≈ 0.5
+    @test all(>(0), primitives(sim)[IPRE, :, :, :])
+end
+
+@testset "no repairs counted in ghost cells left stale by a step" begin
+    # A fast wave at plasma beta 2e-5 in a periodic box: the interior never comes near
+    # the floor, but a step ends with new ghost faces of B and the ghost cells of U from
+    # the start of its last stage, and enforce_state! sweeps the ghosts too.
+    for delta in (0.02, 0.05)
+        sim = Simulation(n=(64, 1, 1), mhd=true, boundaries=Boundaries(Periodic()), integrator=SSPRK2())
+        set_initial_conditions!(sim) do x, y, z
+            s = delta * sinpi(2x)
+            (rho=1 + s, vx=s, p=1e-5, by=1 + s)
+        end
+        for _ in 1:40
+            step!(sim)
+        end
+        @test nrepaired(sim) == 0
+    end
+end
+
+@testset "outflow boundaries keep a static magnetic equilibrium" begin
+    # b = 0.3 (x - 1/2, -(y - 1/2)) carries no current, so at uniform pressure and at
+    # rest the gas feels no force. Outflow ghost faces must keep div b = 0 in the ghost
+    # cells (the normal field grows across them) and the ghost cells the pressure of the
+    # cell they copy (Quokka's MHD diode condition), or the boundaries drive a flow.
+    for p0 in (1.0, 1e-3)
+        sim = Simulation(n=(32, 32, 1), mhd=true, boundaries=Boundaries(Outflow()), integrator=SSPRK2())
+        set_initial_conditions!((x, y, z) -> (rho=1.0, p=p0, bx=0.3(x - 0.5), by=-0.3(y - 0.5)), sim)
+        for _ in 1:20
+            step!(sim)
+        end
+        pr = primitives(sim)
+        @test maximum(abs, pr[2:4, :, :, :]) < 1e-12
+        @test nrepaired(sim) == 0
+    end
+end
+
+# A periodic field with power up to the grid scale, from integer wave numbers so that
+# it is periodic on the unit box: noise that drives every reconstruction branch.
+function noisy(x, y, seed)
+    s = 0.0
+    for kx in 1:6, ky in -6:6
+        phase = 2pi * (kx * x + ky * y) + 0.37 * seed * kx + 1.3 * ky
+        s += sin(phase) / (kx^2 + ky^2)
+    end
+    return s
+end
+
+@testset "periodic face images stay bitwise equal with noisy 2D data" begin
+    # The faces lo and hi + 1 of a periodic direction are one face; their updates read
+    # stencils on opposite sides of the box, through the ghost rows of the Riemann
+    # solves, so this pins how far into the ghosts the sweep must reach.
+    sim = Simulation(n=(16, 16, 1), mhd=true, boundaries=Boundaries(Periodic()), integrator=SSPRK2())
+    set_initial_conditions!(sim; vector_potential=(x, y, z) -> (0.0, 0.0, 0.02noisy(x, y, 3))) do x, y, z
+        (rho=1 + 0.3noisy(x, y, 1)^2, vx=0.5noisy(x, y, 2), vy=0.5noisy(y, x, 4), p=1 + 0.2noisy(x, y, 5)^2,
+         bx=0.3, by=0.2)
+    end
+    g = sim.grid
+    face_images_equal(s) = s.B[1][:, g.hi[1]+1, :, :] == s.B[1][:, g.lo[1], :, :] &&
+                           s.B[2][:, :, g.hi[2]+1, :] == s.B[2][:, :, g.lo[2], :]
+    @test face_images_equal(sim)                  # also when set from a vector potential
+    for _ in 1:15
+        step!(sim)
+    end
+    @test face_images_equal(sim)
+    @test nrepaired(sim) == 0
+end
+
+@testset "2D Orszag-Tang against Quokka" begin
+    # Quokka's OrszagTang (16^2 x 8, PCM, Q26 + LD04, RK2, 40 steps of 1e-3), its vortex on
+    # [-0.5, 0.5]^2 with the field from the same vector potential, so the faces start
+    # the same. In 2D the EMF of every edge mixes two directions of faces, which the 1D
+    # tubes cannot test; the codes agree to round-off.
+    ref = permutedims(reduce(hcat, [parse.(Float64, split(l))
+                                    for l in eachline(joinpath(@__DIR__, "data", "quokka", "ot_pcm.txt"))
+                                    if !startswith(l, "#")]))
+    sim = Simulation(n=(16, 16, 1), xlo=(-0.5, -0.5, -0.5), xhi=(0.5, 0.5, 0.5), mhd=true,
+                     reconstruction=PCM(), integrator=SSPRK2(), boundaries=Boundaries(Periodic()))
+    B0 = 1 / sqrt(4pi)
+    set_initial_conditions!(sim; vector_potential=(x, y, z) -> (0.0, 0.0, B0 / 4pi * (cos(4pi * x) - 2cos(2pi * y)))) do x, y, z
+        (rho=25 / (36pi), p=5 / (12pi), vx=sin(2pi * y), vy=-sin(2pi * x))
+    end
+    for _ in 1:40
+        step!(sim, 1e-3)
+    end
+    pr = primitives(sim)
+    g = sim.grid
+    b(d) = vec([Honghu.cell_centred_field(sim.B, d, i, j, 1) for i in g.lo[1]:g.hi[1], j in g.lo[2]:g.hi[2]])
+    mine = hcat(vec(pr[1, :, :, 1]), vec(pr[2, :, :, 1]), vec(pr[3, :, :, 1]), vec(pr[5, :, :, 1]), b(1), b(2))
+    for (c, col) in enumerate((3, 4, 5, 7, 8, 9))       # rho vx vy p bx by
+        @test maximum(abs, mine[:, c] .- ref[:, col]) < 1e-13 * maximum(abs, ref[:, col])
+    end
 end

@@ -642,13 +642,22 @@ function set_initial_conditions!(f::F, sim::Simulation{T};
     end
     # Ghosts first: `enforce_state!` sweeps the whole array, and until the
     # boundary conditions have run the ghost cells hold uninitialised memory.
-    fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
+    _fill_gas_ghosts!(sim, U, sim.t)
     has_radiation(sim) && fill_ghosts!(sim.R, sim.radiation_boundaries, g, sim.t)
     enforce_state!(sim)
     return sim
 end
 
 # --- right-hand sides --------------------------------------------------------
+
+# The ghost cells of the gas state `U`. With MHD the ghost faces of `sim.B` must be
+# current: an outflow ghost cell keeps the internal energy of the cell it copies,
+# which depends on its faces (`mhd_ghost_energy!`).
+function _fill_gas_ghosts!(sim::Simulation, U, t)
+    fill_ghosts!(U, sim.boundaries, sim.grid, t; momentum_blocks=1)
+    has_mhd(sim) && mhd_ghost_energy!(U, sim.B, sim.boundaries, sim.grid)
+    return U
+end
 
 function _hydro_sweep!(dU, sim::Simulation, ::Val{D}, overwrite::Bool=false,
                        update=nothing) where {D}
@@ -683,8 +692,8 @@ sweeps, and, with `update`, the same stage of the field from `sim.mw.B0`
 function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T};
                     update=nothing) where {T}
     g = sim.grid
-    fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
-    has_mhd(sim) && fill_ghosts!(sim.B, sim.boundaries, g)
+    has_mhd(sim) && fill_ghosts!(sim.B, sim.boundaries, g)    # first: U's ghosts read them
+    _fill_gas_ghosts!(sim, U, sim.t)
     sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars;
                                              bfield=sim.B)
     sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars, sim.chemistry !== nothing)
@@ -766,8 +775,14 @@ function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
         # the stage `U = a U0 + b U + c dt dU` is formed in the last sweep
         hydro_rhs!(hw.dU, sim.U, sim; update=(T(a), hw.U0, T(b), T(c) * dt))
     end
-    # the ghost faces of the new field, for what reads it before the next stage
-    has_mhd(sim) && fill_ghosts!(sim.B, sim.boundaries, g)
+    # The ghosts of the new field and of the new gas state together: the magnetic
+    # energy of a ghost cell comes from its faces, so ghost cells left from the last
+    # stage beside new ghost faces would read as unphysical to enforce_state!, which
+    # sweeps the ghosts too, and be counted as repairs.
+    if has_mhd(sim)
+        fill_ghosts!(sim.B, sim.boundaries, g)
+        _fill_gas_ghosts!(sim, sim.U, sim.t)
+    end
     return sim
 end
 
@@ -780,7 +795,7 @@ end
 function _stage_chat!(sim::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Array{T,4},
                       dt::T, t::T) where {T}
     sim.radiation.wavespeed_correction || return nothing
-    fill_ghosts!(U, sim.boundaries, sim.grid, t; momentum_blocks=1)
+    _fill_gas_ghosts!(sim, U, t)
     update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors; bfield=sim.B)
     return nothing
 end
@@ -789,7 +804,7 @@ end
 # from the state that stage transports.
 function _stage_chiF!(sim::Simulation{T}, U::Array{T,4}, t::T) where {T}
     sim.radiation.wavespeed_correction || return nothing
-    fill_ghosts!(U, sim.boundaries, sim.grid, t; momentum_blocks=1)
+    _fill_gas_ghosts!(sim, U, t)
     update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors; bfield=sim.B)
     return nothing
 end
@@ -801,7 +816,7 @@ function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
     # step has a value on both sides of every interface bounding the domain.
     # `rad_rhs!` fills `R`'s ghosts again a moment later, which costs one
     # boundary sweep and keeps the ordering here independent of what it does.
-    fill_ghosts!(U, sim.boundaries, g, t; momentum_blocks=1)
+    _fill_gas_ghosts!(sim, U, t)
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
     update_chat!(sim.rw.chat, U, R, sim.eos, sim.radiation, g, sim.floors, dt;
                  update_momentum=sim.hydro_enabled, bfield=sim.B)
