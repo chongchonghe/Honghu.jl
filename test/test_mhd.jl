@@ -299,7 +299,7 @@ function brio_wu(D; n=64, nt=1, riemann=LLFMHD(), reconstruction=PLM(), integrat
 end
 
 @testset "CT keeps div b at round-off" begin
-    for riemann in (LLFMHD(),), reconstruction in (PCM(), PLM(), PPM()),
+    for riemann in (LLFMHD(), HLLD()), reconstruction in (PCM(), PLM(), PPM()),
         integrator in (ForwardEuler(), SSPRK2(), SSPRK3())
         sim = orszag_tang(n=32; riemann, reconstruction, integrator)
         for _ in 1:30
@@ -430,4 +430,110 @@ end
     e32, e64 = cpaw_1d(32), cpaw_1d(64)
     @test e64 < 0.015
     @test log2(e32 / e64) > 1.5
+end
+
+# --- HLLD ----------------------------------------------------------------------------
+
+@testset "HLLD" begin
+    gam = 5 / 3
+    cf(s, bx) = Honghu.fast_magnetosonic_speed(gam, s.rho, s.P, bx, s.by, s.bz)
+    # consistency, also with no normal field, where the Alfven waves merge with the contact
+    for (st, bx) in ((mhd_state(1.0, 0.3, -0.2, 0.1, 0.8, 0.5, -0.7, 0.9), 0.9),
+                     (mhd_state(0.4, -1.1, 0.6, 0.0, 2.0, 0.0, 1.3, -0.5), -0.5),
+                     (mhd_state(0.7, 0.2, 0.3, -0.4, 1.0, 0.8, 0.6, 0.0), 0.0))
+        F, am, ap = Honghu.mhd_flux(HLLD(), st, st, gam, bx, 0.0)
+        @test all(Tuple(F) .≈ mhd_physical_flux(st, bx))
+        @test am ≈ max(0.0, cf(st, bx) - st.u) && ap ≈ max(0.0, st.u + cf(st, bx))
+    end
+    # every wave moving right: the flux is the left state's
+    sL = mhd_state(1.0, 5.0, 0.1, -0.2, 1.0, 0.3, 0.2, 0.5)
+    sR = mhd_state(0.5, 5.0, 0.0, 0.1, 0.4, -0.3, 0.1, 0.5)
+    F, am, ap = Honghu.mhd_flux(HLLD(), sL, sR, gam, 0.5, 0.0)
+    @test all(Tuple(F) .≈ mhd_physical_flux(sL, 0.5)) && am == 0
+    # mirror symmetry, as for LLFMHD
+    sL = mhd_state(1.0, 0.4, 0.3, -0.2, 1.0, 1.0, 0.2, 0.75)
+    sR = mhd_state(0.125, -0.1, 0.0, 0.5, 0.1, -1.0, 0.4, 0.75)
+    mir(s) = HydroState(s.rho, -s.u, s.v, s.w, s.P, s.cs, s.E, s.by, s.bz)
+    F, am, ap = Honghu.mhd_flux(HLLD(), sL, sR, gam, 0.75, 0.0)
+    G, bm, bp = Honghu.mhd_flux(HLLD(), mir(sR), mir(sL), gam, -0.75, 0.0)
+    @test F[1] ≈ -G[1] && F[2] ≈ G[2] && F[3] ≈ -G[3] && F[4] ≈ -G[4] && F[5] ≈ -G[5]
+    @test (am, ap) == (bp, bm)
+    # a stationary contact: no mass or energy crosses it, and the momentum flux is the
+    # total pressure, for HLLD and not for LLFMHD
+    cL = mhd_state(1.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0)
+    cR = mhd_state(0.25, 0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0)
+    F, _, _ = Honghu.mhd_flux(HLLD(), cL, cR, gam, 1.0, 0.0)
+    @test abs(F[1]) < 1e-15 && abs(F[5]) < 1e-15
+    F, _, _ = Honghu.mhd_flux(LLFMHD(), cL, cR, gam, 1.0, 0.0)
+    @test abs(F[1]) > 0.1
+    @test Simulation(n=(8, 1, 1), mhd=true).riemann isa HLLD
+
+    # a stationary rotational discontinuity (rho = p = 1, u = c_A = 1, b_t turned by 90
+    # degrees, v_t jumping by sign(b_n) delta(b_t) / sqrt(rho)): HLLD's flux is the
+    # upwind physical flux, LLFMHD's is not. In a simulation the RD still smears, with
+    # either solver: constrained transport advances the field with the LD04 EMF, whose
+    # dissipation term alpha+ alpha- / (alpha+ + alpha-) (b_y^L - b_y^R) is not zero there.
+    rL = mhd_state(1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0)
+    rR = mhd_state(1.0, 1.0, -1.0, 1.0, 1.0, 0.0, 1.0, 1.0)
+    F, _, _ = Honghu.mhd_flux(HLLD(), rL, rR, gam, 1.0, 0.0)
+    @test all(isapprox.(Tuple(F), mhd_physical_flux(rL, 1.0); atol=1e-14))
+    @test all(isapprox.(Tuple(F), mhd_physical_flux(rR, 1.0); atol=1e-14))
+    F, _, _ = Honghu.mhd_flux(LLFMHD(), rL, rR, gam, 1.0, 0.0)
+    @test !isapprox(F[3], mhd_physical_flux(rL, 1.0)[3]; atol=1e-3)
+end
+
+# Isolated discontinuities that HLLD resolves and LLFMHD smears: the cells of the
+# profile `q` that are neither the left nor the right value after `nsteps` with PCM.
+function smeared_cells(ic, q; riemann, n=32, nsteps=40)
+    sim = Simulation(n=(n, 1, 1), mhd=true, riemann=riemann, reconstruction=PCM(),
+                     integrator=SSPRK2(), boundaries=Boundaries(Outflow()))
+    set_initial_conditions!(ic, sim)
+    for _ in 1:nsteps
+        step!(sim)
+    end
+    v = q(sim)
+    count(x -> !(isapprox(x, v[1]; rtol=1e-10) || isapprox(x, v[end]; rtol=1e-10)), v)
+end
+
+@testset "HLLD keeps an isolated contact sharp" begin
+    contact(x, y, z) = (rho=x < 0.5 ? 1.0 : 0.25, p=1.0, bx=1.0, by=0.5)
+    rho(sim) = interior(sim, sim.U)[1, :, 1, 1]
+    @test smeared_cells(contact, rho; riemann=HLLD()) == 0
+    @test smeared_cells(contact, rho; riemann=LLFMHD()) > 4
+end
+
+# Along one direction LD04 is the HLL flux of the transverse field: the reason an
+# isolated rotational discontinuity smears whatever the Riemann solver. In 1D the
+# edge EMF must be, to round-off, the HLL flux of b_y (for eps_z) and minus that of
+# b_z (for eps_y), (a+ F_L + a- F_R - a+ a- (b_R - b_L)) / (a+ + a-) with
+# F = u* b_t - b_x u_t, from the same reconstructed states and bounding speeds.
+@testset "LD04 is the HLL flux of b_t in 1D" begin
+    for recon in (PCM(), PLM(), PPM()), riemann in (HLLD(), LLFMHD())
+        sim = Simulation(n=(32, 1, 1), mhd=true, reconstruction=recon, riemann=riemann,
+                         boundaries=Boundaries(Periodic()))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=1.0 + 0.3sinpi(2x), p=0.5, vx=0.2, vy=0.4cospi(2x), vz=-0.1sinpi(4x),
+             bx=0.8, by=0.6sinpi(2x), bz=0.3cospi(2x))
+        end
+        for _ in 1:5
+            step!(sim)
+        end
+        Honghu.hydro_rhs!(sim.hw.dU, sim.U, sim)      # the face arrays and EMFs of this state
+        mw, B = sim.mw, sim.B
+        o = (1, 0, 0)
+        worst = 0.0
+        for i in sim.grid.lo[1]:(sim.grid.hi[1]+1)
+            am, ap = mw.fspd[1][1, i, 1, 1], mw.fspd[1][2, i, 1, 1]
+            us, bx = mw.ustar[1][1, i, 1, 1], B[1][1, i, 1, 1]
+            side(A) = (last(Honghu._recon_pair(recon, A, i - 1, 1, 1, o)),
+                       first(Honghu._recon_pair(recon, A, i, 1, 1, o)))
+            hll(bt, ut) = begin
+                FL, FR = us * bt[1] - bx * ut[1], us * bt[2] - bx * ut[2]
+                (ap * FL + am * FR - ap * am * (bt[2] - bt[1])) / (ap + am)
+            end
+            worst = max(worst, abs(mw.emf[3][1, i, 1, 1] - hll(side(B[2]), side(mw.ustar[2]))),
+                        abs(mw.emf[2][1, i, 1, 1] + hll(side(B[3]), side(mw.ustar[3]))))
+        end
+        @test worst < 1e-14
+    end
 end

@@ -245,7 +245,7 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     the M1 system is stiffer and the extra order buys less there. The
     ghost-cell width is taken from whichever needs more.
   - `riemann = HLLC()` : interface flux solver, [`HLLC`](@ref) or [`LLF`](@ref);
-    with `mhd = true` an MHD solver, [`LLFMHD`](@ref) by default.
+    with `mhd = true` an MHD solver, [`HLLD`](@ref) (the default) or [`LLFMHD`](@ref).
   - `integrator = SSPRK3()`  : explicit integrator for the hydro subsystem.
   - `boundaries = Boundaries(Outflow())`, `radiation_boundaries = boundaries`.
   - `cfl = 0.4`, `cfl_radiation = 0.3`.
@@ -324,7 +324,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     reconstruction::AbstractReconstruction=PPM(),
                     radiation_reconstruction::AbstractReconstruction=reconstruction,
                     mhd::Bool=false,
-                    riemann::AbstractRiemannSolver=mhd ? LLFMHD() : HLLC(),
+                    riemann::AbstractRiemannSolver=mhd ? HLLD() : HLLC(),
                     integrator::AbstractIntegrator=SSPRK3(),
                     boundaries::Boundaries=Boundaries(Outflow()),
                     radiation_boundaries::Boundaries=boundaries,
@@ -343,7 +343,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
         throw(ArgumentError("MHD needs PCM, PLM or PPM reconstruction, got " *
                             "$(nameof(typeof(reconstruction)))"))
     mhd == (riemann isa AbstractMHDRiemannSolver) ||
-        throw(ArgumentError(mhd ? "mhd = true needs an MHD Riemann solver (LLFMHD), got " *
+        throw(ArgumentError(mhd ? "mhd = true needs an MHD Riemann solver (HLLD or LLFMHD), got " *
                                   "$(nameof(typeof(riemann)))" :
                             "$(nameof(typeof(riemann))) is an MHD Riemann solver: pass mhd = true"))
     nscalars = chemistry === nothing ? Int(nscalars) : nspecies(chemistry.network)
