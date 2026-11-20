@@ -100,6 +100,14 @@ Volume of one cell (inactive directions contribute their full box extent).
 end
 
 """
+    interior_box(grid)
+
+The interior cells as a box `(irange, jrange, krange)`, the form
+[`launch!`](@ref) takes.
+"""
+@inline interior_box(g::CartesianGrid) = (g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3])
+
+"""
     boxsize(grid)
 
 Physical extent `(Lx, Ly, Lz)` of the domain.

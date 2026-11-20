@@ -248,29 +248,25 @@ function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
     act1 = g.active[_tdir1(Val(D))]
     act2 = g.active[_tdir2(Val(D))]
     gam = T(adiabatic_index(eos))
-    ir, jr, kr = face_ranges(g, Val(D))
-
-    threaded_jk(jr, kr) do j, k
-        _hydro_flux_row!(flux, qL, qR, prim, eos, solver, Val(D), gam, act1, act2,
-                         ir, j, k, nscalars)
-    end
+    launch!(CPUThreads(), face_ranges(g, Val(D)), _hydro_flux_cell!, flux, qL, qR, prim,
+            eos, solver, Val(D), gam, act1, act2, Int(nscalars))
     return nothing
 end
 
-# The body of `hydro_fluxes!` for the faces `ir` at `(j, k)`, shared with the tiled
-# sweep. `qL`, `qR` and `flux` may be tile-local; `prim` is always the whole grid,
-# because the fallback and the carbuncle inputs read cell-centred neighbours.
-@inline function _hydro_flux_row!(flux, qL, qR, prim, eos::AbstractEOS,
-                                  solver::AbstractRiemannSolver, ::Val{D}, gam::T,
-                                  act1::Bool, act2::Bool, ir, j, k,
-                                  nscalars::Integer) where {D,T}
+# The body of `hydro_fluxes!` for the face `(i, j, k)`, a kernel for
+# [`launch!`](@ref) shared with the sweep driver. `qL`, `qR` and `flux` may be
+# tile-local; `prim` always spans the whole grid, because the fallback and the
+# carbuncle inputs read cell-centred neighbours.
+@inline function _hydro_flux_cell!(i, j, k, flux, qL, qR, prim, eos::AbstractEOS,
+                                   solver::AbstractRiemannSolver, ::Val{D}, gam::T,
+                                   act1::Bool, act2::Bool, nscalars::Int) where {D,T}
     e1, e2, e3 = _shift(Val(D))
     s1 = _tshift1(Val(D))
     s2 = _tshift2(Val(D))
     iu = D + 1                    # normal velocity/momentum slot
     iv = _tdir1(Val(D)) + 1       # first transverse slot
     iw = _tdir2(Val(D)) + 1       # second transverse slot
-    @inbounds for i in ir
+    @inbounds begin
         im, jm, km = i - e1, j - e2, k - e3   # cell on the low side of the face
 
         rhoL = qL[IRHO, i, j, k]
@@ -371,39 +367,41 @@ the sign of an exact zero, which no comparison sees.
 function flux_divergence!(dU::A, flux::A, ::Val{D}, g::CartesianGrid{T},
                           nvar::Int, overwrite::Bool=false,
                           update=nothing) where {T,A<:AbstractArray{T,4},D}
-    invdx = one(T) / g.dx[D]
-    ir = g.lo[1]:g.hi[1]
-    jr = g.lo[2]:g.hi[2]
-    kr = g.lo[3]:g.hi[3]
-    threaded_jk(jr, kr) do j, k
-        _divergence_row!(dU, flux, Val(D), invdx, ir, j, k, nvar, overwrite, update)
-    end
+    _flux_divergence!(CPUThreads(), interior_box(g), dU, flux, Val(D), one(T) / g.dx[D],
+                      nvar, Val(overwrite), update)
     return nothing
 end
 
-# The body of `flux_divergence!` for the cells `ir` at `(j, k)`, shared with the
-# tiled sweep, where `flux` is tile-local and `dU` the whole grid.
-@inline function _divergence_row!(dU, flux, ::Val{D}, invdx, ir, j, k, nvar,
-                                  overwrite::Bool, update::Tuple) where {D}
+# Past the function barrier `overwrite` is a type, so a kernel never tests it.
+function _flux_divergence!(backend::AbstractBackend, box, dU, flux, ::Val{D}, invdx, nvar,
+                           ow::Val, update) where {D}
+    launch!(backend, box, _divergence_cell!, dU, flux, Val(D), invdx, nvar, ow, update)
+    return nothing
+end
+
+# The body of `flux_divergence!` for the cell `(i, j, k)`, a kernel for
+# [`launch!`](@ref) shared with the sweep driver, where `flux` may be tile-local.
+# `Val(true)` overwrites `dU`, `Val(false)` subtracts from it; with an `update`
+# tuple the result goes into the Runge-Kutta stage instead.
+@inline function _divergence_cell!(i, j, k, dU, flux, ::Val{D}, invdx, nvar, ::Val{OW},
+                                   update::Tuple) where {D,OW}
     e1, e2, e3 = _shift(Val(D))
     a, U0, b, U, c = update
-    @inbounds for i in ir, n in 1:nvar
-        d = overwrite ? -(invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])) :
+    @inbounds for n in 1:nvar
+        d = OW ? -(invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])) :
             dU[n, i, j, k] - invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])
         U[n, i, j, k] = a * U0[n, i, j, k] + b * U[n, i, j, k] + c * d
     end
     return nothing
 end
 
-@inline function _divergence_row!(dU, flux, ::Val{D}, invdx, ir, j, k, nvar,
-                                  overwrite::Bool, ::Nothing=nothing) where {D}
+@inline function _divergence_cell!(i, j, k, dU, flux, ::Val{D}, invdx, nvar, ::Val{OW},
+                                   ::Nothing) where {D,OW}
     e1, e2, e3 = _shift(Val(D))
-    if overwrite
-        @inbounds for i in ir, n in 1:nvar
+    @inbounds for n in 1:nvar
+        if OW
             dU[n, i, j, k] = -(invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k]))
-        end
-    else
-        @inbounds for i in ir, n in 1:nvar
+        else
             dU[n, i, j, k] -= invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])
         end
     end

@@ -175,9 +175,10 @@ function hydro_sweep_tiled!(dU::Array{T,4}, prim::Array{T,4}, tiles::HydroTiles{
     act1 = g.active[_tdir1(Val(D))]
     act2 = g.active[_tdir2(Val(D))]
     invdx = one(T) / g.dx[D]
+    ow = Val(overwrite)                 # a type from here on, so no kernel tests it
     if nch <= 1
         _sweep_chunk!(dU, prim, tiles, 1, 1, recon, eos, solver, Val(D), g, gam, act1, act2,
-                      invdx, nvar, nscalars, overwrite, update)
+                      invdx, nvar, nscalars, ow, update)
     else
         # Each task picks its scratch and its boxes from its chunk number `c`, the
         # loop variable, which is a fresh binding per iteration. Destructuring the
@@ -185,27 +186,26 @@ function hydro_sweep_tiled!(dU::Array{T,4}, prim::Array{T,4}, tiles::HydroTiles{
         # and box them, and the tasks would share one scratch.
         @sync for c in 1:nch
             Threads.@spawn _sweep_chunk!(dU, prim, tiles, c, nch, recon, eos, solver, Val(D),
-                                         g, gam, act1, act2, invdx, nvar, nscalars, overwrite,
-                                         update)
+                                         g, gam, act1, act2, invdx, nvar, nscalars, ow, update)
         end
     end
     return nothing
 end
 
 function _sweep_chunk!(dU, prim, tiles::HydroTiles, c::Int, nch::Int, recon, eos, solver,
-                       ::Val{D}, g, gam, act1, act2, invdx, nvar, nscalars, overwrite,
+                       ::Val{D}, g, gam, act1, act2, invdx, nvar, nscalars, ow::Val,
                        update) where {D}
     qL, qR, fl = tiles.scratch[c]
     boxes = tiles.boxes[D]
     _sweep_boxes!(dU, prim, qL, qR, fl, tiles.dims[D], boxes, _chunk(length(boxes), nch, c),
                   recon, eos, solver, Val(D), g, gam, act1, act2, invdx, nvar, nscalars,
-                  overwrite, update)
+                  ow, update)
     return nothing
 end
 
 function _sweep_boxes!(dU, prim, qL::V, qR::V, fl::V, dims, boxes, r, recon, eos,
                        solver, ::Val{D}, g, gam, act1, act2, invdx, nvar, nscalars,
-                       overwrite, update) where {V,D}
+                       ow::Val, update) where {V,D}
     for b in r
         box = boxes[b]
         off = ntuple(d -> d == D ? g.lo[d] - 2 : first(box[d]) - 1, Val(3))
@@ -214,18 +214,13 @@ function _sweep_boxes!(dU, prim, qL::V, qR::V, fl::V, dims, boxes, r, recon, eos
         tF = TileArray(fl, dims, off)
         # cells extended by one along D, as `cell_ranges` does for the whole grid
         cr = ntuple(d -> d == D ? ((first(box[d]) - 1):(last(box[d]) + 1)) : box[d], Val(3))
-        for k in cr[3], j in cr[2]
-            _reconstruct_row!(tL, tR, prim, recon, Val(D), cr[1], j, k, nvar)
-        end
+        launch!(CPUSerial(), cr, _reconstruct_cell!, tL, tR, prim, recon, Val(D), nvar)
         # faces lo:hi+1 along D, as `face_ranges` does
         fr = ntuple(d -> d == D ? (first(box[d]):(last(box[d]) + 1)) : box[d], Val(3))
-        for k in fr[3], j in fr[2]
-            _hydro_flux_row!(tF, tL, tR, prim, eos, solver, Val(D), gam, act1, act2,
-                             fr[1], j, k, nscalars)
-        end
-        for k in box[3], j in box[2]
-            _divergence_row!(dU, tF, Val(D), invdx, box[1], j, k, nvar, overwrite, update)
-        end
+        launch!(CPUSerial(), fr, _hydro_flux_cell!, tF, tL, tR, prim, eos, solver, Val(D), gam,
+                act1, act2, nscalars)
+        launch!(CPUSerial(), box, _divergence_cell!, dU, tF, Val(D), invdx, nvar,
+                ow, update)
     end
     return nothing
 end
