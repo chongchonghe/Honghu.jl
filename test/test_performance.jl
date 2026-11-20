@@ -97,6 +97,17 @@ end
                                                              rad, g, 1e-3, nothing, 0.0,
                                                              sim.floors; bfield=B), sim) < LIMIT
     @test bytes_per_cell(() -> Honghu.fill_ghosts!(B, sim.boundaries, g), sim) < LIMIT
+
+    # the CT stage: the sweeps with their face arrays, the EMFs and the induction
+    Honghu.mhd_prepare!(sim)
+    @test bytes_per_cell(() -> Honghu.mhd_prepare!(sim), sim) < LIMIT
+    for D in 1:3
+        @test bytes_per_cell(() -> Honghu._hydro_sweep!(hw.dU, sim, Val(D), D == 1), sim) < LIMIT
+    end
+    foreach(d -> copyto!(sim.mw.B0[d], B[d]), 1:3)        # as advance_hydro! does
+    upd = (0.5, nothing, 0.5, 1e-4)
+    @test bytes_per_cell(() -> Honghu.constrained_transport!(sim, upd), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.hydro_rhs!(hw.dU, sim.U, sim), sim) < LIMIT
 end
 
 @testset "radiation kernels do not allocate per cell" begin

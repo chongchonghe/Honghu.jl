@@ -108,6 +108,7 @@ include("riemann/llf_mhd.jl")
 include("riemann_radiation.jl")
 include("hydro_system.jl")
 include("tiling.jl")             # the cache-blocked hydro sweep, on the kernels above
+include("mhd_system.jl")         # constrained transport: the MHD sweep, the EMFs, the induction
 include("radiation_system.jl")
 include("source_terms.jl")
 include("chemistry.jl")            # per-cell chemical network interface

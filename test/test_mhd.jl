@@ -17,6 +17,10 @@ function eint_field(sim)
      end for i in g.lo[1]:g.hi[1], j in g.lo[2]:g.hi[2], k in g.lo[3]:g.hi[3]]
 end
 
+# The interior of a state array: an MHD grid has more ghost cells than a plain one.
+interior(sim, A) = A[:, sim.grid.lo[1]:sim.grid.hi[1], sim.grid.lo[2]:sim.grid.hi[2],
+                     sim.grid.lo[3]:sim.grid.hi[3]]
+
 # A smooth periodic vector potential with every component varying in every direction.
 mhd_potential(x, y, z) = (0.1 * sinpi(2y) * cospi(2z), 0.1 * sinpi(2z) * cospi(2x),
                           0.1 * sinpi(2x) * cospi(2y))
@@ -169,8 +173,8 @@ end
             step!(b, dt)
         end
         @test eint_field(b) ≈ eint_field(a) rtol = 1e-12
-        @test b.R ≈ a.R rtol = 1e-12
-        @test b.U[2:4, :, :, :] ≈ a.U[2:4, :, :, :] rtol = 1e-12
+        @test interior(b, b.R) ≈ interior(a, a.R) rtol = 1e-12
+        @test interior(b, b.U)[2:4, :, :, :] ≈ interior(a, a.U)[2:4, :, :, :] rtol = 1e-12
         @test gas_temperature(b) ≈ gas_temperature(a) rtol = 1e-12
     end
 end
@@ -194,7 +198,7 @@ end
     end
     @test a.diag.chem_cells > 0
     @test eint_field(b) ≈ eint_field(a) rtol = 1e-12
-    @test b.U[6:end, :, :, :] ≈ a.U[6:end, :, :, :] rtol = 1e-12
+    @test interior(b, b.U)[6:end, :, :, :] ≈ interior(a, a.U)[6:end, :, :, :] rtol = 1e-12
     @test gas_temperature(b) ≈ gas_temperature(a) rtol = 1e-12
 end
 
@@ -255,4 +259,175 @@ end
     @test Simulation(n=(8, 1, 1), mhd=true).riemann isa Honghu.AbstractMHDRiemannSolver
     @test_throws ArgumentError Simulation(n=(8, 1, 1), mhd=true, riemann=HLLC())
     @test_throws ArgumentError Simulation(n=(8, 1, 1), riemann=LLFMHD())
+end
+
+# --- constrained transport ---------------------------------------------------------
+
+# Orszag-Tang, in a box with `n` cells along x and y and `nz` along z (a thin
+# periodic 3D box when nz > 1). Each field component varies only across its own
+# direction, so the keys set it divergence-free.
+function orszag_tang(; n=32, nz=1, riemann=LLFMHD(), reconstruction=PPM(), integrator=SSPRK2())
+    sim = Simulation(n=(n, n, nz), mhd=true, riemann=riemann, reconstruction=reconstruction,
+                     integrator=integrator, eos=IdealGas(gamma=5 / 3),
+                     boundaries=Boundaries(Periodic()))
+    b0 = 1 / sqrt(4pi)
+    set_initial_conditions!(sim) do x, y, z
+        (rho=25 / (36pi), p=5 / (12pi), vx=-sinpi(2y), vy=sinpi(2x),
+         bx=-b0 * sinpi(2y), by=b0 * sinpi(4x))
+    end
+    sim
+end
+
+# Brio & Wu (1988) along direction D, with the transverse field in the first
+# transverse direction of the canonical order (y for x, z for y, x for z). `nt`
+# cells across, periodic there.
+function brio_wu(D; n=64, nt=1, riemann=LLFMHD(), reconstruction=PLM(), integrator=SSPRK2())
+    nn = ntuple(d -> d == D ? n : nt, 3)
+    t1 = mod1(D + 1, 3)
+    sim = Simulation(n=nn, mhd=true, riemann=riemann, reconstruction=reconstruction,
+                     integrator=integrator, eos=IdealGas(gamma=2.0),
+                     boundaries=Boundaries(ntuple(d -> d == D ? (Outflow(), Outflow()) :
+                                                       (Periodic(), Periodic()), 3)...))
+    key = (:bx, :by, :bz)
+    set_initial_conditions!(sim) do x, y, z
+        s = (x, y, z)[D]
+        left = s < 0.5
+        NamedTuple{(:rho, :p, key[D], key[t1])}((left ? 1.0 : 0.125, left ? 1.0 : 0.1, 0.75,
+                                                  left ? 1.0 : -1.0))
+    end
+    sim
+end
+
+@testset "CT keeps div b at round-off" begin
+    for riemann in (LLFMHD(),), reconstruction in (PCM(), PLM(), PPM()),
+        integrator in (ForwardEuler(), SSPRK2(), SSPRK3())
+        sim = orszag_tang(n=32; riemann, reconstruction, integrator)
+        for _ in 1:30
+            step!(sim)
+        end
+        @test divb_norm(sim) < 1e-13
+        @test nrepaired(sim) == 0
+    end
+    # 3D, every component varying in every direction
+    sim = Simulation(n=(12, 10, 8), mhd=true, boundaries=Boundaries(Periodic()), integrator=SSPRK2())
+    set_initial_conditions!(sim; vector_potential=mhd_potential) do x, y, z
+        (rho=1.0 + 0.2sinpi(2x) * cospi(2z), vx=0.3sinpi(2y), vy=-0.2, vz=0.1cospi(2x), p=1.0, bx=0.2)
+    end
+    for _ in 1:20
+        step!(sim)
+    end
+    @test divb_norm(sim) < 1e-13
+end
+
+@testset "MHD conservation on a periodic box" begin
+    sim = orszag_tang(n=32)
+    t0 = conserved_totals(sim)
+    for _ in 1:20
+        step!(sim)
+    end
+    t1 = conserved_totals(sim)
+    @test t1.mass ≈ t0.mass rtol = 1e-13
+    @test all(abs.(t1.momentum .- t0.momentum) .< 1e-13 * t0.mass)
+    @test t1.energy_gas ≈ t0.energy_gas rtol = 1e-13
+end
+
+@testset "MHD preserves a uniform oblique state" begin
+    for n in ((8, 1, 1), (8, 6, 1), (6, 6, 6))
+        sim = Simulation(n=n, mhd=true, boundaries=Boundaries(Periodic()))
+        set_initial_conditions!(sim) do x, y, z
+            (rho=1.3, vx=0.4, vy=-0.3, vz=0.2, p=0.9, bx=0.5, by=-0.6, bz=0.7)
+        end
+        U0 = copy(sim.U)
+        B0 = deepcopy(sim.B.b)
+        for _ in 1:10
+            step!(sim)
+        end
+        @test interior(sim, sim.U) ≈ interior(sim, U0) rtol = 1e-14
+        @test all(maximum(abs, sim.B[d] .- B0[d]) < 1e-15 for d in 1:3)
+    end
+end
+
+@testset "periodic face images stay bitwise equal" begin
+    sim = orszag_tang(n=24)
+    for _ in 1:25
+        step!(sim)
+    end
+    g = sim.grid
+    @test sim.B[1][:, g.hi[1]+1, :, :] == sim.B[1][:, g.lo[1], :, :]
+    @test sim.B[2][:, :, g.hi[2]+1, :] == sim.B[2][:, :, g.lo[2], :]
+end
+
+@testset "MHD shock tube along x, y and z" begin
+    # density, pressure, normal velocity and transverse field along the tube
+    function line(sim, D)
+        g = sim.grid
+        t1 = mod1(D + 1, 3)
+        idx(m) = ntuple(d -> d == D ? g.lo[d] + m - 1 : g.lo[d], 3)
+        [(sim.U[1, idx(m)...], primitives(sim)[IPRE, ntuple(d -> d == D ? m : 1, 3)...],
+          sim.U[D+1, idx(m)...], Honghu.cell_centred_field(sim.B, t1, idx(m)...)) for m in 1:g.n[D]]
+    end
+    lines = map(1:3) do D
+        sim = brio_wu(D; n=64)
+        run!(sim; tmax=0.08, verbose=false)
+        @test nrepaired(sim) == 0
+        line(sim, D)
+    end
+    for D in 2:3, q in 1:4
+        @test getindex.(lines[D], q) ≈ getindex.(lines[1], q) rtol = 1e-13
+    end
+end
+
+@testset "inactive directions equal a thin periodic 3D box" begin
+    # 1D: Brio-Wu, against the same tube 4 cells wide, periodic across
+    for recon in (PLM(), PPM())
+        a = brio_wu(1; n=64, reconstruction=recon)
+        b = brio_wu(1; n=64, nt=4, reconstruction=recon)
+        for _ in 1:20
+            dt = timestep(a)
+            step!(a, dt)
+            step!(b, dt)
+        end
+        pa, pb = primitives(a), primitives(b)
+        for j in 1:4, k in 1:4
+            @test pb[:, :, j, k] ≈ pa[:, :, 1, 1] rtol = 1e-12
+        end
+        by_a = [Honghu.cell_centred_field(a.B, 2, i, 1, 1) for i in a.grid.lo[1]:a.grid.hi[1]]
+        by_b = [Honghu.cell_centred_field(b.B, 2, i, b.grid.lo[2], b.grid.lo[3]) for i in b.grid.lo[1]:b.grid.hi[1]]
+        @test by_b ≈ by_a rtol = 1e-12
+    end
+    # 2D: Orszag-Tang, against the same problem 4 cells deep
+    a = orszag_tang(n=24)
+    b = orszag_tang(n=24, nz=4)
+    for _ in 1:15
+        dt = timestep(a)
+        step!(a, dt)
+        step!(b, dt)
+    end
+    pa, pb = primitives(a), primitives(b)
+    for k in 1:4
+        @test pb[:, :, :, k] ≈ pa[:, :, :, 1] rtol = 1e-12
+    end
+end
+
+# A circularly polarised Alfven wave along x (Toth 2000), an exact nonlinear solution
+# with b_par = 1 and rho = 1, so v_A = 1 and one period is t = 1. Returns the L1
+# error of b_y after one period, relative to its L1 norm.
+function cpaw_1d(n; reconstruction=PLM(), riemann=LLFMHD())
+    sim = Simulation(n=(n, 1, 1), mhd=true, reconstruction=reconstruction, riemann=riemann,
+                     integrator=SSPRK2(), boundaries=Boundaries(Periodic()))
+    A = 0.1
+    set_initial_conditions!(sim) do x, y, z
+        (rho=1.0, p=0.1, vy=-A * sinpi(2x), vz=-A * cospi(2x), bx=1.0, by=A * sinpi(2x),
+         bz=A * cospi(2x))
+    end
+    by(s) = [Honghu.cell_centred_field(s.B, 2, i, 1, 1) for i in s.grid.lo[1]:s.grid.hi[1]]
+    b0 = by(sim)
+    run!(sim, tmax=1.0, verbose=false)
+    return sum(abs, by(sim) .- b0) / sum(abs, b0)
+end
+
+@testset "a 1D Alfven wave comes back after one period" begin
+    e32, e64 = cpaw_1d(32), cpaw_1d(64)
+    @test e64 < 0.015
+    @test log2(e32 / e64) > 1.5
 end

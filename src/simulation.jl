@@ -282,7 +282,7 @@ run!(sim, tmax = 0.5)
 """
 mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
                           RR<:AbstractReconstruction,RS<:AbstractRiemannSolver,
-                          IN<:AbstractIntegrator,BH,BR,SRC,SS,CH,RW,CW,MB}
+                          IN<:AbstractIntegrator,BH,BR,SRC,SS,CH,RW,CW,MB,MW}
     const grid::CartesianGrid{T}
     const eos::E
     const radiation::RP
@@ -307,6 +307,7 @@ mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
     const hw::HydroWorkspace{T}
     const rw::RW
     const cw::CW
+    const mw::MW
     const diag::Diagnostics
     t::T
     dt::T
@@ -338,13 +339,19 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     nscalars >= 0 || throw(ArgumentError("nscalars must be non-negative, got $nscalars"))
     chemistry === nothing || _check_chemistry(chemistry, radiation, eos, nscalars, T)
     mhd && check_mhd_boundaries(boundaries)
+    mhd && !(reconstruction isa Union{PCM,PLM,PPM}) &&
+        throw(ArgumentError("MHD needs PCM, PLM or PPM reconstruction, got " *
+                            "$(nameof(typeof(reconstruction)))"))
     mhd == (riemann isa AbstractMHDRiemannSolver) ||
         throw(ArgumentError(mhd ? "mhd = true needs an MHD Riemann solver (LLFMHD), got " *
                                   "$(nameof(typeof(riemann)))" :
                             "$(nameof(typeof(riemann))) is an MHD Riemann solver: pass mhd = true"))
     nscalars = chemistry === nothing ? Int(nscalars) : nspecies(chemistry.network)
+    # MHD solves Riemann problems `mhd_riemann_ghosts` rows into the ghosts, and the
+    # carbuncle input of the outermost reads one cell further.
     ng = max(required_ghosts(reconstruction),
-             radiation === nothing ? 0 : required_ghosts(radiation_reconstruction))
+             radiation === nothing ? 0 : required_ghosts(radiation_reconstruction),
+             mhd ? mhd_riemann_ghosts(reconstruction) + 1 : 0)
     grid = CartesianGrid(; n, xlo, xhi, nghost=ng, T)
     nvar = NHYDRO + nscalars
     U = allocate(grid, nvar)
@@ -361,11 +368,14 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     cw = chemistry === nothing ? nothing :
          chem_row_workspaces(chemistry, T, grid.n[2] * grid.n[3])
     B = mhd ? MagneticField(grid) : nothing
+    mw = mhd ? MHDWorkspace(grid, B) : nothing
+    # the MHD sweep is untiled: its faces reach into the ghost rows across it
+    mhd && (tile = nothing)
     Simulation(grid, eos, radiation, reconstruction, radiation_reconstruction,
                riemann, integrator, boundaries,
                radiation_boundaries, source, strang_sources, chemistry, fl, T(cfl),
                T(cfl_radiation), Int(max_radiation_substeps), hydro, Int(nscalars), U, Rarr, B,
-               HydroWorkspace(grid, nvar; tile=hydro ? _resolve_tile(tile, grid) : nothing), rw, cw, Diagnostics(), zero(T), zero(T), 0)
+               HydroWorkspace(grid, nvar; tile=hydro ? _resolve_tile(tile, grid) : nothing), rw, cw, mw, Diagnostics(), zero(T), zero(T), 0)
 end
 
 # What a chemistry run needs of the rest of the simulation (see `Photochemistry`): the
@@ -642,6 +652,11 @@ end
 
 function _hydro_sweep!(dU, sim::Simulation, ::Val{D}, overwrite::Bool=false,
                        update=nothing) where {D}
+    if has_mhd(sim)
+        overwrite ? _mhd_sweep!(dU, sim, Val(D), Val(true), update) :
+        _mhd_sweep!(dU, sim, Val(D), Val(false), update)
+        return nothing
+    end
     hw = sim.hw
     hydro_sweep!(dU, hw.prim, (hw.qL, hw.qR, hw.flux), sim.reconstruction, sim.eos,
                  sim.riemann, Val(D), sim.grid, nhydrovars(sim), sim.nscalars, overwrite,
@@ -660,15 +675,21 @@ With `update = (a, U0, b, c)` it takes the Runge-Kutta stage as well,
 `U = a U0 + b U + c dU` over the interior, in the last sweep (see
 [`flux_divergence!`](@ref)), and leaves `dU` incomplete: what `combine!` would
 then do, without the pass over four whole arrays.
+
+With MHD the stage also fills the ghost faces of `sim.B`, takes the EMFs after the
+sweeps, and, with `update`, the same stage of the field from `sim.mw.B0`
+([`constrained_transport!`](@ref)).
 """
 function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T};
                     update=nothing) where {T}
     g = sim.grid
     fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
+    has_mhd(sim) && fill_ghosts!(sim.B, sim.boundaries, g)
     sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars;
                                              bfield=sim.B)
     sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars, sim.chemistry !== nothing)
     cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars; bfield=sim.B)
+    has_mhd(sim) && mhd_prepare!(sim)
     # The first active direction overwrites `dU` rather than adding to it, which
     # saves zeroing it first. Only the interior of `dU` is written or read.
     dfirst = findfirst(g.active)
@@ -682,6 +703,7 @@ function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T};
     g.active[1] && _hydro_sweep!(dU, sim, Val(1), dfirst == 1, dlast == 1 ? upd : nothing)
     g.active[2] && _hydro_sweep!(dU, sim, Val(2), dfirst == 2, dlast == 2 ? upd : nothing)
     g.active[3] && _hydro_sweep!(dU, sim, Val(3), dfirst == 3, dlast == 3 ? upd : nothing)
+    has_mhd(sim) && constrained_transport!(sim, update)
     return dU
 end
 
@@ -732,14 +754,20 @@ end
 One explicit SSP-RK step of the Euler equations.
 """
 function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
-    has_mhd(sim) && error("the MHD hydrodynamic step is not implemented yet")
     g = sim.grid
     hw = sim.hw
     threaded_copyto!(hw.U0, sim.U)
+    if has_mhd(sim)
+        for d in 1:3
+            threaded_copyto!(sim.mw.B0[d], sim.B.b[d])
+        end
+    end
     for (a, b, c) in tableau(sim.integrator)
         # the stage `U = a U0 + b U + c dt dU` is formed in the last sweep
         hydro_rhs!(hw.dU, sim.U, sim; update=(T(a), hw.U0, T(b), T(c) * dt))
     end
+    # the ghost faces of the new field, for what reads it before the next stage
+    has_mhd(sim) && fill_ghosts!(sim.B, sim.boundaries, g)
     return sim
 end
 

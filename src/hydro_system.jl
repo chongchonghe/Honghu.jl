@@ -315,22 +315,7 @@ end
         # jump in normal velocity, and the smallest transverse velocity
         # difference in the two adjoining cells (carbuncle correction)
         du = prim[iu, i, j, k] - prim[iu, im, jm, km]
-        dw = T(Inf)
-        if act1
-            a = prim[iv, im+s1[1], jm+s1[2], km+s1[3]] - prim[iv, im, jm, km]
-            b = prim[iv, im, jm, km] - prim[iv, im-s1[1], jm-s1[2], km-s1[3]]
-            c = prim[iv, i+s1[1], j+s1[2], k+s1[3]] - prim[iv, i, j, k]
-            d = prim[iv, i, j, k] - prim[iv, i-s1[1], j-s1[2], k-s1[3]]
-            dw = min(dw, min(a, b), min(c, d))
-        end
-        if act2
-            a = prim[iw, im+s2[1], jm+s2[2], km+s2[3]] - prim[iw, im, jm, km]
-            b = prim[iw, im, jm, km] - prim[iw, im-s2[1], jm-s2[2], km-s2[3]]
-            c = prim[iw, i+s2[1], j+s2[2], k+s2[3]] - prim[iw, i, j, k]
-            d = prim[iw, i, j, k] - prim[iw, i-s2[1], j-s2[2], k-s2[3]]
-            dw = min(dw, min(a, b), min(c, d))
-        end
-        isfinite(dw) || (dw = zero(T))
+        dw = _transverse_jump(prim, i, j, k, im, jm, km, iv, iw, s1, s2, act1, act2)
 
         sL = HydroState(rhoL, uL, vL, wL, pL, csL, EL)
         sR = HydroState(rhoR, uR, vR, wR, pR, csR, ER)
@@ -351,6 +336,34 @@ end
         end
     end
     return nothing
+end
+
+# The carbuncle input `dw` of the face between cells `(im, jm, km)` and `(i, j, k)`: the
+# smallest transverse velocity difference in the two cells, over the active transverse
+# directions (steps `s1`, `s2`, velocity rows `iv`, `iw`), or zero where there is none.
+# Quokka's `dw` of `ComputeFluxes`, shared by the hydrodynamic and the MHD sweep.
+@inline function _transverse_jump(prim, i, j, k, im, jm, km, iv, iw, s1, s2, act1::Bool,
+                                  act2::Bool)
+    T = eltype(prim)
+    dw = T(Inf)
+    @inbounds begin
+        if act1
+            a = prim[iv, im+s1[1], jm+s1[2], km+s1[3]] - prim[iv, im, jm, km]
+            b = prim[iv, im, jm, km] - prim[iv, im-s1[1], jm-s1[2], km-s1[3]]
+            c = prim[iv, i+s1[1], j+s1[2], k+s1[3]] - prim[iv, i, j, k]
+            d = prim[iv, i, j, k] - prim[iv, i-s1[1], j-s1[2], k-s1[3]]
+            dw = min(dw, min(a, b), min(c, d))
+        end
+        if act2
+            a = prim[iw, im+s2[1], jm+s2[2], km+s2[3]] - prim[iw, im, jm, km]
+            b = prim[iw, im, jm, km] - prim[iw, im-s2[1], jm-s2[2], km-s2[3]]
+            c = prim[iw, i+s2[1], j+s2[2], k+s2[3]] - prim[iw, i, j, k]
+            d = prim[iw, i, j, k] - prim[iw, i-s2[1], j-s2[2], k-s2[3]]
+            dw = min(dw, min(a, b), min(c, d))
+        end
+    end
+    isfinite(dw) || (dw = zero(T))
+    return dw
 end
 
 """
