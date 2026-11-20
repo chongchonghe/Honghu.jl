@@ -34,6 +34,7 @@ const PAGES = [
     "hydro" => ("Hydrodynamics",
                 ["eos.jl", "hydro_system.jl", "tiling.jl", "limiters.jl", "reconstruction.jl",
                  "riemann/"]),
+    "mhd" => ("Magnetohydrodynamics", ["magnetic_field.jl"]),
     "radiation" => ("Radiation transport",
                     ["radiation_system.jl", "riemann_radiation.jl", "planck.jl", "opacity.jl"]),
     "rsla" => ("Reduced speed of light", ["rsla.jl"]),

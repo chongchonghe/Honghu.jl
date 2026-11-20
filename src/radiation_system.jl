@@ -248,7 +248,7 @@ function amend_rad_state!(R::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
 end
 
 """
-    floor_rad_energy!(R, U, chat, phys, grid, floors) -> Int
+    floor_rad_energy!(R, U, chat, phys, grid, floors; bfield = nothing) -> Int
 
 Hand the transport stage's radiation state to the implicit coupling solve
 unchanged where the solve can absorb it, and floor the radiation energy only
@@ -274,7 +274,7 @@ before; the full repair, [`amend_rad_state!`](@ref), runs after the solve.
 """
 function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
                            chat::AbstractArray{T,4}, phys::RadiationPhysics{NG,M,T},
-                           g::CartesianGrid{T}, floors::Floors{T}) where {NG,M,T}
+                           g::CartesianGrid{T}, floors::Floors{T}; bfield=nothing) where {NG,M,T}
     ef = floors.erad / NG
     c = phys.c
     nbad = Threads.Atomic{Int}(0)
@@ -283,7 +283,8 @@ function floor_rad_energy!(R::AbstractArray{T,4}, U::AbstractArray{T,4},
         @inbounds for i in g.lo[1]:g.hi[1]
             rho = U[IRHO, i, j, k]
             mx, my, mz = U[IMX, i, j, k], U[IMY, i, j, k], U[IMZ, i, j, k]
-            budget = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
+            budget = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho) -
+                     magnetic_energy(bfield, i, j, k)
             low = false
             for gr in 1:NG
                 er = R[gbase(gr)+IERAD, i, j, k]
@@ -592,7 +593,7 @@ bounded as if it beamed along every axis at once.
 end
 
 """
-    update_chiF!(chiF, U, eos, phys, grid, floors)
+    update_chiF!(chiF, U, eos, phys, grid, floors; bfield = nothing)
 
 Fill the per-cell, per-group flux absorption coefficient `rho kappa_F` over the
 whole array including ghost cells, for the wave-speed correction of
@@ -600,7 +601,7 @@ whole array including ghost cells, for the wave-speed correction of
 """
 function update_chiF!(chiF::AbstractArray{T,4}, U::AbstractArray{T,4}, eos::AbstractEOS,
                       phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
-                      floors::Floors{T}) where {NG,M,T}
+                      floors::Floors{T}; bfield=nothing) where {NG,M,T}
     n1, n2, n3 = g.dims
     op = phys.opacity
     groups = phys.groups
@@ -608,7 +609,7 @@ function update_chiF!(chiF::AbstractArray{T,4}, U::AbstractArray{T,4}, eos::Abst
     pmin = floors.pressure
     threaded_jk(1:n2, 1:n3) do j, k
         @inbounds for i in 1:n1
-            rho, Tgas = _cell_temperature(U, eos, i, j, k, rhomin, pmin)
+            rho, Tgas = _cell_temperature(U, eos, i, j, k, rhomin, pmin, bfield)
             kappa = group_opacities(op, groups, rho, Tgas)
             for gr in 1:NG
                 kF = last(_limiter_opacities(op, groups, kappa, rho, Tgas, gr))
@@ -620,7 +621,8 @@ function update_chiF!(chiF::AbstractArray{T,4}, U::AbstractArray{T,4}, eos::Abst
 end
 
 """
-    update_chat!(chat, U, R, eos, phys, grid, floors, dt; update_momentum = true)
+    update_chat!(chat, U, R, eos, phys, grid, floors, dt; update_momentum = true,
+                 bfield = nothing)
 
 Fill the per-cell, per-group reduced speed of light `chat[g, i, j, k]` from the
 current state, over the *whole* array including ghost cells.
@@ -638,23 +640,25 @@ A [`ConstantChat`](@ref) limiter -- the default -- dispatches to a no-op: the
 array was filled with `phys.chat` when the simulation was built and cannot
 change.
 """
-@inline update_chat!(chat, U, R, eos, phys, g, floors, dt; update_momentum::Bool=true) =
-    _fill_chat!(chat, phys.chat_limiter, U, R, eos, phys, g, floors, dt, update_momentum)
+@inline update_chat!(chat, U, R, eos, phys, g, floors, dt; update_momentum::Bool=true,
+                     bfield=nothing) =
+    _fill_chat!(chat, phys.chat_limiter, U, R, eos, phys, g, floors, dt, update_momentum, bfield)
 
 @inline _fill_chat!(chat::AbstractArray{T,4}, ::ConstantChat, U::AbstractArray{T,4},
                     R::AbstractArray{T,4}, eos::AbstractEOS,
                     phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
-                    floors::Floors{T}, dt::T, ::Bool) where {NG,M,T} = chat
+                    floors::Floors{T}, dt::T, ::Bool, bfield) where {NG,M,T} = chat
 
 # The gas temperature of cell (i, j, k), with the same floors the coupling uses.
 @inline function _cell_temperature(U::AbstractArray{T,4}, eos, i, j, k,
-                                   rhomin::T, pmin::T) where {T}
+                                   rhomin::T, pmin::T, bfield=nothing) where {T}
     @inbounds rho = U[IRHO, i, j, k]
     rho < rhomin && (rho = rhomin)
     @inbounds mx = U[IMX, i, j, k]
     @inbounds my = U[IMY, i, j, k]
     @inbounds mz = U[IMZ, i, j, k]
-    @inbounds Eint = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
+    @inbounds Eint = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho) -
+                     magnetic_energy(bfield, i, j, k)
     emin = internal_energy(eos, rho, pmin)
     Eint < emin && (Eint = emin)
     return rho, temperature(eos, rho, Eint)
@@ -705,7 +709,8 @@ end
 function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
                      U::AbstractArray{T,4}, R::AbstractArray{T,4}, eos::AbstractEOS,
                      phys::RadiationPhysics{NG,M,T}, g::CartesianGrid{T},
-                     floors::Floors{T}, dt::T, update_momentum::Bool) where {NG,M,T}
+                     floors::Floors{T}, dt::T, update_momentum::Bool,
+                     bfield) where {NG,M,T}
     n1, n2, n3 = g.dims
     c = phys.c
     phi0 = phys.chat / c
@@ -724,7 +729,7 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
 
     threaded_jk(1:n2, 1:n3) do j, k
         @inbounds for i in 1:n1
-            rho, Tgas = _cell_temperature(U, eos, i, j, k, rhomin, pmin)
+            rho, Tgas = _cell_temperature(U, eos, i, j, k, rhomin, pmin, bfield)
             # 4 a T^3 / (rho c_v): the radiation-to-gas heat capacity ratio that
             # sets how much damping the coupling can supply (see StabilityBound).
             hcap = 4 * arad * Tgas^3 / heat_capacity(eos, rho, Tgas)
@@ -759,7 +764,7 @@ function _fill_chat!(chat::AbstractArray{T,4}, lim::AbstractChatLimiter,
 end
 
 """
-    energy_exchange_dt(U, R, eos, phys, grid, xi, floors) -> dt
+    energy_exchange_dt(U, R, eos, phys, grid, xi, floors; bfield = nothing) -> dt
 
 The longest substep at which every optically thick cell may run at `phi = 1`,
 `dt = xi / (c max_i [4 a_rad T^3 / (rho c_v) * sum_d sigma_d/dx_d])` minimised
@@ -781,7 +786,7 @@ cannot move.
 function energy_exchange_dt(U::AbstractArray{T,4}, R::AbstractArray{T,4},
                             eos::AbstractEOS, phys::RadiationPhysics{NG,M,T},
                             g::CartesianGrid{T}, xi::Real,
-                            floors::Floors{T}) where {NG,M,T}
+                            floors::Floors{T}; bfield=nothing) where {NG,M,T}
     c = phys.c
     arad = phys.a_rad
     cl = phys.closure
@@ -792,7 +797,7 @@ function energy_exchange_dt(U::AbstractArray{T,4}, R::AbstractArray{T,4},
     rate = reduce_max_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3], T) do j, k
         local m = zero(T)
         @inbounds for i in g.lo[1]:g.hi[1]
-            rho, Tgas = _cell_temperature(U, eos, i, j, k, rhomin, pmin)
+            rho, Tgas = _cell_temperature(U, eos, i, j, k, rhomin, pmin, bfield)
             hcap = 4 * arad * Tgas^3 / heat_capacity(eos, rho, Tgas)
             s = zero(T)
             for gr in 1:NG

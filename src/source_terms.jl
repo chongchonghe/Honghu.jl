@@ -55,7 +55,7 @@ Base.:+(a::SourceStats, b::SourceStats) = SourceStats(a.cells + b.cells,
 
 """
     radiation_source_step!(U, R, eos, phys, grid, dt, source, t, floors;
-                           update_momentum = true)
+                           update_momentum = true, bfield = nothing)
 
 Apply the implicit matter-radiation coupling to the conserved gas state `U` and
 radiation state `R` over a time `dt`, in every interior cell.
@@ -68,6 +68,11 @@ luminosity of a star spread over a cell.
 test problems (Marshak wave, matter-radiation equilibration) assume; it is set
 automatically when hydrodynamics is disabled.
 
+With MHD, `bfield` is the simulation's [`MagneticField`](@ref). The coupling
+does not change the field, so the magnetic energy is taken out of the total
+energy before the solve and put back after it, and the gas sees only its internal
+energy.
+
 This method is the grey (`NG == 1`) driver; a multigroup `phys` selects
 [`multigroup_source_step!`](@ref) instead, by dispatch on the group count, and
 so does a grey `phys` with a dust model, which this driver does not have.
@@ -78,8 +83,8 @@ function radiation_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
                                 phys::RadiationPhysics{1,M,T,O,C,SC,L,NoDust},
                                 g::CartesianGrid{T}, dt::T, source::S, t::T,
                                 floors::Floors{T};
-                                update_momentum::Bool=true) where {M,T,A<:AbstractArray{T,4},S,
-                                                                   O,C,SC,L}
+                                update_momentum::Bool=true,
+                                bfield=nothing) where {M,T,A<:AbstractArray{T,4},S,O,C,SC,L}
     c = phys.c
     arad = phys.a_rad
     op = phys.opacity
@@ -105,7 +110,8 @@ function radiation_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
             rho = U[IRHO, i, j, k]
             mom0 = SVec(U[IMX, i, j, k], U[IMY, i, j, k], U[IMZ, i, j, k])
             Ekin0 = dot(mom0, mom0) / (2 * rho)
-            Eint0 = U[IEGAS, i, j, k] - Ekin0
+            Emag = magnetic_energy(bfield, i, j, k)
+            Eint0 = U[IEGAS, i, j, k] - Ekin0 - Emag
             Erad0 = R[IERAD, i, j, k]
             Frad0 = SVec(R[IFRX, i, j, k], R[IFRY, i, j, k], R[IFRZ, i, j, k])
 
@@ -279,7 +285,7 @@ function radiation_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
             U[IMX, i, j, k] = mom1[1]
             U[IMY, i, j, k] = mom1[2]
             U[IMZ, i, j, k] = mom1[3]
-            U[IEGAS, i, j, k] = Eint + dot(mom1, mom1) / (2 * rho)
+            U[IEGAS, i, j, k] = Eint + dot(mom1, mom1) / (2 * rho) + Emag
             R[IERAD, i, j, k] = Erad
             R[IFRX, i, j, k] = Frad[1]
             R[IFRY, i, j, k] = Frad[2]
@@ -368,7 +374,7 @@ end
 
 """
     multigroup_source_step!(U, R, eos, phys, grid, dt, source, t, floors;
-                            update_momentum = true)
+                            update_momentum = true, bfield = nothing)
 
 The multigroup matter-radiation coupling: what [`radiation_source_step!`](@ref)
 dispatches to when `phys` has more than one frequency group. Same arguments,
@@ -390,7 +396,8 @@ function multigroup_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
                                  phys::RadiationPhysics{NG,M,T},
                                  g::CartesianGrid{T}, dt::T, source::S, t::T,
                                  floors::Floors{T};
-                                 update_momentum::Bool=true) where {NG,M,T,A<:AbstractArray{T,4},S}
+                                 update_momentum::Bool=true,
+                                 bfield=nothing) where {NG,M,T,A<:AbstractArray{T,4},S}
     c = phys.c
     arad = phys.a_rad
     kB = phys.k_B
@@ -419,7 +426,8 @@ function multigroup_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
             rho = U[IRHO, i, j, k]
             mom0 = SVec(U[IMX, i, j, k], U[IMY, i, j, k], U[IMZ, i, j, k])
             Ekin0 = dot(mom0, mom0) / (2 * rho)
-            Eint0 = U[IEGAS, i, j, k] - Ekin0
+            Emag = magnetic_energy(bfield, i, j, k)
+            Eint0 = U[IEGAS, i, j, k] - Ekin0 - Emag
             Erad0 = _group_component(R, i, j, k, Val(NG), Val(IERAD))
             F0x = _group_component(R, i, j, k, Val(NG), Val(IFRX))
             F0y = _group_component(R, i, j, k, Val(NG), Val(IFRY))
@@ -549,7 +557,7 @@ function multigroup_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
             U[IMX, i, j, k] = mom1[1]
             U[IMY, i, j, k] = mom1[2]
             U[IMZ, i, j, k] = mom1[3]
-            U[IEGAS, i, j, k] = Eint + dot(mom1, mom1) / (2 * rho)
+            U[IEGAS, i, j, k] = Eint + dot(mom1, mom1) / (2 * rho) + Emag
             for gr in 1:NG
                 b = gbase(gr)
                 R[b+IERAD, i, j, k] = Erad[gr]
@@ -572,6 +580,7 @@ end
 radiation_source_step!(U::A, R::A, chatarr::A, eos::AbstractEOS,
                        phys::RadiationPhysics{NG,M,T},
                        g::CartesianGrid{T}, dt::T, source::S, t::T, floors::Floors{T};
-                       update_momentum::Bool=true) where {NG,M,T,A<:AbstractArray{T,4},S} =
+                       update_momentum::Bool=true,
+                       bfield=nothing) where {NG,M,T,A<:AbstractArray{T,4},S} =
     multigroup_source_step!(U, R, chatarr, eos, phys, g, dt, source, t, floors;
-                            update_momentum)
+                            update_momentum, bfield)

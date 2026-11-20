@@ -137,7 +137,7 @@ end
 # cell took, and the number of cells that did not converge.
 function _chem_row!(U::Array{T,4}, R::Array{T,4}, chatarr::Array{T,4}, ch::Photochemistry,
                     row::ChemRowWork{W,T}, phys, g::CartesianGrid{T}, j::Int, k::Int,
-                    dt::T, t::T) where {W,T}
+                    dt::T, t::T, bfield) where {W,T}
     net = ch.network
     nsp = nspecies(net)
     nb = nbands(net)
@@ -151,7 +151,10 @@ function _chem_row!(U::Array{T,4}, R::Array{T,4}, chatarr::Array{T,4}, ch::Photo
     @inbounds for i in g.lo[1]:g.hi[1]
         rho = U[IRHO, i, j, k]
         mx, my, mz = U[IMX, i, j, k], U[IMY, i, j, k], U[IMZ, i, j, k]
-        e = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho)
+        # The internal energy: with MHD the total energy holds the field's as well,
+        # which the burn leaves alone, so the write-back below, an increment, keeps it.
+        e = U[IEGAS, i, j, k] - (mx * mx + my * my + mz * mz) / (2 * rho) -
+            magnetic_energy(bfield, i, j, k)
         for s in 1:nsp
             u[s] = U[scalar_index(s), i, j, k] / species_mass(net, s)
         end
@@ -201,14 +204,15 @@ function _chem_row!(U::Array{T,4}, R::Array{T,4}, chatarr::Array{T,4}, ch::Photo
 end
 
 function _chemistry_step!(U::Array{T,4}, R::Array{T,4}, chatarr::Array{T,4}, ch::Photochemistry,
-                          cw::Vector, phys, g::CartesianGrid{T}, dt::T, t::T) where {T}
+                          cw::Vector, phys, g::CartesianGrid{T}, dt::T, t::T,
+                          bfield=nothing) where {T}
     nsteps = Threads.Atomic{Int}(0)
     nmax = Threads.Atomic{Int}(0)
     nfail = Threads.Atomic{Int}(0)
     jlo, klo, ny = g.lo[2], g.lo[3], g.n[2]
     threaded_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]) do j, k
         row = cw[(j-jlo)+(k-klo)*ny+1]
-        rsteps, rworst, rfails = _chem_row!(U, R, chatarr, ch, row, phys, g, j, k, dt, t)
+        rsteps, rworst, rfails = _chem_row!(U, R, chatarr, ch, row, phys, g, j, k, dt, t, bfield)
         Threads.atomic_add!(nsteps, rsteps)
         Threads.atomic_max!(nmax, rworst)
         rfails > 0 && Threads.atomic_add!(nfail, rfails)
@@ -235,5 +239,6 @@ function chemistry_step!(sim, dt::T, t::T) where {T<:AbstractFloat}
     ch = sim.chemistry
     ch === nothing &&
         throw(ArgumentError("chemistry_step! needs a Simulation built with `chemistry`"))
-    return _chemistry_step!(sim.U, sim.R, sim.rw.chat, ch, sim.cw, sim.radiation, sim.grid, dt, t)
+    return _chemistry_step!(sim.U, sim.R, sim.rw.chat, ch, sim.cw, sim.radiation, sim.grid, dt, t,
+                            sim.B)
 end

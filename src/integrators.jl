@@ -97,24 +97,29 @@ const IMEX_AIM_33 = 0.5
 const IMEX_ALPHA = IMEX_AIM_32 / IMEX_AIM_22
 
 """
-    combine_gas!(U, alpha, Utmp, grid)
+    combine_gas!(U, alpha, Utmp, grid; bfield = nothing)
 
 `U <- (1 - alpha) U + alpha Utmp` for the gas state, combining density, momentum
-and *internal* energy and then rebuilding the total energy.
+and *internal* energy and then rebuilding the total energy. With MHD, `bfield`
+is the simulation's [`MagneticField`](@ref), the same for both states because a
+radiation substep does not change it, and its energy is taken out of both and
+added back.
 
 Combining the total energy directly would leave a spurious kinetic residual
 `alpha (1-alpha) |Δm|² / (2 rho)` in the internal energy extracted by the next
 implicit solve, which can drive the temperature negative in cells straddling a
 radiation front.
 """
-function combine_gas!(U::A, alpha::T, Utmp::A, g::CartesianGrid{T}) where {T,A<:AbstractArray{T,4}}
+function combine_gas!(U::A, alpha::T, Utmp::A, g::CartesianGrid{T};
+                      bfield=nothing) where {T,A<:AbstractArray{T,4}}
     w = one(T) - alpha
     ir = g.lo[1]:g.hi[1]
     threaded_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]) do j, k
         @inbounds for i in ir
             u = getstate(U, Val(NHYDRO), i, j, k)
             v = getstate(Utmp, Val(NHYDRO), i, j, k)
-            eint = w * internal_energy(u) + alpha * internal_energy(v)
+            emag = magnetic_energy(bfield, i, j, k)
+            eint = w * (internal_energy(u) - emag) + alpha * (internal_energy(v) - emag)
             rho = w * u[IRHO] + alpha * v[IRHO]
             mx = w * u[IMX] + alpha * v[IMX]
             my = w * u[IMY] + alpha * v[IMY]
@@ -123,7 +128,7 @@ function combine_gas!(U::A, alpha::T, Utmp::A, g::CartesianGrid{T}) where {T,A<:
             U[IMX, i, j, k] = mx
             U[IMY, i, j, k] = my
             U[IMZ, i, j, k] = mz
-            U[IEGAS, i, j, k] = eint + (mx * mx + my * my + mz * mz) / (2 * rho)
+            U[IEGAS, i, j, k] = eint + (mx * mx + my * my + mz * mz) / (2 * rho) + emag
         end
     end
     return nothing

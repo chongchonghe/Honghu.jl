@@ -31,6 +31,7 @@ import BracketingNonlinearSolve
     include("test_coupling_adaptive.jl")
     include("test_chemistry.jl")
     include("test_stromgren.jl")
+    include("test_mhd.jl")              # after test_chemistry.jl, whose helpers it borrows
     include("test_io.jl")
     include("test_plotting.jl")
     include("test_extensions.jl")

@@ -79,6 +79,26 @@ end
     @test bytes_per_cell(() -> Honghu.enforce_scalar_floors!(sim.U, g, 2, true), sim) < LIMIT
 end
 
+@testset "MHD kernels do not allocate per cell" begin
+    LIMIT = 8.0
+    rad = RadiationPhysics(c=10.0, chat=1.0, a_rad=1.0, opacity=ConstantOpacity(1.0),
+                           beta_order=1)
+    sim = Simulation(n=(24, 24, 24), mhd=true, radiation=rad, boundaries=Boundaries(Periodic()))
+    set_initial_conditions!(sim; vector_potential=(x, y, z) -> (0.0, 0.0, 0.1sinpi(2x))) do x, y, z
+        (rho=1 + 0.2sinpi(2x), vx=0.3, p=1.0, Erad=1.0, bx=0.5)
+    end
+    hw, g, B = sim.hw, sim.grid, sim.B
+    Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g; bfield=B)
+    @test bytes_per_cell(() -> Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g; bfield=B), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.enforce_floors!(sim.U, sim.eos, g, sim.floors; bfield=B),
+                         sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.hydro_timestep(hw.prim, sim.eos, g, 0.4; bfield=B), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.radiation_source_step!(sim.U, sim.R, sim.rw.chat, sim.eos,
+                                                             rad, g, 1e-3, nothing, 0.0,
+                                                             sim.floors; bfield=B), sim) < LIMIT
+    @test bytes_per_cell(() -> Honghu.fill_ghosts!(B, sim.boundaries, g), sim) < LIMIT
+end
+
 @testset "radiation kernels do not allocate per cell" begin
     LIMIT = 8.0
 

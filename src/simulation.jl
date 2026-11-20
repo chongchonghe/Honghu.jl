@@ -219,6 +219,12 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     [`scalar_index`](@ref)) and set from the key `X` of
     [`set_initial_conditions!`](@ref). With the default, the state is exactly
     the five hydro variables.
+  - `mhd = false` : evolve the magnetic field, with constrained transport. The
+    field is `sim.B`, a [`MagneticField`](@ref) of face-centred components, set
+    by the keys `bx`, `by`, `bz` or the `vector_potential` of
+    [`set_initial_conditions!`](@ref), and its energy is part of the total
+    energy in `sim.U`. Only [`Periodic`](@ref) and [`Outflow`](@ref) boundaries
+    are supported with it; any other is an `ArgumentError`.
   - `chemistry = nothing` : a [`Photochemistry`](@ref) to evolve a chemical
     network, with its ionizing photons, inside every radiation substep. It sets
     `nscalars` to the number of species (an explicit `nscalars` must equal it)
@@ -275,7 +281,7 @@ run!(sim, tmax = 0.5)
 """
 mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
                           RR<:AbstractReconstruction,RS<:AbstractRiemannSolver,
-                          IN<:AbstractIntegrator,BH,BR,SRC,SS,CH,RW,CW}
+                          IN<:AbstractIntegrator,BH,BR,SRC,SS,CH,RW,CW,MB}
     const grid::CartesianGrid{T}
     const eos::E
     const radiation::RP
@@ -296,6 +302,7 @@ mutable struct Simulation{T,E<:AbstractEOS,RP,RC<:AbstractReconstruction,
     const nscalars::Int
     const U::Array{T,4}
     const R::Array{T,4}
+    const B::MB
     const hw::HydroWorkspace{T}
     const rw::RW
     const cw::CW
@@ -322,12 +329,14 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     max_radiation_substeps::Integer=10,
                     nscalars::Integer=0,
                     chemistry=nothing,
+                    mhd::Bool=false,
                     tile::Union{Symbol,Nothing,NTuple{3,Int}}=:auto,
                     T::Type{<:AbstractFloat}=Float64)
     hydro || radiation !== nothing ||
         throw(ArgumentError("nothing to evolve: enable hydro, radiation, or both"))
     nscalars >= 0 || throw(ArgumentError("nscalars must be non-negative, got $nscalars"))
     chemistry === nothing || _check_chemistry(chemistry, radiation, eos, nscalars, T)
+    mhd && check_mhd_boundaries(boundaries)
     nscalars = chemistry === nothing ? Int(nscalars) : nspecies(chemistry.network)
     ng = max(required_ghosts(reconstruction),
              radiation === nothing ? 0 : required_ghosts(radiation_reconstruction))
@@ -346,10 +355,11 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     # loop in `chemistry_step!` has one to itself.
     cw = chemistry === nothing ? nothing :
          chem_row_workspaces(chemistry, T, grid.n[2] * grid.n[3])
+    B = mhd ? MagneticField(grid) : nothing
     Simulation(grid, eos, radiation, reconstruction, radiation_reconstruction,
                riemann, integrator, boundaries,
                radiation_boundaries, source, strang_sources, chemistry, fl, T(cfl),
-               T(cfl_radiation), Int(max_radiation_substeps), hydro, Int(nscalars), U, Rarr,
+               T(cfl_radiation), Int(max_radiation_substeps), hydro, Int(nscalars), U, Rarr, B,
                HydroWorkspace(grid, nvar; tile=hydro ? _resolve_tile(tile, grid) : nothing), rw, cw, Diagnostics(), zero(T), zero(T), 0)
 end
 
@@ -409,6 +419,14 @@ Whether the radiation module is enabled (a compile-time property of the type).
 @inline has_radiation(::Simulation{T,E,RP}) where {T,E,RP} = RP !== Nothing
 
 """
+    has_mhd(sim)
+
+Whether the simulation evolves a magnetic field (a compile-time property of the
+type): `sim.B` is then a [`MagneticField`](@ref), and `nothing` otherwise.
+"""
+@inline has_mhd(sim::Simulation) = sim.B !== nothing
+
+"""
     nhydrovars(sim) -> Int
 
 Length of the gas state vector, `NHYDRO + sim.nscalars`: the five hydro
@@ -430,7 +448,7 @@ function Base.show(io::IO, sim::Simulation{T}) where {T}
             " (gas), $(sim.radiation_reconstruction) (radiation)" : "")
     println(io, "  riemann        : ", nameof(typeof(sim.riemann)))
     println(io, "  integrator     : ", sim.integrator)
-    println(io, "  hydro          : ", sim.hydro_enabled)
+    println(io, "  hydro          : ", sim.hydro_enabled, has_mhd(sim) ? " (MHD)" : "")
     if has_radiation(sim)
         r = sim.radiation
         println(io, "  radiation      : ", nameof(typeof(r.closure)), ", c = ", r.c,
@@ -471,7 +489,7 @@ function _set_scalars!(U::Array{T,4}, ns::Int, X, rho, i, j, k) where {T}
 end
 
 """
-    set_initial_conditions!(f, sim)
+    set_initial_conditions!(f, sim; vector_potential = nothing)
 
 Fill the interior state from a callable `f(x, y, z)` that returns a `NamedTuple`
 of primitive variables at the cell centre.
@@ -486,6 +504,19 @@ Recognised keys:
 | `Erad` or `Trad`   | radiation energy density, or radiation temperature | gas temperature |
 | `Fx`, `Fy`, `Fz`   | radiation flux                         | `0` |
 | `X`                | mass fractions of the passive scalars: a tuple or vector of `sim.nscalars` numbers | all `0`; with `chemistry`, [`initial_mass_fractions`](@ref) of the network |
+| `bx`, `by`, `bz`   | magnetic field (`mhd = true` only)     | `0` |
+
+With `mhd = true` the field is face-centred ([`MagneticField`](@ref)), and is set
+before the cells: `f` is called at the centre of every face as well, and the face
+normal to `d` takes `f`'s component `d` there. Its discrete divergence is then
+exactly zero for any field whose component `b_d` does not vary along `d`, a
+uniform field among them. Any other field should come from
+`vector_potential = (x, y, z) -> (Ax, Ay, Az)`, whose discrete curl, from `A`
+evaluated at the edge centres, is added to the faces: its divergence is zero to
+round-off. The total energy of each cell then includes the magnetic energy of
+the cell-centred field ([`magnetic_energy`](@ref)), so `p` is the gas pressure. A
+field key or a `vector_potential` given to a simulation without MHD is an
+`ArgumentError`.
 
 Ghost cells are filled from the boundary conditions afterwards, so `f` is only
 called on interior cells.
@@ -521,17 +552,27 @@ set_initial_conditions!(sim) do x, y, z
 end
 ```
 """
-function set_initial_conditions!(f::F, sim::Simulation{T}) where {F,T}
+function set_initial_conditions!(f::F, sim::Simulation{T};
+                                 vector_potential=nothing) where {F,T}
     g = sim.grid
     eos = sim.eos
     U = sim.U
     z0 = zero(T)
     ch = sim.chemistry
+    if has_mhd(sim)
+        # the faces first: the energy of each cell includes the field's
+        _set_face_field!(f, sim.B, vector_potential, g, sim.boundaries)
+    elseif vector_potential !== nothing
+        throw(ArgumentError("a vector_potential needs a simulation with mhd = true"))
+    end
     # The species of one cell, for the network's equation of state under a `T` key.
     nsp = ch === nothing ? T[] : Vector{T}(undef, nspecies(ch.network))
     for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1]
         x, y, z = cellcenter(g, i, j, k)
         s = f(x, y, z)
+        has_mhd(sim) || !(haskey(s, :bx) || haskey(s, :by) || haskey(s, :bz)) ||
+            throw(ArgumentError("the initial condition sets a magnetic field, but the " *
+                                "simulation has mhd = false"))
         rho = T(_field(s, Val(:rho), NaN))
         isfinite(rho) || throw(ArgumentError("initial condition must provide `rho`"))
         X = _field(s, Val(:X), nothing)
@@ -553,6 +594,7 @@ function set_initial_conditions!(f::F, sim::Simulation{T}) where {F,T}
         w = SVec(rho, T(_field(s, Val(:vx), z0)), T(_field(s, Val(:vy), z0)),
                  T(_field(s, Val(:vz), z0)), p)
         setstate!(U, prim2cons(eos, w), i, j, k)
+        has_mhd(sim) && (U[IEGAS, i, j, k] += magnetic_energy(sim.B, i, j, k))
 
         if has_radiation(sim)
             phys = sim.radiation
@@ -618,9 +660,10 @@ function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T};
                     update=nothing) where {T}
     g = sim.grid
     fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
-    sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars)
+    sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars;
+                                             bfield=sim.B)
     sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars, sim.chemistry !== nothing)
-    cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars)
+    cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars; bfield=sim.B)
     # The first active direction overwrites `dU` rather than adding to it, which
     # saves zeroing it first. Only the interior of `dU` is written or read.
     dfirst = findfirst(g.active)
@@ -684,6 +727,7 @@ end
 One explicit SSP-RK step of the Euler equations.
 """
 function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
+    has_mhd(sim) && error("the MHD hydrodynamic step is not implemented yet")
     g = sim.grid
     hw = sim.hw
     threaded_copyto!(hw.U0, sim.U)
@@ -704,7 +748,7 @@ function _stage_chat!(sim::Simulation{T}, ::ConstantChat, U::Array{T,4}, R::Arra
                       dt::T, t::T) where {T}
     sim.radiation.wavespeed_correction || return nothing
     fill_ghosts!(U, sim.boundaries, sim.grid, t; momentum_blocks=1)
-    update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
+    update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors; bfield=sim.B)
     return nothing
 end
 
@@ -713,7 +757,7 @@ end
 function _stage_chiF!(sim::Simulation{T}, U::Array{T,4}, t::T) where {T}
     sim.radiation.wavespeed_correction || return nothing
     fill_ghosts!(U, sim.boundaries, sim.grid, t; momentum_blocks=1)
-    update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors)
+    update_chiF!(sim.rw.chiF, U, sim.eos, sim.radiation, sim.grid, sim.floors; bfield=sim.B)
     return nothing
 end
 
@@ -727,7 +771,7 @@ function _stage_chat!(sim::Simulation{T}, ::AbstractChatLimiter, U::Array{T,4},
     fill_ghosts!(U, sim.boundaries, g, t; momentum_blocks=1)
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
     update_chat!(sim.rw.chat, U, R, sim.eos, sim.radiation, g, sim.floors, dt;
-                 update_momentum=sim.hydro_enabled)
+                 update_momentum=sim.hydro_enabled, bfield=sim.B)
     return nothing
 end
 
@@ -769,10 +813,11 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     # cell at a large local CFL number is turned into the diffusion flux by the
     # solve, and a negative energy is absorbed by it (see floor_rad_energy!).
     d = sim.diag
-    d.floors_presolve += floor_rad_energy!(rw.Rtmp, rw.Utmp, rw.chat, phys, g, fl)
+    d.floors_presolve += floor_rad_energy!(rw.Rtmp, rw.Utmp, rw.chat, phys, g, fl;
+                                           bfield=sim.B)
     s1 = radiation_source_step!(rw.Utmp, rw.Rtmp, rw.chat, sim.eos, phys, g,
                                 T(IMEX_AIM_22) * dt,
-                                sim.source, t + dt, fl; update_momentum=upd)
+                                sim.source, t + dt, fl; update_momentum=upd, bfield=sim.B)
     d.repairs_postsolve += amend_rad_state!(rw.Rtmp, phys, g, fl)
 
     # --- stage 3: Shu-Osher combination + implicit coupling ------------------
@@ -782,11 +827,11 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     rad_rhs!(rw.dR, rw.Rtmp, sim, t + dt)
     combine!(sim.R, T(1 - IMEX_ALPHA), sim.R, T(IMEX_ALPHA), rw.Rtmp,
              T(IMEX_AEX_32) * dt, rw.dR, g, nradvars(sim.radiation))
-    combine_gas!(sim.U, T(IMEX_ALPHA), rw.Utmp, g)
-    d.floors_presolve += floor_rad_energy!(sim.R, sim.U, rw.chat, phys, g, fl)
+    combine_gas!(sim.U, T(IMEX_ALPHA), rw.Utmp, g; bfield=sim.B)
+    d.floors_presolve += floor_rad_energy!(sim.R, sim.U, rw.chat, phys, g, fl; bfield=sim.B)
     s2 = radiation_source_step!(sim.U, sim.R, rw.chat, sim.eos, phys, g,
                                 T(IMEX_AIM_33) * dt,
-                                sim.source, t + dt, fl; update_momentum=upd)
+                                sim.source, t + dt, fl; update_momentum=upd, bfield=sim.B)
     d.repairs_postsolve += amend_rad_state!(sim.R, phys, g, fl)
     return s1 + s2
 end
@@ -848,7 +893,7 @@ function _rad_dt(sim::Simulation, lim::StabilityBound)
     dt = radiation_timestep(sim.radiation, sim.grid, sim.cfl_radiation)
     lim.energy_step || return dt
     dtE = energy_exchange_dt(sim.U, sim.R, sim.eos, sim.radiation, sim.grid, lim.xi,
-                             sim.floors)
+                             sim.floors; bfield=sim.B)
     # Never below the step of the unreduced scheme: there `phi = 1` is stable in
     # every cell, so a shorter step would cost more than not reducing at all --
     # which a strongly radiation-dominated cell would otherwise ask for.
@@ -869,8 +914,8 @@ function timestep(sim::Simulation{T}) where {T}
     if sim.hydro_enabled
         # `sim.U` is admissible here: `step!` and `set_initial_conditions!` both
         # leave it that way, so this conversion needs no floors of its own.
-        cons2prim!(sim.hw.prim, sim.U, sim.eos, sim.grid)
-        dt = hydro_timestep(sim.hw.prim, sim.eos, sim.grid, sim.cfl)
+        cons2prim!(sim.hw.prim, sim.U, sim.eos, sim.grid; bfield=sim.B)
+        dt = hydro_timestep(sim.hw.prim, sim.eos, sim.grid, sim.cfl; bfield=sim.B)
     end
     if has_radiation(sim)
         dtr = _rad_dt(sim)
@@ -978,7 +1023,7 @@ driver.
 function enforce_state!(sim::Simulation)
     n = 0
     if sim.hydro_enabled
-        m = enforce_floors!(sim.U, sim.eos, sim.grid, sim.floors, sim.nscalars)
+        m = enforce_floors!(sim.U, sim.eos, sim.grid, sim.floors, sim.nscalars; bfield=sim.B)
         sim.diag.floors_hydro += m
         n += m
     end
@@ -1113,7 +1158,8 @@ end
 Volume integrals of the conserved quantities over the interior, returned as a
 `NamedTuple` `(mass, momentum, energy_gas, energy_rad, energy_total, scalars)`.
 `scalars` is a vector with the mass of each passive scalar, `sum(rho X_s) dV`,
-and is empty without scalars. Useful as a conservation check; note that the
+and is empty without scalars. With MHD, `energy_gas` is the cells' total energy,
+which then includes the magnetic energy. Useful as a conservation check; note that the
 total energy is only conserved exactly when every boundary is periodic or
 reflecting and there are no sources.
 """
@@ -1161,7 +1207,7 @@ every ten steps and one that was not could quietly disagree.
 """
 function primitives(sim::Simulation{T}) where {T}
     g = sim.grid
-    cons2prim!(sim.hw.prim, sim.U, sim.eos, g, sim.nscalars)
+    cons2prim!(sim.hw.prim, sim.U, sim.eos, g, sim.nscalars; bfield=sim.B)
     sim.hw.prim[:, g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]]
 end
 
@@ -1179,18 +1225,22 @@ function gas_temperature(sim::Simulation{T}) where {T}
     ch = sim.chemistry
     if ch === nothing
         @inbounds for k in 1:g.n[3], j in 1:g.n[2], i in 1:g.n[1]
-            u = getstate(sim.U, Val(NHYDRO), i + g.ng[1], j + g.ng[2], k + g.ng[3])
-            out[i, j, k] = temperature(sim.eos, u[IRHO], internal_energy(u))
+            ii, jj, kk = i + g.ng[1], j + g.ng[2], k + g.ng[3]
+            u = getstate(sim.U, Val(NHYDRO), ii, jj, kk)
+            out[i, j, k] = temperature(sim.eos, u[IRHO],
+                                       internal_energy(u) - magnetic_energy(sim.B, ii, jj, kk))
         end
     else
         net = ch.network
         n = Vector{T}(undef, nspecies(net))
         @inbounds for k in 1:g.n[3], j in 1:g.n[2], i in 1:g.n[1]
-            u = getstate(sim.U, Val(NHYDRO), i + g.ng[1], j + g.ng[2], k + g.ng[3])
+            ii, jj, kk = i + g.ng[1], j + g.ng[2], k + g.ng[3]
+            u = getstate(sim.U, Val(NHYDRO), ii, jj, kk)
             for s in 1:nspecies(net)
-                n[s] = sim.U[scalar_index(s), i+g.ng[1], j+g.ng[2], k+g.ng[3]] / species_mass(net, s)
+                n[s] = sim.U[scalar_index(s), ii, jj, kk] / species_mass(net, s)
             end
-            out[i, j, k] = network_temperature(net, n, internal_energy(u))
+            out[i, j, k] = network_temperature(net, n,
+                                               internal_energy(u) - magnetic_energy(sim.B, ii, jj, kk))
         end
     end
     out

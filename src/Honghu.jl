@@ -98,6 +98,7 @@ include("grid.jl")
 include("launch.jl")
 include("variables.jl")
 include("boundary.jl")
+include("magnetic_field.jl")       # the face-centred field of MHD, and its magnetic energy
 include("limiters.jl")
 include("reconstruction.jl")
 include("riemann/state.jl")

@@ -20,12 +20,16 @@ function Floors(; rho=1e-30, pressure=1e-30, erad=1e-30)
 end
 
 """
-    enforce_floors!(U, eos, grid, floors, nscalars = 0) -> Int
+    enforce_floors!(U, eos, grid, floors, nscalars = 0; bfield = nothing) -> Int
 
 Project the conserved gas state onto the admissible set, over the whole array,
 ghost cells included. Cells below `floors.rho` are reset to a quiescent floor
 state; cells whose internal energy is below `floors.pressure/(gamma-1)` keep
 their momentum and have only the thermal part reset.
+
+With MHD, `bfield` is the simulation's [`MagneticField`](@ref): the total energy
+then holds the magnetic energy as well, which a floor keeps, and only the internal
+energy is reset.
 
 Returns the number of cells repaired, which the driver accumulates so that a
 silently unphysical run is visible. Only the hydro repairs are counted: a
@@ -46,7 +50,7 @@ diagnostic field silently mutated the state being diagnosed: results depended on
 how often you looked, and the repairs went uncounted. Keep them apart.
 """
 function enforce_floors!(U::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGrid{T},
-                         floors::Floors{T}, nscalars::Integer=0) where {T}
+                         floors::Floors{T}, nscalars::Integer=0; bfield=nothing) where {T}
     n1, n2, n3 = g.dims
     nbad = Threads.Atomic{Int}(0)
     eint_min = internal_energy(eos, floors.rho, floors.pressure)
@@ -63,7 +67,7 @@ function enforce_floors!(U::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGr
                 U[IMX, i, j, k] = zero(T)
                 U[IMY, i, j, k] = zero(T)
                 U[IMZ, i, j, k] = zero(T)
-                U[IEGAS, i, j, k] = eint_min
+                U[IEGAS, i, j, k] = eint_min + magnetic_energy(bfield, i, j, k)
                 for s in 1:nscalars
                     idx = scalar_index(s)
                     Xs = (rho_old > 0 && isfinite(rho_old)) ? U[idx, i, j, k] / rho_old : zero(T)
@@ -76,9 +80,10 @@ function enforce_floors!(U::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGr
             vy = U[IMY, i, j, k] * inv_rho
             vz = U[IMZ, i, j, k] * inv_rho
             ekin = rho * (vx * vx + vy * vy + vz * vz) / 2
+            emag = magnetic_energy(bfield, i, j, k)
             emin = internal_energy(eos, rho, floors.pressure)
-            if !(U[IEGAS, i, j, k] - ekin > emin)
-                U[IEGAS, i, j, k] = ekin + emin
+            if !(U[IEGAS, i, j, k] - ekin - emag > emin)
+                U[IEGAS, i, j, k] = ekin + emin + emag
                 bad += 1
             end
         end
@@ -153,10 +158,11 @@ function enforce_scalar_floors!(U::AbstractArray{T,4}, g::CartesianGrid{T},
 end
 
 """
-    cons2prim!(prim, U, eos, grid, nscalars = 0)
+    cons2prim!(prim, U, eos, grid, nscalars = 0; bfield = nothing)
 
 Fill `prim = (rho, vx, vy, vz, p)` from the conserved state `U` over the whole
-array, ghost cells included. The `nscalars` mass-scalar rows are copied
+array, ghost cells included. With MHD, `bfield` is the simulation's
+[`MagneticField`](@ref), and the pressure is that of `E - E_kin - E_mag`. The `nscalars` mass-scalar rows are copied
 unchanged, so they hold `rho X_s` and not `X_s`: that is what is reconstructed,
 as in Quokka.
 
@@ -167,7 +173,8 @@ simulation cannot change it. Admissibility is the caller's job, via
 whatever the arithmetic gives, including negative pressures.
 """
 function cons2prim!(prim::A, U::A, eos::AbstractEOS,
-                    g::CartesianGrid{T}, nscalars::Integer=0) where {T,A<:AbstractArray{T,4}}
+                    g::CartesianGrid{T}, nscalars::Integer=0;
+                    bfield=nothing) where {T,A<:AbstractArray{T,4}}
     n1, n2, n3 = g.dims
     threaded_jk(1:n2, 1:n3) do j, k
         @inbounds for i in 1:n1
@@ -176,7 +183,8 @@ function cons2prim!(prim::A, U::A, eos::AbstractEOS,
             vx = U[IMX, i, j, k] * inv_rho
             vy = U[IMY, i, j, k] * inv_rho
             vz = U[IMZ, i, j, k] * inv_rho
-            eint = U[IEGAS, i, j, k] - rho * (vx * vx + vy * vy + vz * vz) / 2
+            eint = U[IEGAS, i, j, k] - rho * (vx * vx + vy * vy + vz * vz) / 2 -
+                   magnetic_energy(bfield, i, j, k)
             prim[IRHO, i, j, k] = rho
             prim[IVX, i, j, k] = vx
             prim[IVY, i, j, k] = vy
@@ -409,30 +417,51 @@ end
 end
 
 """
-    hydro_timestep(prim, eos, grid, cfl)
+    hydro_timestep(prim, eos, grid, cfl; bfield = nothing)
 
 Largest stable step of the unsplit method-of-lines scheme,
 
     dt = cfl / max_cells Σ_d (|v_d| + c_s) / dx_d
 
 summed over the active directions. Reduces to `cfl dx / (|v| + c_s)` in 1D.
+With MHD (`bfield` a [`MagneticField`](@ref)) the sound speed is replaced by the
+fast magnetosonic speed for propagation along each direction `d`, Quokka's
+`FastMagnetoSonicSpeed` of the cell-centred field.
 """
 function hydro_timestep(prim::AbstractArray{T,4}, eos::AbstractEOS, g::CartesianGrid{T},
-                        cfl::Real) where {T}
+                        cfl::Real; bfield=nothing) where {T}
     inv_dx = ntuple(d -> g.active[d] ? one(T) / g.dx[d] : zero(T), 3)
     ir = g.lo[1]:g.hi[1]
     smax = reduce_max_jk(g.lo[2]:g.hi[2], g.lo[3]:g.hi[3], T) do j, k
         local m = zero(T)
         @inbounds for i in ir
             rho = prim[IRHO, i, j, k]
-            cs = soundspeed(eos, rho, prim[IPRE, i, j, k])
-            s = (abs(prim[IVX, i, j, k]) + cs) * inv_dx[1] +
-                (abs(prim[IVY, i, j, k]) + cs) * inv_dx[2] +
-                (abs(prim[IVZ, i, j, k]) + cs) * inv_dx[3]
+            c1, c2, c3 = _signal_speeds(bfield, eos, rho, prim[IPRE, i, j, k], i, j, k)
+            s = (abs(prim[IVX, i, j, k]) + c1) * inv_dx[1] +
+                (abs(prim[IVY, i, j, k]) + c2) * inv_dx[2] +
+                (abs(prim[IVZ, i, j, k]) + c3) * inv_dx[3]
             m = max(m, s)
         end
         m
     end
     smax > 0 || return T(Inf)
     return T(cfl) / smax
+end
+
+# The signal speed along each direction of the time step: the sound speed, or with
+# MHD the fast magnetosonic speed along that direction.
+@inline function _signal_speeds(::Nothing, eos::AbstractEOS, rho, p, i, j, k)
+    cs = soundspeed(eos, rho, p)
+    return cs, cs, cs
+end
+
+@inline function _signal_speeds(B::MagneticField, eos::AbstractEOS, rho::T, p::T, i, j,
+                                k) where {T}
+    gam = T(adiabatic_index(eos))
+    b1 = cell_centred_field(B, 1, i, j, k)
+    b2 = cell_centred_field(B, 2, i, j, k)
+    b3 = cell_centred_field(B, 3, i, j, k)
+    return (fast_magnetosonic_speed(gam, rho, p, b1, b2, b3),
+            fast_magnetosonic_speed(gam, rho, p, b2, b3, b1),
+            fast_magnetosonic_speed(gam, rho, p, b3, b1, b2))
 end
