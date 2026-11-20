@@ -208,6 +208,7 @@ Include order in `src/Honghu.jl` matters, because later files use types defined 
 | `riemann/state.jl` | `HydroState` (field names match `quokka::HydroState`, the transverse field `by`, `bz` included), `AbstractRiemannSolver`, the `riemann_flux` generic, `AbstractMHDRiemannSolver` and its `mhd_flux` generic, and the direction permutation helpers. |
 | `riemann/hllc.jl`, `riemann/llf.jl` | One solver per file, mirroring Quokka's `HLLC.hpp` / `LLF.hpp`. Pointwise, canonical (normal = x) form. |
 | `riemann/llf_mhd.jl`, `riemann/hlld.jl` | The MHD solvers, Quokka's `LLF_mhd.hpp` / `HLLD.hpp` line for line; each returns the flux and the two bounding speeds. |
+| `riemann/hll_mhd.jl` | `HLLMHD`: the HLL flux inside `HLLD.hpp`, with HLLD's speeds, as a solver of its own for benchmarking HLLD; no Quokka counterpart. |
 | `riemann_radiation.jl` | M1 closure, Eddington tensor, `hll_radiation` (its `epsE` is the optional wave-speed correction). |
 | `hydro_system.jl` | `Floors`, `cons2prim!` / `enforce_floors!`, the flux sweep, flux divergence, hydro CFL; the carbuncle input `_transverse_jump`, shared with the MHD sweep. |
 | `tiling.jl` | The hydro sweep driver: `hydro_sweep!` runs the three cell kernels box by box (`_sweep_box!`), either tiled on the CPU (`tile_boxes`, a `TileArray` per task, AMReX's `Array4`) or as one whole-grid box on the workspace's backend, which is how a GPU runs it. Bit-identical either way. `Simulation(tile = :auto)` tiles from `TILE_MIN_THREADS` threads, and never on Apple Silicon, where it was measured slower. |
@@ -359,7 +360,7 @@ Two properties the tests pin, and that a change here must keep:
 
 ## Magnetohydrodynamics
 
-`Simulation(mhd = true)` evolves ideal MHD with constrained transport, Quokka's scheme (Kriel et al., in preparation): `HLLD` (the default) or `LLFMHD`, the Q26 EMF and LD04 averaging. `docs/mhd.md` is the guide, and `agent-chats/20261120-mhd-minimal-plan.md` the plan it was built from. Things that are not obvious from the code:
+`Simulation(mhd = true)` evolves ideal MHD with constrained transport, Quokka's scheme (Kriel et al., in preparation): `HLLD` (the default), `LLFMHD` or `HLLMHD` (for benchmarking; not in Quokka), the Q26 EMF and LD04 averaging. `docs/mhd.md` is the guide, and `agent-chats/20261120-mhd-minimal-plan.md` the plan it was built from. Things that are not obvious from the code:
 
 - **The EMF has Quokka's sign, `eps = u x b`**, the opposite of Ohm's law in the papers, so that every line of `mhd_system.jl` matches a line of `mhd_system.hpp`, and the induction update is `d b/dt = curl eps`.
 - **The total energy holds `|b_cc|^2/2`**, `b_cc` the average of a cell's two faces. Every read of the internal energy subtracts `magnetic_energy(bfield, i, j, k)` and every write adds it back: `cons2prim!`, `enforce_floors!`, both coupling drivers, `combine_gas!`, the chemistry step, the `chat` limiters, `floor_rad_energy!`, `gas_temperature`. A new site that writes `eint + ekin` deletes the field's energy without a word. Without MHD the helper returns `false`, a zero of every float type (`x - false === x`), so the hydrodynamic numbers are unchanged; pass it as the `bfield` keyword.

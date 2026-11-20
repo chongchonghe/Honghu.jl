@@ -303,7 +303,7 @@ function brio_wu(D; n=64, nt=1, riemann=LLFMHD(), reconstruction=PLM(), integrat
 end
 
 @testset "CT keeps div b at round-off" begin
-    for riemann in (LLFMHD(), HLLD()), reconstruction in (PCM(), PLM(), PPM()),
+    for riemann in (LLFMHD(), HLLMHD(), HLLD()), reconstruction in (PCM(), PLM(), PPM()),
         integrator in (ForwardEuler(), SSPRK2(), SSPRK3())
         sim = orszag_tang(n=32; riemann, reconstruction, integrator)
         for _ in 1:30
@@ -486,6 +486,48 @@ end
     @test !isapprox(F[3], mhd_physical_flux(rL, 1.0)[3]; atol=1e-3)
 end
 
+@testset "HLLMHD" begin
+    gam = 5 / 3
+    @test HLLMHD() isa Honghu.AbstractMHDRiemannSolver
+    @test Simulation(n=(8, 1, 1), mhd=true, riemann=HLLMHD()).riemann isa HLLMHD
+    # consistency, and the bounding speeds of HLLD
+    for (st, bx) in ((mhd_state(1.0, 0.3, -0.2, 0.1, 0.8, 0.5, -0.7, 0.9), 0.9),
+                     (mhd_state(0.4, -1.1, 0.6, 0.0, 2.0, 0.0, 1.3, -0.5), -0.5))
+        F, am, ap = Honghu.mhd_flux(HLLMHD(), st, st, gam, bx, 0.0)
+        @test all(Tuple(F) .≈ mhd_physical_flux(st, bx))
+        _, bm, bp = Honghu.mhd_flux(HLLD(), st, st, gam, bx, 0.0)
+        @test (am, ap) == (bm, bp)
+    end
+    # every wave moving right, or every wave moving left: the upwind side's flux
+    sL = mhd_state(1.0, 5.0, 0.1, -0.2, 1.0, 0.3, 0.2, 0.5)
+    sR = mhd_state(0.5, 5.0, 0.0, 0.1, 0.4, -0.3, 0.1, 0.5)
+    F, am, ap = Honghu.mhd_flux(HLLMHD(), sL, sR, gam, 0.5, 0.0)
+    @test all(Tuple(F) .≈ mhd_physical_flux(sL, 0.5)) && am == 0
+    mir(s) = HydroState(s.rho, -s.u, s.v, s.w, s.P, s.cs, s.E, s.by, s.bz)
+    F, am, ap = Honghu.mhd_flux(HLLMHD(), mir(sR), mir(sL), gam, 0.5, 0.0)
+    @test all(Tuple(F) .≈ mhd_physical_flux(mir(sL), 0.5)) && ap == 0
+    # mirror symmetry, as for LLFMHD
+    sL = mhd_state(1.0, 0.4, 0.3, -0.2, 1.0, 1.0, 0.2, 0.75)
+    sR = mhd_state(0.125, -0.1, 0.0, 0.5, 0.1, -1.0, 0.4, 0.75)
+    F, am, ap = Honghu.mhd_flux(HLLMHD(), sL, sR, gam, 0.75, 0.0)
+    G, bm, bp = Honghu.mhd_flux(HLLMHD(), mir(sR), mir(sL), gam, -0.75, 0.0)
+    @test F[1] ≈ -G[1] && F[2] ≈ G[2] && F[3] ≈ -G[3] && F[4] ≈ -G[4] && F[5] ≈ -G[5]
+    @test (am, ap) == (bp, bm)
+    # it is the flux HLLD blends toward: with a transverse velocity jump that drives
+    # MM21's weight theta to zero, HLLD returns HLL's flux, from the same speeds
+    for (a, b, bx) in ((sL, sR, 0.75), (mhd_state(1.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0),
+                                        mhd_state(0.25, 0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0), 1.0))
+        F, am, ap = Honghu.mhd_flux(HLLMHD(), a, b, gam, bx, 0.0)
+        G, bm, bp = Honghu.mhd_flux(HLLD(), a, b, gam, bx, -1e300)
+        @test all(isapprox.(Tuple(F), Tuple(G); rtol=1e-14, atol=1e-15)) && (am, ap) == (bm, bp)
+    end
+    # two waves: a stationary contact is smeared, mass crosses it
+    cL = mhd_state(1.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0)
+    cR = mhd_state(0.25, 0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 1.0)
+    F, _, _ = Honghu.mhd_flux(HLLMHD(), cL, cR, gam, 1.0, 0.0)
+    @test abs(F[1]) > 0.1
+end
+
 # Isolated discontinuities that HLLD resolves and LLFMHD smears: the cells of the
 # profile `q` that are neither the left nor the right value after `nsteps` with PCM.
 function smeared_cells(ic, q; riemann, n=32, nsteps=40)
@@ -504,6 +546,7 @@ end
     rho(sim) = interior(sim, sim.U)[1, :, 1, 1]
     @test smeared_cells(contact, rho; riemann=HLLD()) == 0
     @test smeared_cells(contact, rho; riemann=LLFMHD()) > 4
+    @test smeared_cells(contact, rho; riemann=HLLMHD()) > 4
 end
 
 # Along one direction LD04 is the HLL flux of the transverse field: the reason an
@@ -512,7 +555,7 @@ end
 # b_z (for eps_y), (a+ F_L + a- F_R - a+ a- (b_R - b_L)) / (a+ + a-) with
 # F = u* b_t - b_x u_t, from the same reconstructed states and bounding speeds.
 @testset "LD04 is the HLL flux of b_t in 1D" begin
-    for recon in (PCM(), PLM(), PPM()), riemann in (HLLD(), LLFMHD())
+    for recon in (PCM(), PLM(), PPM()), riemann in (HLLD(), HLLMHD(), LLFMHD())
         sim = Simulation(n=(32, 1, 1), mhd=true, reconstruction=recon, riemann=riemann,
                          boundaries=Boundaries(Periodic()))
         set_initial_conditions!(sim) do x, y, z

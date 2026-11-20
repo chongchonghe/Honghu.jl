@@ -23,7 +23,7 @@ The normal component $b_d$ is stored at the centre of each face normal to $d$, a
 
 ### 2.2 Fluxes
 
-The fluxes of $\rho$, $\rho\mathbf u$ and $E$ follow the method of lines, as for hydrodynamics. The primitives and the two transverse components of the cell-centred field are reconstructed to the faces (PCM, PLM or PPM); the normal component is the face value. The Riemann problem is solved with HLLD (Miyoshi & Kusano 2005), with the low-Mach total pressure and the carbuncle blending toward HLL of Minoshima & Miyoshi (2021), or with LLF. Each face keeps the bounding speeds $\alpha^\pm \ge 0$ of its Riemann fan.
+The fluxes of $\rho$, $\rho\mathbf u$ and $E$ follow the method of lines, as for hydrodynamics. The primitives and the two transverse components of the cell-centred field are reconstructed to the faces (PCM, PLM or PPM); the normal component is the face value. The Riemann problem is solved with HLLD (Miyoshi & Kusano 2005), with the low-Mach total pressure and the carbuncle blending toward HLL of Minoshima & Miyoshi (2021), with HLL, or with LLF. HLL uses HLLD's bounding speeds, so the two differ only inside the Riemann fan; it is there to measure what HLLD gains, and has no counterpart in Quokka. Each face keeps the bounding speeds $\alpha^\pm \ge 0$ of its Riemann fan.
 
 ### 2.3 The EMF
 
@@ -159,12 +159,12 @@ Interacting MHD shocks in 2D; the test of robustness and of $\nabla\cdot\mathbf 
 
 The unit tests check properties rather than tuned numbers:
 
-- $\nabla\cdot\mathbf b$ below $10^{-13}$ after many steps, with both solvers and every reconstruction and tableau, in 2D and in 3D;
+- $\nabla\cdot\mathbf b$ below $10^{-13}$ after many steps, with the three solvers and every reconstruction and tableau, in 2D and in 3D;
 - conservation of mass, momentum and energy on a periodic box, and a uniform oblique state preserved;
 - periodic face images that stay equal to the bit, and the same shock tube along $x$, $y$ and $z$;
 - 1D and 2D runs equal to thin periodic 3D boxes, and periodic face images that stay equal to the bit with noisy 2D data, which pins how far into the ghost cells the Riemann solves reach;
 - a static current-free field at rest in an outflow box, and an Orszag-Tang run at plasma $\beta \approx 0.3$ that needs the floors;
-- HLLD's flux exact at a stationary contact and a rotational discontinuity, a contact that stays sharp with HLLD and smears with LLF, and LD04 equal to the HLL flux of $b_t$ in 1D;
+- HLLD's flux exact at a stationary contact and a rotational discontinuity, a contact that stays sharp with HLLD and smears with HLL and LLF, HLL equal to HLLD with its blending weight at zero, and LD04 equal to the HLL flux of $b_t$ in 1D;
 - radiation and chemistry steps in a magnetised cell that give the internal energy of the same run without a field;
 - a checkpoint, which holds the face-centred field as well as the cells, from which a run continues to the bit;
 - the comparisons with Quokka and the convergence of section 3, and a 2D comparison: Quokka's `OrszagTang` with PCM for 40 steps, which this code reproduces to $2\times10^{-15}$ (with PPM they differ by $2\times10^{-3}$; the PPM kernels are the same, and Quokka's flattening, whose shock detector can fire at pressure extrema at this resolution, is the likely cause, not isolated).

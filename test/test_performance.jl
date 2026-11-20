@@ -108,6 +108,11 @@ end
     upd = (0.5, nothing, 0.5, 1e-4)
     @test bytes_per_cell(() -> Honghu.constrained_transport!(sim, upd), sim) < LIMIT
     @test bytes_per_cell(() -> Honghu.hydro_rhs!(hw.dU, sim.U, sim), sim) < LIMIT
+    for riemann in (HLLMHD(), LLFMHD())
+        s = Simulation(n=(24, 24, 24), mhd=true, riemann=riemann, boundaries=Boundaries(Periodic()))
+        set_initial_conditions!((x, y, z) -> (rho=1 + 0.2sinpi(2x), vx=0.3, p=1.0, bx=0.5), s)
+        @test bytes_per_cell(() -> Honghu.hydro_rhs!(s.hw.dU, s.U, s), s) < LIMIT
+    end
 
     # outflow: the ghost faces integrated across the boundary, and the ghost energies
     out = Simulation(n=(24, 24, 24), mhd=true, boundaries=Boundaries(Outflow()))

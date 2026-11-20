@@ -105,6 +105,7 @@ include("riemann/state.jl")
 include("riemann/hllc.jl")
 include("riemann/llf.jl")
 include("riemann/llf_mhd.jl")
+include("riemann/hll_mhd.jl")
 include("riemann/hlld.jl")
 include("riemann_radiation.jl")
 include("hydro_system.jl")
@@ -152,7 +153,7 @@ export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 # numerics
 export PCM, PLM, PPM
 export HLLC, LLF, HydroState, AbstractRiemannSolver, riemann_flux
-export LLFMHD, HLLD, AbstractMHDRiemannSolver, MagneticField
+export LLFMHD, HLLMHD, HLLD, AbstractMHDRiemannSolver, MagneticField
 export MinMod, MonotonizedCentral, VanLeer, Sweby
 export ForwardEuler, SSPRK2, SSPRK3
 

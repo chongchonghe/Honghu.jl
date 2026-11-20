@@ -55,7 +55,7 @@ Space and time are separated by the **method of lines**: a spatial operator $L(U
 |:---|:---|
 | Reconstruction | piecewise constant (`PCM`), piecewise linear (`PLM`, four limiters), piecewise parabolic (`PPM`) |
 | Hydro Riemann solver | `HLLC` (default) with Batten wave speeds, Rider's nonlinear correction, and the Minoshima & Miyoshi (2021) carbuncle cure and low-dissipation pressure; or `LLF` |
-| MHD | `HLLD` (default; Miyoshi & Kusano 2005 with the Minoshima & Miyoshi 2021 corrections) or `LLFMHD`; constrained transport with the Q26 EMF and LD04 averaging |
+| MHD | `HLLD` (default; Miyoshi & Kusano 2005 with the Minoshima & Miyoshi 2021 corrections), `LLFMHD` or `HLLMHD`; constrained transport with the Q26 EMF and LD04 averaging |
 | Radiation Riemann solver | `HLL` on the M1 system with frozen-Eddington-tensor wave speeds (Skinner & Ostriker 2013; Balsara 1999) |
 | Hydro time integration | SSP Runge-Kutta, first to third order (`ForwardEuler`, `SSPRK2`, `SSPRK3`) |
 | Radiation time integration | **IMEX PD-ARS**: transport explicit, stiff matter coupling implicit; second order and asymptotic-preserving |
