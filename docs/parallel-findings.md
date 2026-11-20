@@ -13,7 +13,7 @@ The 3D Sedov blast at 128³, the same machine, the code before and after, run ba
 | 32 threads, pinned | 136 ms | 82 ms | 1.66× |
 | speedup over 1 thread (32, pinned) | 10.2× | 14.6× | |
 
-The answers are the same to the bit, on every problem checked, at every thread count. Three changes carry it. **Tiling** the hydrodynamic sweep (section 7) moves the interface states and fluxes out of whole-grid arrays and into cache. **Forming the Runge–Kutta stage in the last sweep** (section 8) removes a four-array pass per stage. **Splitting each kernel's body into a row function** that the tile driver shares made one thread 13% faster on its own (section 7). Pinning the threads is worth another 10% at 32 threads, but only when the job uses every core (section 6). The goal set at the outset, 70 ms at 32 threads, was not reached. The measurement in section 7 says why it could not have been: with every core busy, each core runs 1.47× slower than one core alone, so the ideal is about 56 ms, and the sweeps are now within 10–15% of their share of it. Section 9 lists what remains.
+The answers are the same to the bit, on every problem checked, at every thread count. Three changes carry it. **Tiling** the hydrodynamic sweep (section 7) moves the interface states and fluxes out of whole-grid arrays and into cache. **Forming the Runge–Kutta stage in the last sweep** (section 8) removes a four-array pass per stage. **Splitting each kernel's body into a row function** that the tile driver shares made one thread 13% faster on its own (section 7). Pinning the threads is worth another 10% at 32 threads, but only when the job uses every core (section 6). The goal set at the outset, 70 ms at 32 threads, was not reached. The measurement in section 7 says why it could not have been: with every core busy, each core runs 1.47× slower than one core alone, so the ideal is about 56 ms, and the sweeps are now within 10–15% of their share of it. Section 9 lists what remains. Section 10 then rewrites the sweep's kernels as functions of one cell behind a single launch point, as AMReX and Quokka do, at no cost to the CPU, and runs the same kernels on a GPU, where they agree with the CPU to round-off.
 
 ## Machine and method
 
@@ -165,3 +165,47 @@ What is left, largest first:
 - **The remaining whole-grid passes**, about 10 ms a step: the floor pass, the ghost fill, the conversion, the stage copy and the CFL scan. Fusing the floors into the conversion, threading the ghost fill and reusing the conversion in the CFL scan would save perhaps 5 ms (6%). Each was set aside as too small to measure at the time (sections 2 and 4). Together they are no longer below the noise.
 - **The radiation sweep** is untouched. It has the same structure, reconstruct then HLL then divergence, so the same tiling would apply, but the implicit coupling dominates a radiation step.
 - **NUMA.** This node has one NUMA domain, so first-touch placement of the arrays, which matters on a two-socket node, could not be measured.
+
+### 10. Kernels for one cell, and the same kernels on a GPU
+
+Everything above made the CPU fast by writing CPU threading into each kernel. Quokka, which these algorithms are written for, runs on GPUs and under MPI through AMReX, where a kernel is a function of one cell handed to `ParallelFor`, and tiling is a cache policy of the CPU only. This section reshapes the hydrodynamic sweep that way, checks that the CPU loses nothing, and runs the sweep on the GPU of this node (an NVIDIA RTX PRO 6000 Blackwell, whose double-precision rate is a small fraction of its single-precision one).
+
+**What changed.**
+
+- The row functions of section 7 became functions of one cell or face, `_reconstruct_cell!`, `_hydro_flux_cell!` and `_divergence_cell!`.
+- They run through one launch point, `launch!(backend, box, f, args...)` (`src/launch.jl`). Its arguments are passed explicitly, not captured, so a device backend can convert them, and the boxing of section 7's bug cannot happen inside a kernel.
+- `CPUThreads` spreads the rows of a box over the threads with an inner loop over `i`, which is the loop structure the row functions had, and it compiles to the same speed. `CPUSerial` runs a box on the calling task, for a tile. `KABackend` launches a KernelAbstractions kernel with one work-item per cell, from a weak-dependency extension.
+- The flags `overwrite` and `update` became types before the launch (`Val(overwrite)`, a tuple or `nothing`), so no cell tests them. Done first with `Val` built per tile, it allocated 8.6 MB a step at 32 threads, a dynamic dispatch per tile. The conversion now happens once per sweep, behind a function barrier.
+- One driver, `hydro_sweep!`, replaced the tiled driver and the untiled branch. Each box gets the same three launches (`_sweep_box!`). Tiled, each task launches its tiles serially into its own `TileArray`. Untiled, the whole interior is one box, launched on the workspace's backend. That second form is how a GPU runs it: as in AMReX, a GPU never tiles.
+- Nothing measured in sections 1–9 was dropped. The Runge–Kutta stage formed in the last sweep, the overwriting first sweep and the static chunks are all pointwise or per-box and carry over unchanged. Only the duplicated driver and the row functions went.
+
+**The CPU, against `a20743c`** (the end of section 9). Sedov 128³, the two branches interleaved, three runs each; the node was less loaded than in section 9, so both are faster than the numbers there:
+
+| | `a20743c` | cell kernels | change |
+|:---|---:|---:|---:|
+| 1 thread (median) | 1194 ms | 1196 ms | +0.2% |
+| 32 threads, pinned (median) | 68.9 ms | 67.1 ms | −2.7% |
+
+The answers are bit-identical on the seven reference problems at 1, 8 and 32 threads.
+
+**The device path without a device.** `test/test_portable.jl` runs three steps of six problems with the sweeps launched through `KABackend(KernelAbstractions.CPU())`: Sedov tiled and untiled, Kelvin–Helmholtz in 2D, Sod in 1D, two mass scalars, and PLM. KernelAbstractions 0.10 compiles that backend through POCL, an OpenCL compiler, rather than as ordinary Julia. All six end bit-identical (`==`) to `CPUThreads`.
+
+**On the GPU.** `test/gpu/gpu_sweep.jl` runs each sweep, along x, y and z, in each of its three modes, once with `CPUThreads` and once with `KABackend(CUDABackend())` on `CuArray` copies of the same Float64 arrays:
+
+- **Accuracy:** the largest difference of any variable, over that variable's largest value, is 3–6e-16. The GPU compiles the same arithmetic with fused multiply-adds and its own math library, so the results are not bit-identical; they agree to round-off.
+- **Measured cell by cell:** the relative difference reached 1.4e-7, at a cell where two nearly equal fluxes cancel to a `dU` of 8e-13, off by 1e-19.
+- **Speed at 128³:** one sweep takes 2.0–2.3 ms on the GPU, against 4.5–5.2 ms tiled on all 32 cores and about 10 ms untiled. This is a card built for single precision, so a data-centre GPU would do better.
+
+Only the sweep runs there. Ghost filling, floors, conversion, the CFL scan and radiation are still `threaded_jk` loops over `Array`s, and are the next kernels to convert the same way.
+
+**What MPI would need.** Nothing in the sweep assumes the grid is the whole domain: it reads `prim` over the ghost cells of whatever `CartesianGrid` it is given, as an AMReX box does. What a distributed run adds lies outside it:
+
+- **Halo exchange.** `fill_ghosts!` is already the single entry point that fills ghost cells, dispatching on the boundary type. A halo exchange would be one more boundary type on the faces shared with another rank.
+- **Global reductions.** Three reductions span the whole grid, and each would need an `Allreduce`:
+  - the CFL maximum (`reduce_max_jk`, under `hydro_timestep`);
+  - the floor-repair counters of `enforce_floors!` (an atomic sum);
+  - the counters of `enforce_scalar_floors!` (also an atomic sum).
+
+None of this is implemented, and MPI is not installed on this node.
+
+**Storage order.** The arrays are still `(nvar, i, j, k)`, one cell's variables together. A GPU warp reading one variable of 32 neighbouring cells would read 32 contiguous numbers with AMReX's `(i, j, k, n)`, and five times that span here. The kernels now index `[n, i, j, k]` on any `AbstractArray`, so trying the other order is a matter of allocating it (a `PermutedDimsArray` over `(i, j, k, n)` storage) and measuring, not of rewriting the kernels.
