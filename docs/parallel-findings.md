@@ -13,7 +13,7 @@ The 3D Sedov blast at 128³, the same machine, the code before and after, run ba
 | 32 threads, pinned | 136 ms | 82 ms | 1.66× |
 | speedup over 1 thread (32, pinned) | 10.2× | 14.6× | |
 
-The answers are the same to the bit, on every problem checked, at every thread count. Three changes carry it. **Tiling** the hydrodynamic sweep (section 7) moves the interface states and fluxes out of whole-grid arrays and into cache. **Forming the Runge–Kutta stage in the last sweep** (section 8) removes a four-array pass per stage. **Splitting each kernel's body into a row function** that the tile driver shares made one thread 13% faster on its own (section 7). Pinning the threads is worth another 10% at 32 threads, but only when the job uses every core (section 6). The goal set at the outset, 70 ms at 32 threads, was not reached. The measurement in section 7 says why it could not have been: with every core busy, each core runs 1.47× slower than one core alone, so the ideal is about 56 ms, and the sweeps are now within 10–15% of their share of it. Section 9 lists what remains. Section 10 then rewrites the sweep's kernels as functions of one cell behind a single launch point, as AMReX and Quokka do, at no cost to the CPU, and runs the same kernels on a GPU, where they agree with the CPU to round-off.
+The answers are the same to the bit, on every problem checked, at every thread count. Three changes carry it. **Tiling** the hydrodynamic sweep (section 7) moves the interface states and fluxes out of whole-grid arrays and into cache. **Forming the Runge–Kutta stage in the last sweep** (section 8) removes a four-array pass per stage. **Splitting each kernel's body into a row function** that the tile driver shares made one thread 13% faster on its own (section 7). Pinning the threads is worth another 10% at 32 threads, but only when the job uses every core (section 6). The goal set at the outset, 70 ms at 32 threads, was not reached. The measurement in section 7 says why it could not have been: with every core busy, each core runs 1.47× slower than one core alone, so the ideal is about 56 ms, and the sweeps are now within 10–15% of their share of it. Section 9 lists what remains. Section 10 then rewrites the sweep's kernels as functions of one cell behind a single launch point, as AMReX and Quokka do, at no cost to the CPU, and runs the same kernels on a GPU, where they agree with the CPU to round-off. Section 11 measures an Apple M5 Max, where tiling is slower at every thread count, so the default does not tile there.
 
 ## Machine and method
 
@@ -127,7 +127,7 @@ Two things set the optimum. The scratch of a box is `3 nvar (n_D + 3) b b'` numb
 | untiled | 663 | 375 | 230 | 159 | 121 |
 | tiled | 693 | 382 | 219 | 147 | 85 |
 
-So `Simulation(tile = :auto)`, the default, tiles from `TILE_MIN_THREADS = 8` threads and not below. A tuple forces a tile, and `nothing` forces the untiled sweep.
+So `Simulation(tile = :auto)`, the default, tiles from `TILE_MIN_THREADS = 8` threads and not below, and never on Apple Silicon (section 11). A tuple forces a tile, and `nothing` forces the untiled sweep.
 
 **Not on a grid with too few boxes.** The tile was tuned on 3D Sedov, but a sweep's tasks are its boxes, and a 2D run's transverse sweep has few of them: `ceil(n1/32)` with `(32, 1, 1)`. The final review measured Kelvin–Helmholtz at 32 threads. At 256² the step was unchanged by tiling, at 512² (16 boxes, half the threads idle) it was 4% slower, and at 1024² it was 18% faster (51.4 → 42.1 ms). So `:auto` also requires at least one box per thread in every active direction. That covers every 3D grid from about 32³ on, and 2D grids from 1024² at 32 threads.
 
@@ -209,3 +209,14 @@ Only the sweep runs there. Ghost filling, floors, conversion, the CFL scan and r
 None of this is implemented, and MPI is not installed on this node.
 
 **Storage order.** The arrays are still `(nvar, i, j, k)`, one cell's variables together. A GPU warp reading one variable of 32 neighbouring cells would read 32 contiguous numbers with AMReX's `(i, j, k, n)`, and five times that span here. The kernels now index `[n, i, j, k]` on any `AbstractArray`, so trying the other order is a matter of allocating it (a `PermutedDimsArray` over `(i, j, k, n)` storage) and measuring, not of rewriting the kernels.
+
+### 11. Apple Silicon: tiling does not pay
+
+Measured on an Apple M5 Max laptop: 18 cores in two clusters of 6 and 12, unified memory, Julia 1.12.6, macOS. The test suite passes there as it does on the node. Sedov, `test/benchmarks_parallel.jl`, ms per step, one run each:
+
+| threads | 1 | 4 | 6 | 8 | 12 | 18 |
+|:---|---:|---:|---:|---:|---:|---:|
+| 128³ untiled | 525 | 151 | 124 | 102 | 77 | 72 |
+| 128³ tiled (32, 1, 1) | 565 | 187 | 142 | 118 | 94 | 89 |
+
+At 256³ on 18 threads the untiled step takes 586 ms and the tiled one 632 ms. Tiling is slower at every thread count, by 8–23% at 128³, and the gap does not close as threads are added, as it did on the node. Why was not measured: one guess is that 18 cores do not saturate this chip's memory bandwidth, so there is no contention for tiling to relieve, but no bandwidth figure was taken. With `TILE_MIN_THREADS = 8`, a default run at 8 threads or more was 15–22% slower than it needed to be, so `:auto` now never tiles on Apple Silicon (`Sys.isapple() && Sys.ARCH === :aarch64`). A tuple still forces a tile there. The answers are unchanged, since tiling is bit-identical.

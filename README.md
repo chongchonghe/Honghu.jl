@@ -328,14 +328,14 @@ JULIA_NUM_THREADS=6 julia --project=. script.jl   # the same as -t 6
 
 In the REPL, `Threads.nthreads()` gives the number, and the line `run!` prints at the end says how many threads the run used. A 1D run has a single row, so it runs on one thread whatever `-t` asks for; 2D and 3D runs use all of them. On the Apple M5 Max below, which has 6 performance and 12 efficiency cores, `-t auto` gives 6 threads.
 
-The 3D Sedov blast at $128^3$, `Honghu.Problems.sedov_blast(n = 128)` with its defaults, 20 steps after one warm-up step, Apple M5 Max, Julia 1.12, measured 2026-11-12:
+The 3D Sedov blast at $128^3$, `Honghu.Problems.sedov_blast(n = 128)` with its defaults, 20 steps after one warm-up step, Apple M5 Max, Julia 1.12, measured 2026-11-20:
 
 | Threads | 20 steps | per step | throughput |
 |:---|---:|---:|---:|
-| 1 | 11.2 s | 0.56 s | 3.75 Mcell-updates/s |
-| 6 | 3.01 s | 0.15 s | 13.9 Mcell-updates/s |
+| 1 | 10.6 s | 0.53 s | 3.96 Mcell-updates/s |
+| 6 | 2.58 s | 0.129 s | 16.3 Mcell-updates/s |
 
-Six threads are 3.7 times faster than one. To measure it on your machine, save this as `sedov_timing.jl` and run it with `-t 1` and with `-t 6`:
+Six threads are 4.1 times faster than one. To measure it on your machine, save this as `sedov_timing.jl` and run it with `-t 1` and with `-t 6`:
 
 ```julia
 using Honghu
@@ -362,7 +362,7 @@ On a 32-core workstation node (AMD Threadripper PRO 7975WX, one NUMA domain), th
 | 32, pinned | 0.082 s | 0.67 s |
 | 64, pinned | 0.078 s | 0.64 s |
 
-Three things are worth knowing on such a machine. Use every core: from 8 threads on, the hydrodynamic sweeps run cache-sized boxes of cells rather than whole-grid passes (`Simulation(tile = :auto)`, the default), and this is what lets them keep scaling past the point where the memory bus saturates. When the job has the whole node, pin the threads with `JULIA_EXCLUSIVE=1 julia -t 32` (one thread per physical core, if CPUs `0` to `31` are the physical cores, as `lscpu -e` shows here), which is worth 10% at 32 threads. Do not pin a run that uses only some of the cores, though: pinned to CPUs `0` to `15`, a 16-thread run gets only two of the four L3 caches and is 20% slower than unpinned. Hyperthreads (`-t 64`) add about 5%. `docs/parallel-findings.md` has the measurements and what each change bought.
+Three things are worth knowing on such a machine. Use every core: from 8 threads on, the hydrodynamic sweeps run cache-sized boxes of cells rather than whole-grid passes (`Simulation(tile = :auto)`, the default), and this is what lets them keep scaling past the point where the memory bus saturates (on Apple Silicon tiling was slower at every thread count, so the default does not tile there). When the job has the whole node, pin the threads with `JULIA_EXCLUSIVE=1 julia -t 32` (one thread per physical core, if CPUs `0` to `31` are the physical cores, as `lscpu -e` shows here), which is worth 10% at 32 threads. Do not pin a run that uses only some of the cores, though: pinned to CPUs `0` to `15`, a 16-thread run gets only two of the four L3 caches and is 20% slower than unpinned. Hyperthreads (`-t 64`) add about 5%. `docs/parallel-findings.md` has the measurements and what each change bought.
 
 **Memory.** Buffers scale as roughly `72 * ncells * 8` bytes when grey radiation is enabled, `35 * ncells * 8` without, where `ncells` includes ghost cells. A $128^3$ radiation-hydrodynamics run needs about 1.4 GB; pure hydrodynamics at $128^3$ needs about 0.7 GB. Every radiation buffer is `4 * ngroups` components wide, so the radiation share of that figure — about half of it in a grey run — scales with the number of frequency groups.
 

@@ -41,14 +41,22 @@ nor on a grid where a sweep would have fewer boxes than threads (a 2D run below
 about 1024^2 at 32 threads).
 Tiling pays by relieving the memory bus that many cores share, and costs 4-7% on
 one core, so on this node it loses at 2 and 4 threads and wins from 8 on (5% at
-8, 8% at 16, 30% at 32). The answer is the same either way.
+8, 8% at 16, 30% at 32). The answer is the same either way. On Apple Silicon
+`:auto` never tiles: on an M5 Max tiling was slower at every thread count, all
+18 cores included.
 """
 const TILE_MIN_THREADS = 8
+
+# Apple Silicon: `:auto` never tiles. On an M5 Max (18 cores) the tiled sweep was
+# slower than the untiled one at every thread count from 1 to 18, by 8-23% at
+# 128^3 and by 8% at 256^3 on 18 threads (docs/parallel-findings.md, section 11).
+const _NO_AUTO_TILE = Sys.isapple() && Sys.ARCH === :aarch64
 
 # The tile the `tile` keyword of `Simulation` resolves to.
 _resolve_tile(tile::Union{Nothing,NTuple{3,Int}}, g::CartesianGrid) = tile
 function _resolve_tile(tile::Symbol, g::CartesianGrid)
     tile === :auto || throw(ArgumentError("tile must be :auto, nothing or a tuple of three Ints, got :$tile"))
+    _NO_AUTO_TILE && return nothing
     return _auto_tile(g, Threads.nthreads())
 end
 
@@ -170,7 +178,8 @@ them, box by box ([`_sweep_box!`](@ref)):
     cache-sized scratch, a [`TileArray`](@ref);
   - otherwise as **one box**, the whole interior, with `scratch = (qL, qR, flux)`
     three whole-grid arrays and the launches spread over `backend`. This is
-    how a GPU runs it, and a CPU below `TILE_MIN_THREADS` threads.
+    how a GPU runs it, a CPU below `TILE_MIN_THREADS` threads, and Apple
+    Silicon.
 
 A reconstruction defined outside the package has no cell kernel, so it runs as
 one box with its own `reconstruct!`.

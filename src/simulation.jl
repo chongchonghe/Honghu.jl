@@ -254,7 +254,9 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     untiled sweep, which is also what a reconstruction other than `PCM`, `PLM`
     or `PPM` always gets. `:auto` is [`DEFAULT_TILE`](@ref) with
     [`TILE_MIN_THREADS`](@ref) threads or more, if the sweep along every active
-    direction has at least one box per thread, and `nothing` otherwise. The answer
+    direction has at least one box per thread, and `nothing` otherwise; on Apple
+    Silicon, where tiling was measured slower at every thread count, it is
+    always `nothing`. The answer
     is the same to the bit whatever `tile` is: it changes speed only. On a
     machine with different caches another tile may be faster, and
     `test/benchmarks_parallel.jl --tile=a,b,c` measures one;

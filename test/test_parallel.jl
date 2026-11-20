@@ -124,9 +124,10 @@ end
         ok || @info "tiled and untiled differ" name recon tile maximum(abs, a.U .- b.U)
         @test ok
     end
-    # `:auto` tiles from `TILE_MIN_THREADS` threads, and is untiled below
+    # `:auto` tiles from `TILE_MIN_THREADS` threads, and is untiled below and on Apple Silicon
     auto = P.sedov_blast(; n=12)[1]
-    @test (auto.hw.tiling !== nothing) == (Threads.nthreads() >= Honghu.TILE_MIN_THREADS)
+    @test (auto.hw.tiling !== nothing) ==
+          (Threads.nthreads() >= Honghu.TILE_MIN_THREADS && !Honghu._NO_AUTO_TILE)
     @test_throws ArgumentError P.sedov_blast(; n=12, tile=:fast)
     @test !Honghu.has_tiled_method(UntiledPCM())
     @test all(Honghu.has_tiled_method, (PCM(), PLM(), PPM()))
