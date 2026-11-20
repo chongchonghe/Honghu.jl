@@ -70,53 +70,64 @@ grid layout; only the components `1:nvar` are touched.
 """
 function reconstruct! end
 
-function reconstruct!(qL::A, qR::A, q::A, ::PCM, ::Val{D}, g::CartesianGrid,
+function reconstruct!(qL::A, qR::A, q::A, m::PCM, ::Val{D}, g::CartesianGrid,
                       nvar::Int) where {T,A<:AbstractArray{T,4},D}
+    launch!(CPUThreads(), cell_ranges(g, Val(D)), _reconstruct_cell!, qL, qR, q, m, Val(D), nvar)
+    return nothing
+end
+
+# The body of each reconstruction for one cell `(i, j, k)`, a kernel for
+# [`launch!`](@ref). The whole-grid `reconstruct!` and the hydro sweep driver
+# (`src/tiling.jl`) both launch it, so the arithmetic is written once. `qL` and
+# `qR` may be tile-local arrays indexed with global indices
+# ([`TileArray`](@ref)) or device arrays, hence their own types.
+@inline function _reconstruct_cell!(i, j, k, qL, qR, q, ::PCM, ::Val{D}, nvar) where {D}
     d1, d2, d3 = _shift(Val(D))
-    ir, jr, kr = cell_ranges(g, Val(D))
-    threaded_jk(jr, kr) do j, k
-        @inbounds for i in ir, n in 1:nvar
-            v = q[n, i, j, k]
-            qR[n, i, j, k] = v
-            qL[n, i+d1, j+d2, k+d3] = v
-        end
+    @inbounds for n in 1:nvar
+        v = q[n, i, j, k]
+        qR[n, i, j, k] = v
+        qL[n, i+d1, j+d2, k+d3] = v
     end
     return nothing
 end
 
 function reconstruct!(qL::A, qR::A, q::A, m::PLM, ::Val{D}, g::CartesianGrid,
                       nvar::Int) where {T,A<:AbstractArray{T,4},D}
+    launch!(CPUThreads(), cell_ranges(g, Val(D)), _reconstruct_cell!, qL, qR, q, m, Val(D), nvar)
+    return nothing
+end
+
+@inline function _reconstruct_cell!(i, j, k, qL, qR, q, m::PLM, ::Val{D}, nvar) where {D}
     d1, d2, d3 = _shift(Val(D))
-    ir, jr, kr = cell_ranges(g, Val(D))
     lim = m.limiter
-    threaded_jk(jr, kr) do j, k
-        @inbounds for i in ir, n in 1:nvar
-            qc = q[n, i, j, k]
-            qm = q[n, i-d1, j-d2, k-d3]
-            qp = q[n, i+d1, j+d2, k+d3]
-            s = limit(lim, qc - qm, qp - qc) / 2
-            qR[n, i, j, k] = qc - s
-            qL[n, i+d1, j+d2, k+d3] = qc + s
-        end
+    @inbounds for n in 1:nvar
+        qc = q[n, i, j, k]
+        qm = q[n, i-d1, j-d2, k-d3]
+        qp = q[n, i+d1, j+d2, k+d3]
+        s = limit(lim, qc - qm, qp - qc) / 2
+        qR[n, i, j, k] = qc - s
+        qL[n, i+d1, j+d2, k+d3] = qc + s
     end
     return nothing
 end
 
-function reconstruct!(qL::A, qR::A, q::A, ::PPM, ::Val{D}, g::CartesianGrid,
+function reconstruct!(qL::A, qR::A, q::A, m::PPM, ::Val{D}, g::CartesianGrid,
                       nvar::Int) where {T,A<:AbstractArray{T,4},D}
+    launch!(CPUThreads(), cell_ranges(g, Val(D)), _reconstruct_cell!, qL, qR, q, m, Val(D), nvar)
+    return nothing
+end
+
+@inline function _reconstruct_cell!(i, j, k, qL, qR, q, ::PPM, ::Val{D}, nvar) where {D}
     d1, d2, d3 = _shift(Val(D))
-    ir, jr, kr = cell_ranges(g, Val(D))
-    threaded_jk(jr, kr) do j, k
-        @inbounds for i in ir, n in 1:nvar
-            qmm = q[n, i-2d1, j-2d2, k-2d3]
-            qm = q[n, i-d1, j-d2, k-d3]
-            qc = q[n, i, j, k]
-            qp = q[n, i+d1, j+d2, k+d3]
-            qpp = q[n, i+2d1, j+2d2, k+2d3]
-            am, ap = ppm_edges(qmm, qm, qc, qp, qpp)
-            qR[n, i, j, k] = am
-            qL[n, i+d1, j+d2, k+d3] = ap
-        end
+    @inbounds for n in 1:nvar
+        qmm = q[n, i-2d1, j-2d2, k-2d3]
+        qm = q[n, i-d1, j-d2, k-d3]
+        qc = q[n, i, j, k]
+        qp = q[n, i+d1, j+d2, k+d3]
+        qpp = q[n, i+2d1, j+2d2, k+2d3]
+        am, ap = ppm_edges(qmm, qm, qc, qp, qpp)
+        qR[n, i, j, k] = am
+        qL[n, i+d1, j+d2, k+d3] = ap
     end
     return nothing
 end

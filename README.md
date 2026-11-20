@@ -350,6 +350,20 @@ julia --project=. -t 1 sedov_timing.jl
 julia --project=. -t 6 sedov_timing.jl
 ```
 
+#### On a compute node
+
+On a 32-core workstation node (AMD Threadripper PRO 7975WX, one NUMA domain), the same Sedov blast, measured with `test/benchmarks_parallel.jl`:
+
+| threads | $128^3$ per step | $256^3$ per step |
+|---:|---:|---:|
+| 1 | 1.20 s | 9.5 s |
+| 8 | 0.20 s | 1.63 s |
+| 16 | 0.115 s | 0.88 s |
+| 32, pinned | 0.082 s | 0.67 s |
+| 64, pinned | 0.078 s | 0.64 s |
+
+Three things are worth knowing on such a machine. Use every core: from 8 threads on, the hydrodynamic sweeps run cache-sized boxes of cells rather than whole-grid passes (`Simulation(tile = :auto)`, the default), and this is what lets them keep scaling past the point where the memory bus saturates. When the job has the whole node, pin the threads with `JULIA_EXCLUSIVE=1 julia -t 32` (one thread per physical core, if CPUs `0` to `31` are the physical cores, as `lscpu -e` shows here), which is worth 10% at 32 threads. Do not pin a run that uses only some of the cores, though: pinned to CPUs `0` to `15`, a 16-thread run gets only two of the four L3 caches and is 20% slower than unpinned. Hyperthreads (`-t 64`) add about 5%. `docs/parallel-findings.md` has the measurements and what each change bought.
+
 **Memory.** Buffers scale as roughly `72 * ncells * 8` bytes when grey radiation is enabled, `35 * ncells * 8` without, where `ncells` includes ghost cells. A $128^3$ radiation-hydrodynamics run needs about 1.4 GB; pure hydrodynamics at $128^3$ needs about 0.7 GB. Every radiation buffer is `4 * ngroups` components wide, so the radiation share of that figure — about half of it in a grey run — scales with the number of frequency groups.
 
 ## Output

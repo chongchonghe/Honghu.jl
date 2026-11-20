@@ -95,6 +95,7 @@ include("coupling.jl")            # per-cell matter-radiation coupling interface
 include("coupling_solvers.jl")    # ... and the two in-tree solvers
 include("coupling_ode.jl")        # ... and the error-controlled reference solve
 include("grid.jl")
+include("launch.jl")
 include("variables.jl")
 include("boundary.jl")
 include("limiters.jl")
@@ -104,6 +105,7 @@ include("riemann/hllc.jl")
 include("riemann/llf.jl")
 include("riemann_radiation.jl")
 include("hydro_system.jl")
+include("tiling.jl")             # the cache-blocked hydro sweep, on the kernels above
 include("radiation_system.jl")
 include("source_terms.jl")
 include("chemistry.jl")            # per-cell chemical network interface

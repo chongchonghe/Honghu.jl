@@ -30,9 +30,10 @@ const BUNDLE = "honghu-docs.md"
 # the build, so a new file cannot drop its docstrings silently.
 const PAGES = [
     "simulation" => ("Simulation and grid",
-                     ["simulation.jl", "grid.jl", "variables.jl", "boundary.jl", "integrators.jl"]),
+                     ["simulation.jl", "grid.jl", "launch.jl", "variables.jl", "boundary.jl", "integrators.jl"]),
     "hydro" => ("Hydrodynamics",
-                ["eos.jl", "hydro_system.jl", "limiters.jl", "reconstruction.jl", "riemann/"]),
+                ["eos.jl", "hydro_system.jl", "tiling.jl", "limiters.jl", "reconstruction.jl",
+                 "riemann/"]),
     "radiation" => ("Radiation transport",
                     ["radiation_system.jl", "riemann_radiation.jl", "planck.jl", "opacity.jl"]),
     "rsla" => ("Reduced speed of light", ["rsla.jl"]),
@@ -53,6 +54,7 @@ const PAGES = [
 const NOTES = ["photochemistry.md",
                "coupling-new-method.md", "coupling-new-method-dust.md",
                "coupling-findings.md", "rsla-findings.md", "photoionization-findings.md",
+               "parallel-findings.md",
                "documentation.md"]
 
 const MODULES = (Honghu, Honghu.Problems, Honghu.CGS)

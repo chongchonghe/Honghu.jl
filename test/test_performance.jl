@@ -28,7 +28,7 @@ end
     # 24^3 grid is well under 1 B/cell.
     LIMIT = 8.0
 
-    sim = Simulation(n=(24, 24, 24), boundaries=Boundaries(Periodic()))
+    sim = Simulation(n=(24, 24, 24), boundaries=Boundaries(Periodic()), tile=Honghu.DEFAULT_TILE)
     set_initial_conditions!(sim) do x, y, z
         (rho=1 + 0.2 * sinpi(2x), vx=0.3, vy=-0.1, vz=0.2, p=1.0)
     end
@@ -51,6 +51,17 @@ end
     @test bytes_per_cell(() -> Honghu.combine!(sim.U, 0.5, hw.U0, 0.5, sim.U, 0.1,
                                                hw.dU, g, Honghu.NHYDRO), sim) < LIMIT
     @test bytes_per_cell(() -> Honghu.hydro_timestep(hw.prim, sim.eos, g, 0.4), sim) < LIMIT
+    # The tiled sweep, which the simulation uses by default from 8 threads. (A boxed capture in its
+    # spawn loop costs bytes per task, not per cell, so this cannot see the race
+    # that would follow; `test_parallel.jl`'s bit-identity tests can, with threads.)
+    @test hw.tiling !== nothing
+    scratch = (hw.qL, hw.qR, hw.flux)
+    for D in 1:3, tiles in (hw.tiling, nothing)     # tiled, and one whole-grid box
+        @test bytes_per_cell(() -> Honghu.hydro_sweep!(hw.dU, hw.prim, scratch, PPM(), sim.eos,
+                                                       sim.riemann, Val(D), g, Honghu.NHYDRO, 0,
+                                                       D == 1, nothing, Honghu.CPUThreads(),
+                                                       tiles), sim) < LIMIT
+    end
 end
 
 @testset "scalar kernels do not allocate per cell" begin

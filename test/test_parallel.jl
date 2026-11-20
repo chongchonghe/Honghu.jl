@@ -1,0 +1,203 @@
+# The parallel drivers: each must do exactly what its serial counterpart does,
+# whatever the number of threads. Bit-for-bit (`==`) is the requirement, because
+# the drivers only change who computes what, never the arithmetic.
+#
+# Run these with several threads (the suite's `-t 4`). With one, the tiled sweep
+# has one task and one scratch, and a bug that lets two tasks share a scratch --
+# it happened once, through a boxed variable in the spawn loop -- cannot show.
+
+_mark!(i, j, k, A) = (A[i, j, k] += 1; nothing)
+
+@testset "launch! visits every cell once" begin
+    for backend in (Honghu.CPUThreads(), Honghu.CPUSerial())
+        for box in ((2:5, 3:4, 1:1), (1:3, 1:3, 2:4), (4:3, 1:2, 1:1))
+            A = zeros(Int, 6, 5, 4)
+            Honghu.launch!(backend, box, _mark!, A)
+            inside = [i in box[1] && j in box[2] && k in box[3] for i in 1:6, j in 1:5, k in 1:4]
+            @test A == Int.(inside)
+        end
+    end
+    # without KernelAbstractions loaded there is no device launch, and saying so
+    A = zeros(Int, 2, 2, 2)
+    @test_throws ErrorException Honghu.launch!(Honghu.KABackend(:none), (1:1, 1:1, 1:1), _mark!, A)
+end
+
+@testset "threaded fill and copy" begin
+    A = rand(5, 10, 11, 13)
+    B = similar(A)
+    Honghu.threaded_copyto!(B, A)
+    @test B == A
+    Honghu.threaded_fill!(A, 0.0)
+    @test all(iszero, A)
+    # a single slab along the last index, which leaves nothing to split
+    C = rand(3, 4, 5, 1)
+    D = similar(C)
+    Honghu.threaded_copyto!(D, C)
+    @test D == C
+end
+
+# `dU` from scratch: zero it, then subtract each active direction's divergence,
+# exactly as `hydro_rhs!` did before the zeroing was folded into the first sweep.
+function reference_rhs(sim)
+    U = copy(sim.U)
+    g, hw, nv = sim.grid, sim.hw, Honghu.nhydrovars(sim)
+    Honghu.fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
+    Honghu.enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars)
+    Honghu.enforce_scalar_floors!(U, g, sim.nscalars, false)
+    prim = similar(U)
+    Honghu.cons2prim!(prim, U, sim.eos, g, sim.nscalars)
+    qL, qR, flux = similar(U), similar(U), similar(U)
+    dU = zeros(size(U))
+    for D in 1:3
+        g.active[D] || continue
+        Honghu.reconstruct!(qL, qR, prim, sim.reconstruction, Val(D), g, nv)
+        Honghu.hydro_fluxes!(flux, qL, qR, prim, sim.eos, sim.riemann, Val(D), g, sim.nscalars)
+        Honghu.flux_divergence!(dU, flux, Val(D), g, nv)
+    end
+    return dU
+end
+interior(A, g) = A[:, g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]]
+
+@testset "flux_divergence! overwrite" begin
+    sim, _ = Honghu.Problems.sedov_blast(; n=12)
+    g, hw = sim.grid, sim.hw
+    Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g)
+    Honghu.reconstruct!(hw.qL, hw.qR, hw.prim, PPM(), Val(2), g, 5)
+    Honghu.hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(2), g)
+    sub = zeros(size(sim.U))
+    Honghu.flux_divergence!(sub, hw.flux, Val(2), g, 5)
+    over = fill(NaN, size(sim.U))                 # whatever was there is replaced
+    Honghu.flux_divergence!(over, hw.flux, Val(2), g, 5, true)
+    @test interior(over, g) == interior(sub, g)
+end
+
+@testset "hydro_rhs! matches zero-then-subtract" begin
+    for sim in (Honghu.Problems.sedov_blast(; n=13)[1],
+                Simulation(n=(1, 16, 16)),               # x inactive: y overwrites
+                Simulation(n=(10, 1, 9)))                # y inactive
+        if sim.grid.n[1] == 1
+            set_initial_conditions!((x, y, z) -> (rho=1 + 0.3sinpi(2y), vz=0.2, p=1.0), sim)
+        elseif sim.grid.n[2] == 1
+            set_initial_conditions!((x, y, z) -> (rho=1 + 0.3sinpi(2z), vx=0.2, p=1.0), sim)
+        end
+        ref = reference_rhs(sim)
+        fill!(sim.hw.dU, NaN)
+        Honghu.hydro_rhs!(sim.hw.dU, sim.U, sim)
+        @test interior(sim.hw.dU, sim.grid) == interior(ref, sim.grid)
+    end
+end
+
+# A reconstruction with no tiled method: the tiled driver must leave it alone.
+struct UntiledPCM <: Honghu.AbstractReconstruction end
+Honghu.required_ghosts(::UntiledPCM) = 2
+Honghu.reconstruct!(qL, qR, q, ::UntiledPCM, ::Val{D}, g, nvar) where {D} =
+    Honghu.reconstruct!(qL, qR, q, PCM(), Val(D), g, nvar)
+
+function scalar_blast(; kw...)
+    sim = Simulation(; n=(14, 11, 9), nscalars=2, kw...)
+    set_initial_conditions!(sim) do x, y, z
+        r2 = (x - 0.5)^2 + (y - 0.5)^2 + (z - 0.5)^2
+        (rho=1.0, p=r2 < 0.04 ? 10.0 : 0.1, X=(r2 < 0.04 ? 0.9 : 0.2, r2 < 0.04 ? 0.1 : 0.8))
+    end
+    return sim
+end
+
+@testset "tiled sweep equals untiled" begin
+    P = Honghu.Problems
+    makers = [
+        "sedov 37" => kw -> P.sedov_blast(; n=37, kw...)[1],
+        "sedov 48" => kw -> P.sedov_blast(; n=48, kw...)[1],
+        "kh 2D" => kw -> P.kelvin_helmholtz(; n=40, kw...)[1],
+        "sod 1D" => kw -> P.sod_shock_tube(; n=64, kw...)[1],
+        "scalars" => kw -> scalar_blast(; kw...),
+    ]
+    for (name, mk) in makers, recon in (PCM(), PLM(), PPM()), tile in ((4, 5, 3), Honghu.DEFAULT_TILE)
+        a = mk((; reconstruction=recon, tile))
+        b = mk((; reconstruction=recon, tile=nothing))
+        @test a.hw.tiling !== nothing && b.hw.tiling === nothing
+        for _ in 1:5
+            dt = Honghu.timestep(b)
+            step!(a, dt)
+            step!(b, dt)
+        end
+        ok = a.U == b.U
+        ok || @info "tiled and untiled differ" name recon tile maximum(abs, a.U .- b.U)
+        @test ok
+    end
+    # `:auto` tiles from `TILE_MIN_THREADS` threads, and is untiled below
+    auto = P.sedov_blast(; n=12)[1]
+    @test (auto.hw.tiling !== nothing) == (Threads.nthreads() >= Honghu.TILE_MIN_THREADS)
+    @test_throws ArgumentError P.sedov_blast(; n=12, tile=:fast)
+    @test !Honghu.has_tiled_method(UntiledPCM())
+    @test all(Honghu.has_tiled_method, (PCM(), PLM(), PPM()))
+    a = P.sedov_blast(; n=12, reconstruction=UntiledPCM())[1]
+    b = P.sedov_blast(; n=12, reconstruction=PCM(), tile=nothing)[1]
+    for _ in 1:3
+        dt = Honghu.timestep(b)
+        step!(a, dt); step!(b, dt)
+    end
+    @test a.U == b.U
+end
+
+@testset "hydro_sweep! tiled equals one whole-grid box" begin
+    sim = Honghu.Problems.sedov_blast(; n=19, tile=(4, 5, 3))[1]
+    g, hw = sim.grid, sim.hw
+    @test Honghu._uses_tiles(hw, sim.reconstruction)
+    @test !Honghu._uses_tiles(hw, UntiledPCM())
+    Honghu.cons2prim!(hw.prim, sim.U, sim.eos, g)
+    scratch = (hw.qL, hw.qR, hw.flux)
+    for D in 1:3, ow in (true, false)
+        a = fill(0.5, size(sim.U)); b = copy(a)
+        Honghu.hydro_sweep!(a, hw.prim, scratch, PPM(), sim.eos, sim.riemann, Val(D), g, 5, 0,
+                            ow, nothing, Honghu.CPUThreads(), hw.tiling)
+        Honghu.hydro_sweep!(b, hw.prim, scratch, PPM(), sim.eos, sim.riemann, Val(D), g, 5, 0,
+                            ow, nothing, Honghu.CPUThreads(), nothing)
+        @test interior(a, g) == interior(b, g)
+    end
+end
+
+@testset "tile boxes partition the interior" begin
+    for n in ((37, 20, 9), (16, 1, 1), (1, 13, 7)), tile in ((4, 5, 3), (8, 8, 8)), D in 1:3
+        g = CartesianGrid(n=n)
+        g.active[D] || continue
+        seen = zeros(Int, g.dims)
+        for (ir, jr, kr) in Honghu.tile_boxes(g, D, tile)
+            @test length((ir, jr, kr)[D]) == g.n[D]       # whole extent along the sweep
+            seen[ir, jr, kr] .+= 1
+        end
+        @test all(==(1), seen[g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3]])
+        @test sum(seen) == prod(g.n)
+    end
+end
+
+@testset "RK update fused into the last sweep equals rhs then combine!" begin
+    P = Honghu.Problems
+    for mk in (t -> P.sedov_blast(; n=13, tile=t)[1],
+               t -> P.kelvin_helmholtz(; n=24, tile=t)[1],
+               t -> P.sod_shock_tube(; n=40, tile=t)[1],
+               t -> scalar_blast(; tile=t)),
+        tile in ((4, 5, 3), nothing)
+        a, b = mk(tile), mk(tile)
+        g, nv = a.grid, Honghu.nhydrovars(a)
+        U0 = a.U .+ 0.01 .* rand(size(a.U)...)        # any stage-0 state
+        c1, c2, c3 = 0.75, 0.25, 0.25 * 1e-3
+        # reference: the right-hand side into dU, then the combine as its own pass
+        Honghu.hydro_rhs!(b.hw.dU, b.U, b)
+        Honghu.combine!(b.U, c1, U0, c2, b.U, c3, b.hw.dU, g, nv)
+        # fused: the last active sweep writes U itself
+        Honghu.hydro_rhs!(a.hw.dU, a.U, a; update=(c1, U0, c2, c3))
+        @test interior(a.U, g) == interior(b.U, g)
+    end
+end
+
+@testset ":auto tiles only where every sweep has a box per thread" begin
+    auto(n, nt) = Honghu._auto_tile(CartesianGrid(n=n), nt)
+    @test auto((128, 128, 128), 32) == Honghu.DEFAULT_TILE
+    @test auto((128, 128, 128), 4) === nothing                  # below TILE_MIN_THREADS
+    # 2D: the y sweep has ceil(n1 / 32) boxes, too few for 32 threads below 1024^2
+    @test auto((256, 256, 1), 32) === nothing
+    @test auto((512, 512, 1), 32) === nothing
+    @test auto((1024, 1024, 1), 32) == Honghu.DEFAULT_TILE
+    @test auto((1024, 1024, 1), 64) === nothing
+    @test auto((1, 256, 256), 32) == Honghu.DEFAULT_TILE        # x inactive: 256 one-row boxes per sweep
+end

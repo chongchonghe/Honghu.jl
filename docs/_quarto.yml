@@ -14,6 +14,7 @@ project:
     - coupling-findings.md
     - rsla-findings.md
     - photoionization-findings.md
+    - parallel-findings.md
     - documentation.md
 
 website:
@@ -50,6 +51,7 @@ website:
           - coupling-findings.md
           - rsla-findings.md
           - photoionization-findings.md
+          - parallel-findings.md
           - text: "---"
           - documentation.md
     right:

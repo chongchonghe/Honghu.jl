@@ -100,6 +100,14 @@ Volume of one cell (inactive directions contribute their full box extent).
 end
 
 """
+    interior_box(grid)
+
+The interior cells as a box `(irange, jrange, krange)`, the form
+[`launch!`](@ref) takes.
+"""
+@inline interior_box(g::CartesianGrid) = (g.lo[1]:g.hi[1], g.lo[2]:g.hi[2], g.lo[3]:g.hi[3])
+
+"""
     boxsize(grid)
 
 Physical extent `(Lx, Ly, Lz)` of the domain.
@@ -196,6 +204,70 @@ function reduce_max_jk(f::F, jrange::UnitRange{Int}, krange::UnitRange{Int},
         @inbounds parts[(k-k0)*nj+(j-j0)+1] = f(j, k)
     end
     return maximum(parts)
+end
+
+"""
+    threaded_chunks(f, ntot; minchunk = 1)
+
+Call `f(r)` once for each of up to `Threads.nthreads()` contiguous ranges `r`
+that partition `1:ntot`, each range on its own task. The ranges are fixed by
+`ntot` and the thread count alone, so which task does which work is not left to a
+scheduler. That keeps neighbouring indices, which share cache lines and stencil
+data, on one core. Fewer chunks are used when a chunk would be shorter than
+`minchunk`, and with one chunk `f` runs on the calling task.
+
+Tasks are spawned rather than handed to `Threads.@threads :static`, which throws
+when it is called from inside another threaded region.
+"""
+function threaded_chunks(f::F, ntot::Integer; minchunk::Integer=1) where {F}
+    nch = min(Threads.nthreads(), max(1, ntot ÷ max(1, minchunk)))
+    if nch <= 1
+        ntot > 0 && f(1:ntot)
+        return nothing
+    end
+    @sync for c in 1:nch
+        r = _chunk(ntot, nch, c)
+        Threads.@spawn f(r)
+    end
+    return nothing
+end
+
+# The `c`-th of `nch` near-equal contiguous ranges partitioning `1:ntot`.
+@inline function _chunk(ntot::Integer, nch::Integer, c::Integer)
+    q, r = divrem(ntot, nch)
+    lo = (c - 1) * q + min(c - 1, r) + 1
+    return lo:(lo + q - 1 + (c <= r ? 1 : 0))
+end
+
+"""
+    threaded_copyto!(dst, src)
+
+`copyto!(dst, src)` for two arrays of the same length, spread over the threads.
+A whole-array copy streams memory, and one core cannot saturate the memory bus.
+"""
+function threaded_copyto!(dst::Array{T}, src::Array{T}) where {T}
+    length(dst) == length(src) || throw(DimensionMismatch("threaded_copyto! needs equal lengths"))
+    threaded_chunks(length(src); minchunk=1 << 14) do r
+        @inbounds @simd for i in r
+            dst[i] = src[i]
+        end
+    end
+    return dst
+end
+
+"""
+    threaded_fill!(A, x)
+
+`fill!(A, x)` spread over the threads.
+"""
+function threaded_fill!(A::Array{T}, x) where {T}
+    v = convert(T, x)
+    threaded_chunks(length(A); minchunk=1 << 14) do r
+        @inbounds @simd for i in r
+            A[i] = v
+        end
+    end
+    return A
 end
 
 function Base.show(io::IO, g::CartesianGrid{T}) where {T}

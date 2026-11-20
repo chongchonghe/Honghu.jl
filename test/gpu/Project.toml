@@ -1,0 +1,10 @@
+# The environment of `gpu_sweep.jl`: Honghu from this checkout, with CUDA and
+# KernelAbstractions. Kept out of the package and of the regular suite, which
+# never needs a GPU or the CUDA toolkit download.
+[deps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Honghu = "dadb9192-06c8-4952-8646-5842d530648b"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+
+[sources]
+Honghu = {path = "../.."}

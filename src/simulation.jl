@@ -128,20 +128,35 @@ Quokka's `enum class SourceOrder { forward, reverse }`.
     HydroWorkspace{T}
 
 Scratch arrays for the hydrodynamic sweeps. Allocated once per simulation.
+
+`backend` is the [`AbstractBackend`](@ref) the sweeps launch their cell kernels
+on, [`CPUThreads`](@ref) unless the constructor's `backend` keyword says
+otherwise; it is the one field that may be changed after construction, which is
+how the tests run a whole simulation's sweeps through [`KABackend`](@ref). Any
+backend but `CPUThreads` runs the sweep as one whole-grid box, never tiled.
 """
-struct HydroWorkspace{T<:AbstractFloat}
-    prim::Array{T,4}
-    qL::Array{T,4}
-    qR::Array{T,4}
-    flux::Array{T,4}
-    dU::Array{T,4}
-    U0::Array{T,4}
+mutable struct HydroWorkspace{T<:AbstractFloat}
+    const prim::Array{T,4}
+    const qL::Array{T,4}
+    const qR::Array{T,4}
+    const flux::Array{T,4}
+    const dU::Array{T,4}
+    const U0::Array{T,4}
+    const tiling::Union{Nothing,HydroTiles{T}}   # `nothing`: one whole-grid box
+    backend::AbstractBackend
 end
 
-function HydroWorkspace(g::CartesianGrid{T}, nvar::Integer=NHYDRO) where {T}
+function HydroWorkspace(g::CartesianGrid{T}, nvar::Integer=NHYDRO;
+                        tile::Union{Nothing,NTuple{3,Int}}=nothing,
+                        backend::AbstractBackend=CPUThreads()) where {T}
     HydroWorkspace(allocate(g, nvar), allocate(g, nvar), allocate(g, nvar),
-                   allocate(g, nvar), allocate(g, nvar), allocate(g, nvar))
+                   allocate(g, nvar), allocate(g, nvar), allocate(g, nvar),
+                   tile === nothing ? nothing : HydroTiles(g, nvar, tile), backend)
 end
+
+# Whether this workspace's sweeps run tiled with `reconstruction`.
+_uses_tiles(hw::HydroWorkspace, recon::AbstractReconstruction) =
+    _uses_tiles(hw.tiling, recon, hw.backend)
 
 """
     RadiationWorkspace{T}
@@ -230,6 +245,21 @@ A three-dimensional (radiation-)hydrodynamics simulation.
   - `max_radiation_substeps = 10` : if the hydro step would need more radiation
     substeps than this, the hydro step is shortened instead.
 
+# Parallel performance
+  - `tile = :auto` : a tuple `(b1, b2, b3)` makes the hydrodynamic sweeps run
+    one box of cells at a time, with the interface states and fluxes of a box in
+    a per-task scratch array that stays in cache, instead of three passes over
+    whole-grid arrays. A sweep along `d` takes the whole interior along `d` and
+    blocks of `b_e` cells along each other direction `e`. `nothing` gives the
+    untiled sweep, which is also what a reconstruction other than `PCM`, `PLM`
+    or `PPM` always gets. `:auto` is [`DEFAULT_TILE`](@ref) with
+    [`TILE_MIN_THREADS`](@ref) threads or more, if the sweep along every active
+    direction has at least one box per thread, and `nothing` otherwise. The answer
+    is the same to the bit whatever `tile` is: it changes speed only. On a
+    machine with different caches another tile may be faster, and
+    `test/benchmarks_parallel.jl --tile=a,b,c` measures one;
+    `docs/parallel-findings.md` says how the defaults were chosen.
+
 # Example
 ```julia
 sim = Simulation(n = (128, 128, 1), xhi = (1.0, 1.0, 1.0),
@@ -290,6 +320,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     max_radiation_substeps::Integer=10,
                     nscalars::Integer=0,
                     chemistry=nothing,
+                    tile::Union{Symbol,Nothing,NTuple{3,Int}}=:auto,
                     T::Type{<:AbstractFloat}=Float64)
     hydro || radiation !== nothing ||
         throw(ArgumentError("nothing to evolve: enable hydro, radiation, or both"))
@@ -317,7 +348,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                riemann, integrator, boundaries,
                radiation_boundaries, source, strang_sources, chemistry, fl, T(cfl),
                T(cfl_radiation), Int(max_radiation_substeps), hydro, Int(nscalars), U, Rarr,
-               HydroWorkspace(grid, nvar), rw, cw, Diagnostics(), zero(T), zero(T), 0)
+               HydroWorkspace(grid, nvar; tile=hydro ? _resolve_tile(tile, grid) : nothing), rw, cw, Diagnostics(), zero(T), zero(T), 0)
 end
 
 # What a chemistry run needs of the rest of the simulation (see `Photochemistry`): the
@@ -560,45 +591,58 @@ end
 
 # --- right-hand sides --------------------------------------------------------
 
-function _hydro_sweep!(dU, sim::Simulation, ::Val{D}) where {D}
+function _hydro_sweep!(dU, sim::Simulation, ::Val{D}, overwrite::Bool=false,
+                       update=nothing) where {D}
     hw = sim.hw
-    g = sim.grid
-    nvar = nhydrovars(sim)
-    reconstruct!(hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(D), g, nvar)
-    hydro_fluxes!(hw.flux, hw.qL, hw.qR, hw.prim, sim.eos, sim.riemann, Val(D), g,
-                  sim.nscalars)
-    flux_divergence!(dU, hw.flux, Val(D), g, nvar)
+    hydro_sweep!(dU, hw.prim, (hw.qL, hw.qR, hw.flux), sim.reconstruction, sim.eos,
+                 sim.riemann, Val(D), sim.grid, nhydrovars(sim), sim.nscalars, overwrite,
+                 update, hw.backend, hw.tiling)
     return nothing
 end
 
 """
-    hydro_rhs!(dU, U, sim)
+    hydro_rhs!(dU, U, sim; update = nothing)
 
 Method-of-lines right-hand side of the Euler equations: fill ghost cells,
 convert to primitives (applying floors), then accumulate `-div F` from a
 directional sweep per active dimension.
+
+With `update = (a, U0, b, c)` it takes the Runge-Kutta stage as well,
+`U = a U0 + b U + c dU` over the interior, in the last sweep (see
+[`flux_divergence!`](@ref)), and leaves `dU` incomplete: what `combine!` would
+then do, without the pass over four whole arrays.
 """
-function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T}) where {T}
+function hydro_rhs!(dU::Array{T,4}, U::Array{T,4}, sim::Simulation{T};
+                    update=nothing) where {T}
     g = sim.grid
     fill_ghosts!(U, sim.boundaries, g, sim.t; momentum_blocks=1)
     sim.diag.floors_hydro += enforce_floors!(U, sim.eos, g, sim.floors, sim.nscalars)
     sim.diag.floors_scalar += enforce_scalar_floors!(U, g, sim.nscalars, sim.chemistry !== nothing)
     cons2prim!(sim.hw.prim, U, sim.eos, g, sim.nscalars)
-    fill!(dU, zero(T))
-    g.active[1] && _hydro_sweep!(dU, sim, Val(1))
-    g.active[2] && _hydro_sweep!(dU, sim, Val(2))
-    g.active[3] && _hydro_sweep!(dU, sim, Val(3))
+    # The first active direction overwrites `dU` rather than adding to it, which
+    # saves zeroing it first. Only the interior of `dU` is written or read.
+    dfirst = findfirst(g.active)
+    dlast = findlast(g.active)
+    upd = update === nothing ? nothing : (update[1], update[2], update[3], U, update[4])
+    if dfirst === nothing                                 # a single cell: no sweep at all
+        threaded_fill!(dU, zero(T))
+        upd === nothing ||
+            combine!(U, upd[1], upd[2], upd[3], U, upd[5], dU, g, nhydrovars(sim))
+    end
+    g.active[1] && _hydro_sweep!(dU, sim, Val(1), dfirst == 1, dlast == 1 ? upd : nothing)
+    g.active[2] && _hydro_sweep!(dU, sim, Val(2), dfirst == 2, dlast == 2 ? upd : nothing)
+    g.active[3] && _hydro_sweep!(dU, sim, Val(3), dfirst == 3, dlast == 3 ? upd : nothing)
     return dU
 end
 
-function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}) where {D}
+function _rad_sweep!(dR, R, sim::Simulation, ::Val{D}, overwrite::Bool=false) where {D}
     rw = sim.rw
     g = sim.grid
     nrad = nradvars(sim.radiation)
     reconstruct!(rw.qL, rw.qR, rw.prim, sim.radiation_reconstruction, Val(D), g, nrad)
     rad_fluxes!(rw.flux, rw.qL, rw.qR, R, _sweep_chat(sim), sim.radiation, Val(D), g,
                 sim.radiation.wavespeed_correction ? rw.chiF : nothing)
-    flux_divergence!(dR, rw.flux, Val(D), g, nrad)
+    flux_divergence!(dR, rw.flux, Val(D), g, nrad, overwrite)
     return nothing
 end
 
@@ -614,10 +658,11 @@ function rad_rhs!(dR::Array{T,4}, R::Array{T,4}, sim::Simulation{T}, t::T) where
     fill_ghosts!(R, sim.radiation_boundaries, g, t)
     sim.diag.floors_rad += enforce_rad_floors!(R, sim.radiation, g, sim.floors)
     rad_cons2prim!(sim.rw.prim, R, sim.radiation, g)
-    fill!(dR, zero(T))
-    g.active[1] && _rad_sweep!(dR, R, sim, Val(1))
-    g.active[2] && _rad_sweep!(dR, R, sim, Val(2))
-    g.active[3] && _rad_sweep!(dR, R, sim, Val(3))
+    dfirst = findfirst(g.active)       # overwrites `dR`, as in `hydro_rhs!`
+    dfirst === nothing && threaded_fill!(dR, zero(T))
+    g.active[1] && _rad_sweep!(dR, R, sim, Val(1), dfirst == 1)
+    g.active[2] && _rad_sweep!(dR, R, sim, Val(2), dfirst == 2)
+    g.active[3] && _rad_sweep!(dR, R, sim, Val(3), dfirst == 3)
     _sweep_chat(sim) === nothing && scale_by_phi!(dR, sim.rw.chat, sim.radiation, g)
     return dR
 end
@@ -639,10 +684,10 @@ One explicit SSP-RK step of the Euler equations.
 function advance_hydro!(sim::Simulation{T}, dt::T) where {T}
     g = sim.grid
     hw = sim.hw
-    copyto!(hw.U0, sim.U)
+    threaded_copyto!(hw.U0, sim.U)
     for (a, b, c) in tableau(sim.integrator)
-        hydro_rhs!(hw.dU, sim.U, sim)
-        combine!(sim.U, T(a), hw.U0, T(b), sim.U, T(c) * dt, hw.dU, g, nhydrovars(sim))
+        # the stage `U = a U0 + b U + c dt dU` is formed in the last sweep
+        hydro_rhs!(hw.dU, sim.U, sim; update=(T(a), hw.U0, T(b), T(c) * dt))
     end
     return sim
 end
@@ -717,7 +762,7 @@ function imex_substep!(sim::Simulation{T}, dt::T, t::T) where {T}
     rad_rhs!(rw.dR, sim.R, sim, t)
     combine!(rw.Rtmp, one(T), sim.R, zero(T), sim.R, T(IMEX_AEX_21) * dt, rw.dR, g,
              nradvars(sim.radiation))
-    copyto!(rw.Utmp, sim.U)
+    threaded_copyto!(rw.Utmp, sim.U)
     # The transport stage's state goes to the solve as it is: the flux of a thick
     # cell at a large local CFL number is turned into the diffusion flux by the
     # solve, and a negative energy is absorbed by it (see floor_rad_energy!).
