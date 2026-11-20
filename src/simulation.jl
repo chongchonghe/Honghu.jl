@@ -244,7 +244,8 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     radiation moments. "PPM hydro with PLM radiation" is a standard pairing:
     the M1 system is stiffer and the extra order buys less there. The
     ghost-cell width is taken from whichever needs more.
-  - `riemann = HLLC()` : interface flux solver, [`HLLC`](@ref) or [`LLF`](@ref).
+  - `riemann = HLLC()` : interface flux solver, [`HLLC`](@ref) or [`LLF`](@ref);
+    with `mhd = true` an MHD solver, [`LLFMHD`](@ref) by default.
   - `integrator = SSPRK3()`  : explicit integrator for the hydro subsystem.
   - `boundaries = Boundaries(Outflow())`, `radiation_boundaries = boundaries`.
   - `cfl = 0.4`, `cfl_radiation = 0.3`.
@@ -321,7 +322,8 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     floors::Floors=Floors(),
                     reconstruction::AbstractReconstruction=PPM(),
                     radiation_reconstruction::AbstractReconstruction=reconstruction,
-                    riemann::AbstractRiemannSolver=HLLC(),
+                    mhd::Bool=false,
+                    riemann::AbstractRiemannSolver=mhd ? LLFMHD() : HLLC(),
                     integrator::AbstractIntegrator=SSPRK3(),
                     boundaries::Boundaries=Boundaries(Outflow()),
                     radiation_boundaries::Boundaries=boundaries,
@@ -329,7 +331,6 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     max_radiation_substeps::Integer=10,
                     nscalars::Integer=0,
                     chemistry=nothing,
-                    mhd::Bool=false,
                     tile::Union{Symbol,Nothing,NTuple{3,Int}}=:auto,
                     T::Type{<:AbstractFloat}=Float64)
     hydro || radiation !== nothing ||
@@ -337,6 +338,10 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
     nscalars >= 0 || throw(ArgumentError("nscalars must be non-negative, got $nscalars"))
     chemistry === nothing || _check_chemistry(chemistry, radiation, eos, nscalars, T)
     mhd && check_mhd_boundaries(boundaries)
+    mhd == (riemann isa AbstractMHDRiemannSolver) ||
+        throw(ArgumentError(mhd ? "mhd = true needs an MHD Riemann solver (LLFMHD), got " *
+                                  "$(nameof(typeof(riemann)))" :
+                            "$(nameof(typeof(riemann))) is an MHD Riemann solver: pass mhd = true"))
     nscalars = chemistry === nothing ? Int(nscalars) : nspecies(chemistry.network)
     ng = max(required_ghosts(reconstruction),
              radiation === nothing ? 0 : required_ghosts(radiation_reconstruction))

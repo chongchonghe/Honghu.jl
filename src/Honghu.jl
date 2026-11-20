@@ -104,6 +104,7 @@ include("reconstruction.jl")
 include("riemann/state.jl")
 include("riemann/hllc.jl")
 include("riemann/llf.jl")
+include("riemann/llf_mhd.jl")
 include("riemann_radiation.jl")
 include("hydro_system.jl")
 include("tiling.jl")             # the cache-blocked hydro sweep, on the kernels above
@@ -149,6 +150,7 @@ export AbstractJacobianSolve, DenseSolve, ArrowheadSolve
 # numerics
 export PCM, PLM, PPM
 export HLLC, LLF, HydroState, AbstractRiemannSolver, riemann_flux
+export LLFMHD, AbstractMHDRiemannSolver, MagneticField
 export MinMod, MonotonizedCentral, VanLeer, Sweby
 export ForwardEuler, SSPRK2, SSPRK3
 

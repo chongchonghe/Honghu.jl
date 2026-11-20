@@ -197,3 +197,62 @@ end
     @test b.U[6:end, :, :, :] ≈ a.U[6:end, :, :, :] rtol = 1e-12
     @test gas_temperature(b) ≈ gas_temperature(a) rtol = 1e-12
 end
+
+# --- the MHD Riemann solvers ---------------------------------------------------
+
+# One side of an interface in canonical form, with `E` the total energy including
+# the field's.
+function mhd_state(rho, u, v, w, p, by, bz, bx; gam=5 / 3)
+    E = p / (gam - 1) + rho * (u^2 + v^2 + w^2) / 2 + (bx^2 + by^2 + bz^2) / 2
+    HydroState(rho, u, v, w, p, sqrt(gam * p / rho), E, by, bz)
+end
+
+# The ideal-MHD flux along x of one state, written independently of the solvers.
+function mhd_physical_flux(s, bx)
+    pt = s.P + (bx^2 + s.by^2 + s.bz^2) / 2
+    (s.rho * s.u, s.rho * s.u^2 + pt - bx^2, s.rho * s.u * s.v - bx * s.by,
+     s.rho * s.u * s.w - bx * s.bz, s.u * (s.E + pt) - bx * (s.u * bx + s.v * s.by + s.w * s.bz))
+end
+
+@testset "HydroState carries the transverse field" begin
+    s = HydroState(1.0, 0.1, 0.2, 0.3, 1.0, 1.2, 2.5)            # the hydro constructor
+    @test s.by == 0 && s.bz == 0
+    s = HydroState(1.0, 0.1, 0.2, 0.3, 1.0, 1.2, 2.5, -0.4, 0.6)
+    @test (s.by, s.bz) == (-0.4, 0.6)
+    @test LLFMHD() isa Honghu.AbstractMHDRiemannSolver
+end
+
+@testset "LLFMHD" begin
+    gam = 5 / 3
+    cf(s, bx) = Honghu.fast_magnetosonic_speed(gam, s.rho, s.P, bx, s.by, s.bz)
+    # consistency: equal states give the physical flux, and bounding speeds that
+    # enclose the fast waves
+    for (st, bx) in ((mhd_state(1.0, 0.3, -0.2, 0.1, 0.8, 0.5, -0.7, 0.9), 0.9),
+                     (mhd_state(0.4, -1.1, 0.6, 0.0, 2.0, 0.0, 1.3, -0.5), -0.5))
+        F, am, ap = Honghu.mhd_flux(LLFMHD(), st, st, gam, bx, 0.0)
+        @test all(Tuple(F) .≈ mhd_physical_flux(st, bx))
+        @test am ≈ max(0.0, cf(st, bx) - st.u)
+        @test ap ≈ max(0.0, st.u + cf(st, bx))
+    end
+    # mirror symmetry: reflecting x maps the flux of (L, R) to minus that of
+    # (mirror R, mirror L) in mass, energy and transverse momentum, and swaps the
+    # two bounding speeds
+    sL = mhd_state(1.0, 0.4, 0.3, -0.2, 1.0, 1.0, 0.2, 0.75)
+    sR = mhd_state(0.125, -0.1, 0.0, 0.5, 0.1, -1.0, 0.4, 0.75)
+    mir(s) = HydroState(s.rho, -s.u, s.v, s.w, s.P, s.cs, s.E, s.by, s.bz)
+    F, am, ap = Honghu.mhd_flux(LLFMHD(), sL, sR, gam, 0.75, 0.0)
+    G, bm, bp = Honghu.mhd_flux(LLFMHD(), mir(sR), mir(sL), gam, -0.75, 0.0)
+    @test F[1] ≈ -G[1] && F[2] ≈ G[2] && F[3] ≈ -G[3] && F[4] ≈ -G[4] && F[5] ≈ -G[5]
+    @test (am, ap) == (bp, bm)
+    # without a field it is the hydrodynamic LLF
+    hL = mhd_state(1.0, 0.4, 0.3, -0.2, 1.0, 0.0, 0.0, 0.0)
+    hR = mhd_state(0.125, -0.1, 0.0, 0.5, 0.1, 0.0, 0.0, 0.0)
+    F, _, _ = Honghu.mhd_flux(LLFMHD(), hL, hR, gam, 0.0, 0.0)
+    @test all(Tuple(F) .≈ Tuple(riemann_flux(LLF(), hL, hR, gam, 0.0, 0.0)))
+end
+
+@testset "MHD takes an MHD Riemann solver" begin
+    @test Simulation(n=(8, 1, 1), mhd=true).riemann isa Honghu.AbstractMHDRiemannSolver
+    @test_throws ArgumentError Simulation(n=(8, 1, 1), mhd=true, riemann=HLLC())
+    @test_throws ArgumentError Simulation(n=(8, 1, 1), riemann=LLFMHD())
+end
