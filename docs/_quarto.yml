@@ -9,6 +9,7 @@ project:
     - index.qmd
     - reference/*.qmd
     - photochemistry.md
+    - mhd.md
     - coupling-new-method.md
     - coupling-new-method-dust.md
     - coupling-findings.md
@@ -32,6 +33,7 @@ website:
           - reference/index.qmd
           - reference/simulation.qmd
           - reference/hydro.qmd
+          - reference/mhd.qmd
           - reference/radiation.qmd
           - reference/rsla.qmd
           - reference/coupling.qmd
@@ -44,6 +46,7 @@ website:
       - text: Physics
         menu:
           - photochemistry.md
+          - mhd.md
       - text: Notes
         menu:
           - coupling-new-method.md

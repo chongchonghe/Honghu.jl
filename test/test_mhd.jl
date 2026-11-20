@@ -611,3 +611,14 @@ read_quokka_line(name) =
         end
     end
 end
+
+@testset "MHD checkpoints are refused, not written without the field" begin
+    sim = Simulation(n=(8, 1, 1), mhd=true)
+    set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0, by=1.0), sim)
+    path = joinpath(mktempdir(), "mhd")
+    @test_throws ArgumentError save_checkpoint(sim, path)
+    plain = Simulation(n=(8, 1, 1))
+    set_initial_conditions!((x, y, z) -> (rho=1.0, p=1.0), plain)
+    file = save_checkpoint(plain, path)
+    @test_throws ArgumentError load_checkpoint!(sim, file)
+end

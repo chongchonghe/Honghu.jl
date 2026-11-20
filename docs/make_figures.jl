@@ -287,6 +287,87 @@ function figure_stromgren(test; n=32, chat_factor=1e-3, snaps=(10, 100, 500))
          "stromgren_test$test.png")
 end
 
+# --- MHD: the shock tubes against Quokka, the Alfven wave, Orszag-Tang ----------
+
+readline_quokka(name) =
+    permutedims(reduce(hcat, [parse.(Float64, split(l))
+                              for l in eachline(joinpath(@__DIR__, "..", "test", "data", "quokka", name))
+                              if !startswith(l, "#")]))
+
+# One shock tube against Quokka's run with the same scheme and step: the PLM profiles,
+# and the L1 difference of every variable for PCM, PLM and PPM. Ryu-Jones is scored on
+# x < 0.9, as in the tests (Quokka holds the boundary states, this run has outflow).
+function figure_mhd_tube(tag, problem, title, cols, xmax)
+    names = ("density", "x velocity", "y velocity", "z velocity", "pressure", "b_y", "b_z")
+    profiles = nothing
+    println("  $title, L1 difference from Quokka (x < $xmax):")
+    for (rtag, recon) in (("pcm", PCM()), ("plm", PLM(Sweby(1.5))), ("ppm", PPM()))
+        ref = readline_quokka("$(tag)_$(rtag).txt")
+        sim, tmax = problem(n=size(ref, 1), reconstruction=recon, integrator=SSPRK2())
+        for _ in 1:round(Int, tmax / 2.5e-4)
+            step!(sim, 2.5e-4)
+        end
+        pr = primitives(sim)
+        mine = hcat(pr[1, :, 1, 1], pr[2, :, 1, 1], pr[3, :, 1, 1], pr[4, :, 1, 1], pr[5, :, 1, 1],
+                    first(field(sim, :by))[:, 1, 1], first(field(sim, :bz))[:, 1, 1])
+        w = ref[:, 1] .< xmax
+        diffs = [any(!=(0), ref[w, c+1]) ?
+                 @sprintf("%.1e", sum(abs, mine[w, c] .- ref[w, c+1]) / sum(abs, ref[w, c+1])) : "--"
+                 for c in 1:7]
+        println("    ", rpad(uppercase(rtag), 4), join((@sprintf("%s %s", names[c], diffs[c]) for c in 1:7), ", "))
+        rtag == "plm" && (profiles = (ref, mine))
+    end
+    ref, mine = profiles
+    panels = map(enumerate(cols)) do (m, c)
+        pl = plot(ref[:, 1], ref[:, c+1]; lw=1.5, c=:black, label=m == 1 ? "Quokka" : "",
+                  xlabel="x", ylabel=names[c])
+        scatter!(pl, ref[:, 1], mine[:, c]; ms=1.5, msw=0, c=1, label=m == 1 ? "Honghu" : "")
+    end
+    save(plot(panels...; layout=(1, length(cols)), size=(1250, 300), plot_title=title,
+              plot_titlevspan=0.1, bottom_margin=6Plots.mm, left_margin=5Plots.mm),
+         "mhd_$(tag).png")
+end
+
+# The oblique circularly polarised Alfven wave after one period: L1 error of b_z over
+# the amplitude against resolution, with PLM and PPM.
+function figure_mhd_alfven(ns=(16, 32, 64, 128))
+    function err(n, recon)
+        sim, tmax = P.alfven_wave(; n, reconstruction=recon, integrator=SSPRK2())
+        g = sim.grid
+        bz(s) = [Honghu.cell_centred_field(s.B, 3, i, j, 1) for i in g.lo[1]:g.hi[1], j in g.lo[2]:g.hi[2]]
+        b0 = bz(sim)
+        run!(sim; tmax, verbose=false)
+        sum(abs, bz(sim) .- b0) / length(b0) / 0.1
+    end
+    pl = plot(xscale=:log10, yscale=:log10, xlabel="cells per side (n, the box is 2n x n)",
+              ylabel="L1 error of b_z / amplitude", legend=:bottomleft,
+              title="circularly polarised Alfven wave, one period")
+    for (lbl, recon) in (("PLM (Sweby 1.5)", PLM(Sweby(1.5))), ("PPM", PPM()))
+        e = [err(n, recon) for n in ns]
+        println("  Alfven wave, ", lbl, ": ", join((@sprintf("n=%d %.3e", n, x) for (n, x) in zip(ns, e)), ", "),
+                "; orders ", join((@sprintf("%.2f", log2(e[i] / e[i+1])) for i in 1:length(e)-1), ", "))
+        plot!(pl, collect(ns), e; marker=:o, label=lbl)
+    end
+    plot!(pl, collect(ns), 0.05 .* (16 ./ collect(ns)) .^ 2; ls=:dash, c=:gray, label="second order")
+    save(plot(pl; size=(520, 400)), "mhd_alfven.png")
+end
+
+function figure_mhd_orszag_tang(n=256)
+    sim, tmax = P.orszag_tang(; n, integrator=SSPRK2())
+    t0 = conserved_totals(sim)
+    run!(sim; tmax, verbose=false)
+    t1 = conserved_totals(sim)
+    bmax = maximum(maximum(abs, sim.B[d]) for d in 1:3)
+    @printf("  Orszag-Tang %d^2 to t = %.2f: %d steps, max |div b| dx / max |b| = %.1e, mass drift %.1e, energy drift %.1e, %d repairs\n",
+            n, sim.t, sim.step, maximum(abs, Honghu.divergence_b(sim)) * sim.grid.dx[1] / bmax,
+            abs(t1.mass - t0.mass) / t0.mass, abs(t1.energy_total - t0.energy_total) / t0.energy_total,
+            nrepaired(sim))
+    panels = [plotstate(sim; var=v, c=:viridis, title=t)
+              for (v, t) in ((:density, "density"), (:pressure, "pressure"),
+                             (:magnetic_pressure, "magnetic pressure"))]
+    save(plot(panels...; layout=(1, 3), size=(1300, 400)), "mhd_orszag_tang.png")
+end
+
 # Names on the command line select figures; none selects all of them.
 want(name) = isempty(ARGS) || name in ARGS
 
@@ -301,5 +382,11 @@ want("kh") && figure_kh()
 want("sedov") && figure_sedov()
 for t in (1, 2)          # `stromgren` makes both, `stromgren1` or `stromgren2` one
     (want("stromgren") || "stromgren$t" in ARGS) && figure_stromgren(t)
+end
+if want("mhd")            # `mhd` makes all four
+    figure_mhd_tube("bw", P.brio_wu, "Brio-Wu, t = 0.1, PLM", (1, 2, 3, 6), 1.0)
+    figure_mhd_tube("rj", P.ryu_jones_2a, "Ryu-Jones 2a, t = 0.2, PLM", (1, 3, 5, 6), 0.9)
+    figure_mhd_alfven()
+    figure_mhd_orszag_tang()
 end
 println("done")

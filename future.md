@@ -171,3 +171,16 @@ Considered and consciously postponed, with the reason:
 | Renaming `source` to `radiation_source` | Clearer now that there are two source kinds, but it breaks callers to fix a documentation problem. |
 
 **Multigroup radiation** was on that list and has since been built (`src/planck.jl`, `src/coupling*.jl`, and the README's *Multigroup radiation* section). The estimate held exactly: transport generalised for free, and every difficulty was in the coupling — which is why there are now three interchangeable solvers for it, two backward-Euler steppers inside one of them, and a pluggable linear solve inside two. What the entry got wrong is that the conditioning argument for the replaced base variables survived intact; it is `DirectCoupling`, in the natural variables, whose achievable tolerance degrades with the optical depth, which is the measurement of what the replacement buys.
+
+## MHD
+
+The MHD module (`src/magnetic_field.jl`, `src/mhd_system.jl`, `docs/mhd.md`) is the minimal subset of Quokka's scheme: HLLD or LLF, the Q26 EMF, LD04 averaging. Missing, roughly in order of use:
+
+- **An EMF consistent with HLLD.** LD04 is the HLL flux of the transverse field along one direction, so the field gets HLL-level dissipation whatever the Riemann solver, and a stationary rotational discontinuity smears even though HLLD's own flux resolves it (`test_mhd.jl`, "LD04 is the HLL flux of b_t in 1D"). The UCT-HLLD scheme of Mignone & Del Zanna (2021, J. Comput. Phys. 424, 109748) builds the EMF from HLLD's states and would keep it sharp.
+- **First-order flux correction (FOFC).** Quokka caches LLF fluxes and EMFs and falls back to them in cells a high-order stage leaves invalid (paper Sec. 2.5). Here a bad cell is only floored.
+- **Shock flattening.** Quokka flattens the reconstructed states at shocks (Miller & Colella 2002) with every reconstruction, which is the whole of the PLM and PPM difference from Quokka on the shock tubes.
+- **B25b averaging, the FS18 and B25a EMFs, PPM-EP.** Quokka's other choices; the paper compares all pairings.
+- **Checkpoints.** The format holds the cell-centred state only, so `save_checkpoint` refuses an MHD run. A format 3 would add the three face arrays and an MHD flag.
+- **More boundary conditions.** Only periodic and outflow faces are defined. A reflecting wall flips the normal field's ghost faces and a fixed state needs face values; outflow copies the boundary face, which leaves the ghost cells' magnetic energy inconsistent with the copied total energy where the normal field varies at the boundary.
+- **Tiling and the GPU.** The MHD sweep is one whole-grid box on `CPUThreads`: its faces reach into the ghost rows across the sweep, which `tile_boxes` does not cover, and `MagneticField` holds `Array`s.
+- **Resistivity** (an `eta j` term on the edges, and its energy flux), and **AMR** (refluxing of the EMFs).

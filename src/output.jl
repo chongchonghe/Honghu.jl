@@ -204,9 +204,11 @@ ghost cells included) that [`load_checkpoint!`](@ref) can restore. The file
 extension `.honghu` is added unless the path already ends in `.honghu`, or in
 `.h3d`, the extension from the package's old name: a script that saves to and
 loads from a fixed `.h3d` path keeps working. The file is written in the
-current format either way.
+current format either way. A simulation with `mhd = true` is refused with an
+`ArgumentError`: the format does not hold the face-centred field yet.
 """
 function save_checkpoint(sim::Simulation{T}, path::AbstractString) where {T}
+    _refuse_mhd_checkpoint(sim)
     fn = endswith(path, ".honghu") || endswith(path, ".h3d") ? String(path) : path * ".honghu"
     g = sim.grid
     open(fn, "w") do f
@@ -227,6 +229,13 @@ function save_checkpoint(sim::Simulation{T}, path::AbstractString) where {T}
     return fn
 end
 
+# The checkpoint format holds the cell-centred state only, so an MHD run would
+# restart without its face-centred field. Refused rather than written incomplete.
+_refuse_mhd_checkpoint(sim) =
+    has_mhd(sim) && throw(ArgumentError("checkpoints do not hold the face-centred magnetic " *
+                                        "field yet, so a simulation with mhd = true cannot " *
+                                        "be saved or restored"))
+
 """
     load_checkpoint!(sim, path) -> sim
 
@@ -239,6 +248,7 @@ called Hydro3D, carry no variable counts, so they load only into a simulation
 with `nscalars == 0`.
 """
 function load_checkpoint!(sim::Simulation{T}, path::AbstractString) where {T}
+    _refuse_mhd_checkpoint(sim)
     g = sim.grid
     open(path, "r") do f
         magic = read(f, length(_CHECKPOINT_MAGIC))

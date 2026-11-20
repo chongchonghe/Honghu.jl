@@ -34,7 +34,7 @@ const PAGES = [
     "hydro" => ("Hydrodynamics",
                 ["eos.jl", "hydro_system.jl", "tiling.jl", "limiters.jl", "reconstruction.jl",
                  "riemann/"]),
-    "mhd" => ("Magnetohydrodynamics", ["magnetic_field.jl"]),
+    "mhd" => ("Magnetohydrodynamics", ["magnetic_field.jl", "mhd_system.jl"]),
     "radiation" => ("Radiation transport",
                     ["radiation_system.jl", "riemann_radiation.jl", "planck.jl", "opacity.jl"]),
     "rsla" => ("Reduced speed of light", ["rsla.jl"]),
@@ -52,7 +52,7 @@ const PAGES = [
 
 # Hand-written pages, in navigation order after the reference: the physics guides
 # first, then the notes.
-const NOTES = ["photochemistry.md",
+const NOTES = ["photochemistry.md", "mhd.md",
                "coupling-new-method.md", "coupling-new-method-dust.md",
                "coupling-findings.md", "rsla-findings.md", "photoionization-findings.md",
                "parallel-findings.md",

@@ -8,9 +8,9 @@ Honghu is named after 鸿鹄 (hóng hú), an ancient Chinese term for the large,
 
 **Three-dimensional radiation hydrodynamics in pure Julia: simple enough to learn from, fast enough to run on a laptop, and good enough to invent new methods with.**
 
-Honghu solves the Euler equations coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — in one, two or three dimensions on a uniform Cartesian grid. It uses the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024), written out so that a student can read them and a developer can change them.
+Honghu solves the Euler equations, or the equations of ideal MHD, coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — in one, two or three dimensions on a uniform Cartesian grid. It uses the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024), written out so that a student can read them and a developer can change them.
 
-Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, a guide to the physics, numerics and code design of each physics module (so far photochemistry), and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
+Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, a guide to the physics, numerics and code design of each physics module (so far photochemistry and MHD), and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
 ## Why Honghu
 
@@ -37,6 +37,8 @@ $$\partial_t \rho + \nabla\cdot(\rho\mathbf{v}) = 0, \qquad \partial_t (\rho\mat
 
 with an ideal-gas equation of state.
 
+**Magnetohydrodynamics.** With `Simulation(mhd = true)`, the equations of ideal MHD, with the field face-centred and advanced by constrained transport, so that $\nabla\cdot\mathbf{b}$ stays at round-off. The scheme is Quokka's: the HLLD Riemann solver, the Q26 EMF and Londrillo & Del Zanna averaging; with piecewise-constant reconstruction it reproduces Quokka's shock tubes to round-off. Radiation and photochemistry run on a magnetised gas.
+
 **Radiation.** The first two angular moments of the radiative transfer equation, closed with the Levermore (1984) M1 closure,
 
 $$\partial_t E_r + \frac{\hat{c}}{c}\nabla\cdot\mathbf{F}_r = S, \qquad \partial_t \mathbf{F}_r + \hat{c}\,c\,\nabla\cdot(\mathbb{T}E_r) = \mathbf{S}_F,$$
@@ -53,6 +55,7 @@ Space and time are separated by the **method of lines**: a spatial operator $L(U
 |:---|:---|
 | Reconstruction | piecewise constant (`PCM`), piecewise linear (`PLM`, four limiters), piecewise parabolic (`PPM`) |
 | Hydro Riemann solver | `HLLC` (default) with Batten wave speeds, Rider's nonlinear correction, and the Minoshima & Miyoshi (2021) carbuncle cure and low-dissipation pressure; or `LLF` |
+| MHD | `HLLD` (default; Miyoshi & Kusano 2005 with the Minoshima & Miyoshi 2021 corrections) or `LLFMHD`; constrained transport with the Q26 EMF and LD04 averaging |
 | Radiation Riemann solver | `HLL` on the M1 system with frozen-Eddington-tensor wave speeds (Skinner & Ostriker 2013; Balsara 1999) |
 | Hydro time integration | SSP Runge-Kutta, first to third order (`ForwardEuler`, `SSPRK2`, `SSPRK3`) |
 | Radiation time integration | **IMEX PD-ARS**: transport explicit, stiff matter coupling implicit; second order and asymptotic-preserving |
@@ -182,6 +185,9 @@ run!(sim; tmax, outdir = "kh", dtout = 0.02)
 | `marshak_vaytet` | the same wave with a $\nu^{-2}$ opacity and $N_g$ groups, which a grey run cannot reproduce |
 | `radhydro_shock` | Mach 3 radiative shock against the Lowrie & Edwards semi-analytic solution |
 | `radiation_shadow` | M1 casting a sharp shadow behind an opaque clump |
+| `brio_wu`, `ryu_jones_2a` | MHD shock tubes, against Quokka |
+| `alfven_wave` | oblique circularly polarised Alfven wave: second-order convergence of MHD |
+| `orszag_tang` | 2D MHD vortex with interacting shocks, $\nabla\cdot\mathbf{b}$ at round-off |
 
 See `examples/` for scripts that run and post-process these. **Every example writes a figure** whenever Plots is available — that is the default, not a flag — alongside its VTK or text output:
 
