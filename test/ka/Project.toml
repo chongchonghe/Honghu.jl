@@ -1,0 +1,8 @@
+# KernelAbstractions for the test suite, stacked on the package environment by
+# `test/runtests.jl`. The suite runs as `julia --project=. test/runtests.jl`, not
+# through `Pkg.test`, so the `[extras]` of the root Project.toml are not there.
+[deps]
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+
+[compat]
+KernelAbstractions = "0.9, 0.10"

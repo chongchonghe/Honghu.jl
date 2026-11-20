@@ -38,5 +38,7 @@ jobs:
       - uses: julia-actions/cache@v3
       - name: Install package dependencies
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Install KernelAbstractions for the device-path tests
+        run: julia --project=test/ka -e 'using Pkg; Pkg.instantiate()'
       - name: Run the test suite
         run: julia --project=. -t 4 test/runtests.jl

@@ -7,6 +7,11 @@ using Honghu: SVec, dot, norm, minmod, limit, ppm_edges, eddington_factor,
               variants, rows
 const P = Honghu.Problems
 
+# `test/ka` holds KernelAbstractions, which `test_portable.jl` needs and the
+# package only names as a weak dependency. Stacked here rather than skipped when
+# absent: a test that skips itself is a test most checkouts never run.
+push!(LOAD_PATH, joinpath(@__DIR__, "ka"))
+
 # The default root-finder, `Brent`, and the alternatives the suite checks it
 # against all come from BracketingNonlinearSolve, a dependency of the package.
 import BracketingNonlinearSolve
@@ -31,6 +36,7 @@ import BracketingNonlinearSolve
     include("test_extensions.jl")
     include("test_compare.jl")
     include("test_parallel.jl")
+    include("test_portable.jl")
     include("test_performance.jl")
     include("test_metadata.jl")
 end
