@@ -4,7 +4,7 @@
 #
 #   julia --project=. -t auto docs/make_animations.jl [which]
 #
-# `which` selects one of kh / shadow / sedov, or all of them if omitted.
+# `which` selects one of kh / shadow / sedov / orszag_tang, or all of them if omitted.
 # Takes several minutes; the GIFs are a few MB each.
 
 ENV["GKSwstype"] = "100"          # headless GR
@@ -48,10 +48,22 @@ function anim_sedov(n=64, nframes=80)
                 c=:viridis, size=(520, 460), colorbar=false, clims=(0.0, 4.0))
 end
 
-const WHICH = isempty(ARGS) ? ("kh", "shadow", "sedov") : Tuple(ARGS)
+# --- Orszag-Tang: MHD shocks interacting into turbulence --------------------
+function anim_orszag_tang(n=256, nframes=90)
+    println("Orszag-Tang ($(n)^2, $nframes frames)")
+    sim, tmax = P.orszag_tang(; n, integrator=SSPRK2())
+    # the initial density is uniform, so the colour range has to be given;
+    # (0.05, 0.6) spans the extrema reached up to t = 0.5
+    animate_run(sim; tmax, nframes, var=:density, fps=18,
+                filename=joinpath(OUT, "orszag_tang.gif"),
+                c=:magma, size=(470, 430), colorbar=false, clims=(0.05, 0.6))
+end
+
+const WHICH = isempty(ARGS) ? ("kh", "shadow", "sedov", "orszag_tang") : Tuple(ARGS)
 "kh" in WHICH && anim_kh()
 "shadow" in WHICH && anim_shadow()
 "sedov" in WHICH && anim_sedov()
+"orszag_tang" in WHICH && anim_orszag_tang()
 for f in readdir(OUT)
     endswith(f, ".gif") && @printf("  %-12s %6.2f MB\n", f,
                                    filesize(joinpath(OUT, f)) / 2^20)

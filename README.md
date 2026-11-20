@@ -24,10 +24,10 @@ Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a 
 - **Light to install.** Three standard libraries and three packages; plotting loads only when you load Plots. Julia 1.10, the long-term-support release, and newer, tested on both in CI.
 - **Documentation for people and for AI agents.** Every page of the [documentation](https://chongchonghe.github.io/Honghu.jl/) is published as HTML and as Markdown, all pages come as one file, and an `llms.txt` index points coding agents at them.
 
-| Kelvin-Helmholtz instability | M1 radiation shadow |
-|:---:|:---:|
-| ![Kelvin-Helmholtz](docs/figures/kh.gif) | ![shadow](docs/figures/shadow.gif) |
-| $256^2$, PPM + SSPRK3 | a beam striking an opaque clump; colour is $\log_{10}E_r$ over ten decades |
+| Kelvin-Helmholtz instability | M1 radiation shadow | Orszag-Tang MHD vortex |
+|:---:|:---:|:---:|
+| ![Kelvin-Helmholtz](docs/figures/kh.gif) | ![shadow](docs/figures/shadow.gif) | ![Orszag-Tang](docs/figures/orszag_tang.gif) |
+| $256^2$, PPM + SSPRK3 | a beam striking an opaque clump; colour is $\log_{10}E_r$ over ten decades | density, $256^2$, HLLD + constrained transport, PPM + SSPRK2 |
 
 ## What it solves
 
