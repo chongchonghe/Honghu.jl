@@ -72,7 +72,7 @@ $r_I$ is the volume-equivalent radius of the ionized gas (`ionized_radius`). For
 
 ![All kernels](sphericity_comparison_be.png)
 
-*One row per kernel. Columns 1 and 2: $\log_{10}$ of the neutral fraction in the mid-plane $z = -\Delta x/2$, at 100 and 500 Myr. Column 3: the front radius in all directions at 500 Myr, $R/\bar R - 1$, against the azimuth $\phi$ and $\cos\theta$, on one colour scale for all rows.*
+*One row per kernel. Columns 1 and 2: the neutral fraction, on a linear scale from 0 to 1, in the mid-plane $z = -\Delta x/2$, at 100 and 500 Myr. Column 3: the front radius in all directions at 500 Myr, $R/\bar R - 1$, against the azimuth $\phi$ and $\cos\theta$, on one colour scale for all rows.*
 
 ![Spread and anisotropy against time](sphericity_summary_be.png)
 

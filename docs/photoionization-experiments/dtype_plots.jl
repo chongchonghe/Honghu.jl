@@ -27,7 +27,7 @@ readf(tag, name, tm) = (a = Array{Float32}(undef, N, N, N);
                         read!(joinpath(DT_OUT, "$(tag)_$(name)_$(SOLVER)_$(tm)Myr.f32"), a); Float64.(a))
 
 slice(f) = permutedims(f[:, :, N ÷ 2])
-sliceplot(z, title; kw...) = heatmap(CC, CC, z; aspect_ratio=:equal, xlims=extrema(CC), ylims=extrema(CC),
+sliceplot(z, title; kw...) = heatmap(CC, CC, z; colorbar=false, xlims=extrema(CC), ylims=extrema(CC),
                                      xlabel="x (kpc)", ylabel="y (kpc)", title, kw...)
 
 function frontmap(x)
@@ -41,9 +41,9 @@ end
 function panel_row(name, tm; lim=0.15)
     x, rho, T = readf("x", name, tm), readf("rho", name, tm), readf("T", name, tm)
     phis, mus, dR = frontmap(x)
-    return [sliceplot(slice(log10.(max.(1 .- x, 1e-6))), "$name, $tm Myr: log10 x_H0"; c=:viridis, clims=(-4, 0)),
-            sliceplot(slice(rho), "n / n0"; c=:magma, clims=(0, 2.5)),
-            sliceplot(slice(log10.(T)), "log10 T (K)"; c=:inferno, clims=(2, 4.4)),
+    return [sliceplot(slice(1 .- x), "$name, $tm Myr: x_H0, 0 (dark) to 1"; c=:viridis, clims=(0, 1)),
+            sliceplot(slice(rho), "n / n0, 0 (dark) to 2.5"; c=:magma, clims=(0, 2.5)),
+            sliceplot(slice(log10.(T)), "log10 T (K), 2 (dark) to 4.4"; c=:inferno, clims=(2, 4.4)),
             heatmap(phis, mus, dR; c=:balance, clims=(-lim, lim), xlabel="phi", ylabel="cos theta",
                     title="front radius, R / R_mean - 1")]
 end
@@ -51,7 +51,7 @@ end
 function grid_figure(rows, file)
     panels = reduce(vcat, rows)
     p = plot(panels...; layout=grid(length(rows), 4, widths=[0.24, 0.24, 0.24, 0.28]),
-             size=(1900, 430 * length(rows)), left_margin=4Plots.mm, bottom_margin=3Plots.mm)
+             size=(2100, 470 * length(rows)), left_margin=22Plots.mm, right_margin=4Plots.mm, bottom_margin=8Plots.mm, top_margin=3Plots.mm)
     savefig(p, joinpath(DT_OUT, file))
 end
 
@@ -87,7 +87,7 @@ function radius_figure(names)
         plot!(ps, d[:, 1], 100d[:, 4]; c=i, m=:circle, label="$name: front")
         plot!(ps, d[s, 1], 100d[s, 8]; c=i, m=:utriangle, ls=:dash, label="$name: shock")
     end
-    savefig(plot(pr, ps; layout=(1, 2), size=(1200, 450), left_margin=5Plots.mm, bottom_margin=5Plots.mm),
+    savefig(plot(pr, ps; layout=(1, 2), size=(1200, 450), left_margin=22Plots.mm, right_margin=4Plots.mm, bottom_margin=8Plots.mm, top_margin=3Plots.mm),
             joinpath(DT_OUT, "dtype_radius_$(SOLVER).png"))
 end
 
@@ -103,7 +103,7 @@ function profile_figure(name)
             plot!(ps[k], d[m, 2], d[m, k+2]; c=i, label="$tm Myr", yscale=(k == 3 ? :log10 : :identity))
         end
     end
-    savefig(plot(ps...; layout=(2, 2), size=(1000, 750), left_margin=4Plots.mm),
+    savefig(plot(ps...; layout=(2, 2), size=(1000, 750), left_margin=22Plots.mm, right_margin=4Plots.mm, bottom_margin=8Plots.mm, top_margin=3Plots.mm),
             joinpath(DT_OUT, "dtype_profiles_$(name)_$(SOLVER).png"))
 end
 

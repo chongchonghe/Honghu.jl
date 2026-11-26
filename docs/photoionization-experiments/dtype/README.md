@@ -46,7 +46,7 @@ The front and shock radii are means over the 4000 directions.
 
 ![Test 5 at 500 Myr](dtype_comparison_be.png)
 
-*One row per kernel, at 500 Myr. Columns 1 to 3: the mid-plane $z = -\Delta x/2$, $\log_{10}$ of the neutral fraction, $n/n_0$ and $\log_{10} T$. Column 4: the front radius in all directions, $R/\bar R - 1$, against $\phi$ and $\cos\theta$, on one colour scale for all rows.*
+*One row per kernel, at 500 Myr. Columns 1 to 3: the mid-plane $z = -\Delta x/2$, the neutral fraction (linear, 0 to 1), $n/n_0$ and $\log_{10} T$, each with its colour range in its title. Column 4: the front radius in all directions, $R/\bar R - 1$, against $\phi$ and $\cos\theta$, on one colour scale for all rows.*
 
 ![Radii and spreads against time](dtype_radius_be.png)
 
