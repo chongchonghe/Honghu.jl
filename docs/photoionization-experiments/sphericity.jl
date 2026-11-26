@@ -9,7 +9,8 @@
 # Kernels: gauss (Quokka's default: width 1.5 dx, cut at 2.5 widths), gauss_nocut (the same
 # Gaussian cut at 5 widths), gauss2 and gauss3 (width 2 dx and 3 dx, cut at 4 widths), cells8 (the 8 cells that
 # touch the source), tophat3 (a uniform sphere of radius 3 dx, weighted by the volume of each
-# cell inside it). All of them by default.
+# cell inside it), wendland2, 4, 6 and 12 (the Wendland C2 kernel with a support of 2, 4,
+# 6 and 12 dx, which is a standard deviation of 0.258 times the support; 2 is Quokka's). All of them by default.
 #
 # At each output time it finds the radius where the ionization fraction falls through 0.5
 # along 4000 directions (trilinear interpolation of the cell values) and writes, per kernel,
@@ -54,10 +55,14 @@ const KERNELS = Dict(
     "gauss_nocut" => P.gaussian_kernel(cut=5.0),
     "gauss2" => P.gaussian_kernel(width=2.0, cut=4.0),
     "gauss3" => P.gaussian_kernel(width=3.0, cut=4.0),
+    "wendland2" => P.wendland_kernel(support=2),
+    "wendland4" => P.wendland_kernel(support=4),
+    "wendland6" => P.wendland_kernel(support=6),
+    "wendland12" => P.wendland_kernel(support=12),
     "cells8" => (x, y, z, dx) -> max(abs(x), abs(y), abs(z)) < dx ? 1.0 : 0.0,
     "tophat3" => (x, y, z, dx) -> _sphere_fraction(x, y, z, dx, 3dx),
 )
-const ORDER = ("gauss", "gauss_nocut", "gauss2", "gauss3", "cells8", "tophat3")
+const ORDER = ("gauss", "gauss_nocut", "gauss2", "gauss3", "cells8", "tophat3", "wendland2", "wendland4", "wendland6", "wendland12")
 
 # The ionization fraction of every interior cell.
 function ionization(sim)

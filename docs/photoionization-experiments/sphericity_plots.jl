@@ -6,7 +6,8 @@
 #
 # For each kernel, sphericity_<kernel>_<solver>.png: the neutral fraction in the mid-plane
 # z = -dx/2 (top) and the front radius over all directions, R(phi, cos theta) / R_mean - 1
-# (bottom), at 100 and 500 Myr. And sphericity_summary_<solver>.png: the anisotropy
+# (bottom), at 100 and 500 Myr. With `--fig=TAG`, the two figures of the set are named
+# sphericity_comparison_TAG_<solver>.png and sphericity_summary_TAG_<solver>.png. And sphericity_summary_<solver>.png: the anisotropy
 # (R_body - R_axis) / R_mean and the spread std(R) / R_mean against time, one line per kernel.
 
 ENV["GKSwstype"] = get(ENV, "GKSwstype", "100")
@@ -16,6 +17,8 @@ default(fontfamily="sans-serif", framestyle=:box, dpi=140, titlefontsize=9, guid
         legendfontsize=7)
 
 const PLOT_TIMES = (100, 500)
+# `--fig=TAG` names a set: sphericity_comparison_TAG_<solver>.png and sphericity_summary_TAG_<solver>.png.
+const FIG = (t = opt("fig", ""); isempty(t) ? "" : "_" * t)
 
 readx(name, tm) = (a = Array{Float32}(undef, N, N, N);
                    read!(joinpath(OUTDIR, "x_$(name)_$(SOLVER)_$(tm)Myr.f32"), a); Float64.(a))
@@ -67,8 +70,9 @@ function summary_figure(names)
         plot!(ps, t[:, 1], 100t[:, 4]; m=:circle, label=name)
     end
     hline!(pa, [0]; c=:gray, ls=:dot, label="")
-    savefig(plot(pa, ps; layout=(1, 2), size=(1000, 400), xscale=:log10),
-            joinpath(OUTDIR, "sphericity_summary_$(SOLVER).png"))
+    savefig(plot(pa, ps; layout=(1, 2), size=(1000, 400), xscale=:log10,
+                 left_margin=5Plots.mm, bottom_margin=5Plots.mm),
+            joinpath(OUTDIR, "sphericity_summary$(FIG)_$(SOLVER).png"))
 end
 
 # All kernels in one figure, one row each: the mid-plane at 100 and 500 Myr, and the front
@@ -92,9 +96,10 @@ function comparison_figure(names; tm_map=500, lim=0.15)
                               ylabel="cos theta", colorbar_title="R / R_mean - 1",
                               title="$name, $tm_map Myr: front radius"))
     end
-    p = plot(panels...; layout=(length(names), 3), size=(1500, 470 * length(names)),
+    p = plot(panels...; layout=grid(length(names), 3, widths=[0.29, 0.29, 0.42]),
+             size=(1500, 470 * length(names)),
              left_margin=4Plots.mm, bottom_margin=3Plots.mm)
-    savefig(p, joinpath(OUTDIR, "sphericity_comparison_$(SOLVER).png"))
+    savefig(p, joinpath(OUTDIR, "sphericity_comparison$(FIG)_$(SOLVER).png"))
 end
 
 names = filter(a -> !startswith(a, "--"), ARGS)

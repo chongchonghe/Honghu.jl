@@ -55,7 +55,7 @@ export sod_shock_tube, smooth_advection, kelvin_helmholtz, sedov_blast
 export radiation_streaming, radiation_diffusion, matter_coupling, rad_dust
 export marshak_wave, radiation_shadow, radhydro_shock, radhydro_shock_super
 export marshak_vaytet, radhydro_pulse_dyn, total_erad
-export stromgren_iliev, gaussian_kernel, ionized_radius, stromgren_radius_analytic, stromgren_radius_finite_c
+export stromgren_iliev, gaussian_kernel, wendland_kernel, ionized_radius, stromgren_radius_analytic, stromgren_radius_finite_c
 export rad_dust_reference, sod_exact, diffusion_exact, radhydro_shock_exact, interpolate_to
 
 end # module Problems

@@ -27,6 +27,22 @@ function gaussian_kernel(; width=1.5, cut=2.5)
     end
 end
 
+"""
+    wendland_kernel(; support = 2)
+
+A deposition kernel for the source of [`stromgren_iliev`](@ref): the Wendland C2 kernel,
+`(1 - q)^4 (4q + 1)` with `q = r / (support * dx)`, and zero for `q > 1`. With `support = 2` it
+is the kernel Quokka deposits particle radiation with (`kernel_wendland_c2` in
+`src/math/quadrature.hpp`, `WendlandC2<2>` in `src/particles/particle_deposition.hpp`). It is
+smooth and goes to zero with its first two derivatives at the edge, so it has no sharp cut.
+"""
+function wendland_kernel(; support=2)
+    return function (x, y, z, dx)
+        q = sqrt(x^2 + y^2 + z^2) / (support * dx)
+        q < 1 ? (1 - q)^4 * (4q + 1) : 0.0
+    end
+end
+
 # The emission of a source at the origin with the kernel `w`. Its rate is normalised over the
 # *grid*, so the photons per second that the cells receive are exactly `Ndot`, whatever the
 # resolution and wherever the kernel's edge falls among the cells.
@@ -92,7 +108,8 @@ Choices that the paper does not make, and that are ours:
     the paper's. `kernel = w` deposits the photons with another shape: `w(x, y, z, dx)` is the
     relative weight of the cell centred at `(x, y, z)`, the source being at the origin, and
     the same normalisation applies. `gaussian_kernel(; width, cut)` makes the Gaussian, with
-    `width` and the cut radius in units of `dx` and of the width.
+    `width` and the cut radius in units of `dx` and of the width, and
+    [`wendland_kernel`](@ref) the Wendland C2 kernel that Quokka deposits particle radiation with.
   - **The radiation.** One group, zero opacity, `beta_order = 0` and a constant reduced
     speed of light, as a chemistry run requires. The initial radiation energy is zero: the
     default `a_r T^4` would put about `1e12` ionizing photons per cm^3 in the box.
