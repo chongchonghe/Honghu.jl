@@ -1,0 +1,8 @@
+# Stromgren Test 1, centred, n = 64, chat = 0.0003 c, kernel gauss3, solver ros, dx = 0.20625 kpc
+# radii in kpc, of the surface x_H+ = 0.5; spread = std / mean; aniso = (R_body - R_axis) / R_mean
+# t_Myr  r_I  R_mean  spread  R_min  R_max  R_axis  R_face  R_body  aniso  wall_s
+  30 2.2576 2.2518 0.0053 2.2266 2.2813 2.2671 2.2538 2.2258 -0.0184 55
+ 100 3.9192 3.9261 0.0042 3.8850 3.9747 3.9185 3.8841 3.8946 -0.0061 187
+ 200 4.8333 4.8597 0.0031 4.7992 4.9031 4.7989 4.8321 4.8496 +0.0104 374
+ 500 5.4603 5.5374 0.0033 5.4558 5.5724 5.4555 5.5053 5.5457 +0.0163 944
+# chemistry: 584843264 solves, 16.55 steps per cell, 0 failed

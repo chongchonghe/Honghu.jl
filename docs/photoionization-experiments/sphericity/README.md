@@ -71,7 +71,7 @@ $r_I$ is the volume-equivalent radius of the ionized gas (`ionized_radius`). For
 
 The single-kernel figures `sphericity_<kernel>_be.png` show the same panels with the front radius at 100 Myr too, each on its own colour scale.
 
-**Solver check.** `gauss` with `RosenbrockChem` gives a spread of 3.05% at 100 Myr and 4.18% at 500 Myr, against 3.06% and 4.11% with `BackwardEulerChem`. The chemistry solver does not change the shape.
+**Solver check.** With `RosenbrockChem`, `gauss` gives a spread of 3.05% at 100 Myr and 4.18% at 500 Myr, against 3.06% and 4.11% with `BackwardEulerChem`, and `gauss3` gives 0.42% and 0.33%, against 0.39% and 0.32%. The chemistry solver does not change the shape. A Rosenbrock run takes about 16 minutes on 6 threads, against 80 s for backward Euler.
 
 ## What this means
 
