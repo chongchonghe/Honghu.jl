@@ -1,0 +1,11 @@
+# Iliev et al. (2009) Test 5, centred, n = 64, chat = 0.0003 c, kernel gauss3, solver be, dx = 0.46875 kpc
+# radii in kpc; front: x_H+ = 0.5; shock: densest point along the ray; spread = std / mean
+# t_Myr  r_I  front_mean  front_spread  front_min  front_max  shock_mean  shock_spread  shock_min  shock_max  rho_max/rho0  vmax_kms  wall_s
+  10 2.1035 1.3812 0.0074 1.3573 1.4108 4.1110 0.2966 1.1953 6.0938 1.0021 0.438 1
+  30 3.0001 2.7395 0.0016 2.7275 2.7534 4.0859 0.0189 3.8906 4.2891 1.0225 2.263 2
+ 100 4.4188 4.3944 0.0030 4.3672 4.4428 5.0107 0.0155 4.8047 5.2031 1.3945 8.740 8
+ 200 6.0051 6.0264 0.0023 5.9864 6.0632 6.5392 0.0144 6.3750 6.8438 2.2024 11.258 16
+ 300 7.2650 7.3447 0.0023 7.3016 7.4011 8.0797 0.0119 7.9219 8.3672 2.7416 11.155 25
+ 400 8.3652 8.5003 0.0028 8.4332 8.5618 9.4529 0.0101 9.2813 9.7500 3.0154 10.263 34
+ 500 9.3538 9.5344 0.0031 9.4663 9.6072 10.6834 0.0083 10.5234 10.9453 3.1909 9.500 43
+# chemistry: 281542656 solves, 1.06 steps per cell, 0 failed; 198 steps; floors: 0 gas, 47713 radiation

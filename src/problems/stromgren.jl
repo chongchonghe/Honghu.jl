@@ -6,6 +6,7 @@
 
 # Iliev et al. (2006) section 3: the box, the density and the source.
 const _ILIEV_L = 6.6e3 * Honghu.CGS.parsec        # 6.6 kpc, in cm
+const _ILIEV_L5 = 15e3 * Honghu.CGS.parsec        # Test 5 of Iliev et al. (2009): 15 kpc
 const _ILIEV_NH = 1e-3                              # hydrogen number density, cm^-3
 const _ILIEV_NDOT = 5e48                            # ionizing photons per second
 const _ILIEV_ALPHA_B = 2.59e-13                     # Test 1 case B recombination coefficient, cm^3 s^-1
@@ -64,21 +65,28 @@ _gaussian_source(xlo, dx, n, Ndot) = _kernel_source(gaussian_kernel(), xlo, dx, 
                     solver = RosenbrockChem(), kernel = gaussian_kernel(),
                     kwargs...) -> (sim, tmax)
 
-Test 1 or 2 of the Stromgren-sphere comparison of Iliev et al. (2006): an ionizing point
-source switched on in a uniform, static, hydrogen-only medium, run with the network
+Test 1 or 2 of the Stromgren-sphere comparison of Iliev et al. (2006), or Test 5 of its
+hydrodynamic sequel, Iliev et al. (2009): an ionizing point source switched on in a uniform,
+hydrogen-only medium, static in Tests 1 and 2, run with the network
 [`HydrogenIliev1`](@ref) or [`HydrogenIliev2`](@ref) and the photon band of
 [`Photochemistry`](@ref). `n` is the number of
 cells along each side of the box; `chat_factor` is `chat / c`; `solver` is the chemistry
 integrator; the other keywords go to [`Simulation`](@ref). `tmax` is 500 Myr, the end of the
 paper's runs.
 
-From the paper: the box side `L = 6.6` kpc, the hydrogen density `n_H = 1e-3` cm^-3, the
+From the paper: the box side `L = 6.6` kpc (15 kpc in Test 5), the hydrogen density `n_H = 1e-3` cm^-3, the
 photon rate `Ndot = 5e48` s^-1, the source in the corner of the box with reflecting walls on
 the three low faces (the octant `[0, L]^3` of a sphere about the source), and the two tests
 below. Test 1 is monochromatic at 13.6 eV, with the gas held at `1e4` K, the recombination
 coefficient `alpha_B = 2.59e-13` cm^3 s^-1 and an initial ionization fraction `1.2e-3`.
 Test 2 starts neutral and cold (`100` K), and lets the gas heat and cool. The paper's source
 in Test 2 is a `1e5` K blackbody.
+
+Test 5 (Iliev et al. 2009, "classical HII region expansion") is Test 2 with hydrodynamics on,
+in a box of side `L = 15` kpc: the ionized gas heats to about `1e4` K, its pressure drives a
+shock into the neutral gas, and the ionization front turns from R-type to D-type. It uses
+the Test 2 network and band, and the same choices listed below; the gas is an ideal gas with
+`gamma = 5/3`, at rest at the start, with the package's default hydrodynamic scheme.
 
 Choices that the paper does not make, and that are ours:
 
@@ -130,14 +138,14 @@ r = ionized_radius(sim; x0 = 1.2e-3)
 function stromgren_iliev(; test::Integer=1, n::Integer=32, centered::Bool=false,
                          chat_factor=1e-3, solver=RosenbrockChem(),
                          kernel=gaussian_kernel(), kwargs...)
-    test in (1, 2) || throw(ArgumentError("test must be 1 or 2, got $test"))
+    test in (1, 2, 5) || throw(ArgumentError("test must be 1, 2 or 5, got $test"))
     CGS = Honghu.CGS
     eV = CGS.eV
     net = test == 1 ? HydrogenIliev1(photon_energy=13.6 * eV, isothermal=1e4) :
           HydrogenIliev2(photon_energy=29.65 * eV)
     T0, x0 = test == 1 ? (1e4, 1.2e-3) : (100.0, 0.0)
 
-    L = _ILIEV_L
+    L = test == 5 ? _ILIEV_L5 : _ILIEV_L
     xlo, side = centered ? (-L, 2L) : (0.0, L)
     dx = side / n
     emission = _kernel_source(kernel, xlo, dx, n, centered ? _ILIEV_NDOT : _ILIEV_NDOT / 8)
@@ -148,7 +156,7 @@ function stromgren_iliev(; test::Integer=1, n::Integer=32, centered::Bool=false,
          Boundaries((Reflecting(), Outflow()), (Reflecting(), Outflow()),
                     (Reflecting(), Outflow()))
     sim = Simulation(; n=(n, n, n), xlo=(xlo, xlo, xlo), xhi=(xlo + side, xlo + side, xlo + side),
-                     hydro=false, radiation=rad, eos=IdealGas(gamma=5 / 3, cv=cv_from_mu(1.0, 5 / 3)),
+                     hydro=test == 5, radiation=rad, eos=IdealGas(gamma=5 / 3, cv=cv_from_mu(1.0, 5 / 3)),
                      boundaries=bc, radiation_boundaries=bc,
                      chemistry=Photochemistry(net; solver, emission), kwargs...)
     # The species are H, H+ and e-, and the mass of an H+ ion and an electron is that of an

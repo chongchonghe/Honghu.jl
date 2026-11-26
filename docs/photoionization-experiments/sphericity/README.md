@@ -4,7 +4,7 @@
 
 **Answer.** It depends on the kernel. A compact or sharp-edged source makes an aspherical front with a cubic pattern, of $\pm 10\%$ to $\pm 20\%$ in radius. A Gaussian source of width $3\,\Delta x$ makes a front that is round to 0.3%. The default kernel, which is Quokka's (a Gaussian of width $1.5\,\Delta x$, cut at 2.5 widths), gives eight lobes with a spread of 4%. The Wendland C2 kernel that Quokka deposits particle radiation with (support $2\,\Delta x$) gives an octahedron with a spread of 10%. At the same width, the Wendland and the Gaussian kernels give the same spread: the width matters, not the shape.
 
-**Scope.** These runs have hydrodynamics off, so they test only the radiation transport and the chemistry in the R-type phase. They have no D-type phase.
+**Scope.** These runs have hydrodynamics off, so they test only the radiation transport and the chemistry in the R-type phase. The D-type phase, with hydrodynamics on, is in `../dtype/README.md`.
 
 ## Setup
 
@@ -124,4 +124,4 @@ The $\sigma$ of `tophat3` is that of a uniform sphere of radius $3\,\Delta x$, $
 - Whether the transport alone (no chemistry) makes the same pattern from the same sources. A test of the optically thin field $E(\mathbf{r})$ around each source would separate the two.
 - How the spread scales with resolution, and whether the width that a round front needs is a number of cells or a physical size.
 - The spread for widths between $1.5\,\Delta x$ and $3\,\Delta x$. The kernel `gauss2` ($\sigma = 2\,\Delta x$, cut at $4\sigma$) is in the script but was not run.
-- The D-type phase. These runs have no hydrodynamics. Whether the asphericity of the R-type front grows, stays or smooths out when the HII region expands is not tested.
+- The D-type phase is in `../dtype/README.md` (Iliev et al. 2009 Test 5, hydrodynamics on): the front keeps the shape from the source and its spread grows.

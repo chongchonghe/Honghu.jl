@@ -76,8 +76,34 @@ end
         @test tmax == 500e6 * PC.year
         @test s.R[1, g.lo[1], g.lo[2], g.lo[3]] < 1e-20      # no ionizing photons to start with (the floor, not a_r T^4)
     end
+    # any kernel is normalised the same way
+    for kernel in (P.wendland_kernel(), P.gaussian_kernel(width=3.0, cut=4.0))
+        s, _ = P.stromgren_iliev(n=8, centered=true, kernel=kernel)
+        g = s.grid
+        total = sum(s.chemistry.emission(Honghu.cellcenter(g, i, j, k)..., 0.0) * prod(g.dx)
+                    for k in g.lo[3]:g.hi[3], j in g.lo[2]:g.hi[2], i in g.lo[1]:g.hi[1])
+        @test total ≈ 5e48 rtol = 1e-12
+    end
+    @test_throws ArgumentError P.stromgren_iliev(n=8, kernel=(x, y, z, dx) -> 0.0)
     @test_throws ArgumentError P.stromgren_iliev(test=3)
     @test P.stromgren_radius_finite_c(0.0; chat=1e9) == 0.0
     # the front is slower than light and ahead of nothing: a smaller chat is behind
     @test P.stromgren_radius_finite_c(1e15; chat=1e8) < P.stromgren_radius_finite_c(1e15; chat=1e9)
+end
+
+@testset "Stromgren sphere: Test 5 expands the HII region" begin
+    # Iliev et al. (2009) Test 5: the Test 2 network with hydrodynamics on, in a 15 kpc box.
+    # By 200 Myr the hot gas has pushed a dense shell out and left the centre rarefied, and the
+    # shell is still far from the outflow walls, so no mass has left the box.
+    sim, _ = P.stromgren_iliev(test=5, n=16, centered=true, chat_factor=3e-4,
+                               solver=BackwardEulerChem())
+    @test sim.grid.xhi[1] ≈ 15e3 * PC.parsec
+    m0 = conserved_totals(sim).mass
+    rho0 = field(sim, :density)[1][1, 1, 1]
+    run!(sim; tmax=200e6 * PC.year, verbose=false)
+    rho = field(sim, :density)[1]
+    @test maximum(rho) > 1.3rho0                       # the shell
+    @test rho[8, 8, 8] < 0.9rho0                       # the rarefied centre (0.76 n0 at this resolution)
+    @test conserved_totals(sim).mass ≈ m0 rtol = 1e-12
+    @test sim.diag.chem_failures == 0
 end
