@@ -70,6 +70,50 @@ The figures `dtype_evolution_<kernel>_be.png` show the four panels of one kernel
 
 **For Quokka.** The kernel of `testDTypeFront3D.cpp` is `WendlandC2` with $N = 2$, the `wendland2` of this study. If Quokka transports radiation as Honghu does, a Quokka run with that source should show the same diamond, with the front about 8% aspherical by 500 Myr (not verified in Quokka). A larger support, or a Gaussian of width $3\,\Delta x$, should remove most of it.
 
+## Heating, cooling and the temperature
+
+**Honghu's Test 5 has heating and cooling, but only in ionized gas.** The network is `HydrogenIliev2` (`networks/hydrogen_iliev2/`). Its energy terms are:
+
+- photoheating, 16.05 eV per photoionization (the band's 29.65 eV less 13.6 eV);
+- collisional ionization, which costs 13.6 eV each;
+- recombination cooling, $6.1\times10^{-10}k_B T^{0.11}\,n_e n_{\rm H^+}$ above 100 K;
+- free-free cooling, $1.3\times1.427\times10^{-27}\sqrt{T}\,n_e n_{\rm H^+}$;
+- Lyman $\alpha$ collisional excitation cooling, $7.5\times10^{-19}e^{-118348/T}/(1+\sqrt{T/10^5})\,n_e n_{\rm H^0}$ (Cen 1992).
+
+Every cooling term needs free electrons, and nothing heats neutral gas. (Test 1 is isothermal at $10^4$ K and has no energy equation.)
+
+**How the temperature stays where it is.** In the measured profiles of `gauss` at 500 Myr, the ionized interior is at 1.2 to $2\times10^4$ K, the shocked shell at 4000 to 7000 K, and the gas ahead of the shock at 100 K. Three things set this; the numbers below are from `../thermal_balance.jl`, which evaluates the network's rates:
+
+1. In fully ionized gas, photoheating balances recombination and free-free cooling only at $1.5\times10^5$ K, because the 16.05 eV is large and these two coolants are weak. What holds the interior at $1$–$2\times10^4$ K is the Lyman $\alpha$ cooling of the residual neutral atoms: with a neutral fraction of $10^{-3}$ the balance is at $2.3\times10^4$ K, with $10^{-2}$ at $1.7\times10^4$ K. So the temperature depends on the neutral fraction, which is highest near the front.
+2. At $n_{\rm H} = 10^{-3}$ cm$^{-3}$ the gas is far from thermal equilibrium. The cooling time of ionized gas at $1.5\times10^4$ K by recombination and free-free is about 420 Myr, close to the length of the run, and the sound-crossing time of the Stromgren radius is about 330 Myr. The temperature therefore also carries the history of heating and of adiabatic expansion.
+3. Neutral gas has neither heating nor cooling. Ahead of the shock it stays at its initial 100 K. Behind the shock it is heated adiabatically to a few thousand K, and nothing cools it, so the shell stays warm and thick (about 2 cells, with $n_{\max} = 3.2\,n_0$).
+
+**Comparison with Quokka's D-type tests.** From the source in `quokka-local` (`src/problems/DTypeFront_JAFF/`, `src/problems/DTypeFront3D/`, their `inputs/*.toml` and networks):
+
+| | Honghu Test 5 (this study) | Quokka `DTypeFront_JAFF` | Quokka `DTypeFront3D` |
+|:---|:---|:---|:---|
+| Network | `HydrogenIliev2` (JAFF) | `photoionization_H_caseB` (JAFF) | `thermophotochemistry_handwritten` |
+| $n_{\rm H}$, initial $T$ | $10^{-3}$ cm$^{-3}$, 100 K | 139.9 cm$^{-3}$, 37.11 K | 100 cm$^{-3}$, 42 K |
+| Box, cells | whole sphere, $[-15, 15]^3$ kpc, $64^3$ | octant, 5.2 pc, $64^3$, reflecting walls | whole sphere, $[-16, 16]^3$ pc, $64^3$ + 1 AMR level, reflecting walls |
+| Source | $5\times10^{48}$ s$^{-1}$; Gaussian, Wendland or wide Gaussian | $4\times10^{46}$ s$^{-1}$; Wendland C2, $N = 2$ | $10^{48}$ s$^{-1}$ ionizing, plus an optical source; Wendland C2, $N = 2$ |
+| Ionizing band | one band, 29.65 eV, $\sigma = 1.63\times10^{-18}$ cm$^2$ | 13.6–26 eV, flat spectrum: mean 18.48 eV | 13.6–26 eV, as `DTypeFront_JAFF` |
+| Photoheating per ionization | 16.05 eV | 4.88 eV | 4.88 eV |
+| Cooling of ionized gas | recombination, free-free, Lyman $\alpha$ (on $n_e n_{\rm H^0}$) | recombination, free-free and collisionally excited line cooling (Frazer & Heitsch 2019), all on $n_e n_{\rm H^+}$ | the same terms as `DTypeFront_JAFF` |
+| Neutral gas | no heating, no cooling | KI heating $2\times10^{-26}n_{\rm H^0}$ and KI cooling (Vázquez-Semadeni et al. 2007) | the same, switched off in cells with $0.01 < x_{\rm H^+} < 0.99$ |
+| Other physics | none | radiation pressure (`beta_order = 1`) | dust, infrared and optical groups, radiation pressure |
+| Equilibrium $T$, ionized | $1.5\times10^5$ K without neutrals; 1.7–$2.3\times10^4$ K with $x_{\rm H^0} = 10^{-2}$–$10^{-3}$ | 7808 K (the test computes it the same way) | not computed |
+| Equilibrium $T$, neutral | none: adiabatic | 37.11 K (= the initial $T$) | 41.8 K at $n = 100$ (the initial 42 K) |
+| Cooling time, ionized gas | about 420 Myr | about 0.3 kyr | not computed (similar to `DTypeFront_JAFF`) |
+| What the test checks | the shape of the front and shock | $r_I(t)$ against Spitzer or Krumholz & Matzner (2009); median $T$ of the cavity and of the neutral gas within 5% of equilibrium | front and shell radius, and a temperature cap of $5\times10^4$ K (`T_gas_limit`) |
+
+The equilibrium temperatures and cooling times in the table are computed by `../thermal_balance.jl` from each network's rate formulas for fully ionized gas in ionization equilibrium (photoionizations equal to recombinations). The 7808 K uses the same balance as `compute_equilibrium_temperature_ionized` in `testDTypeFront_JAFF.cpp`, and the 37.11 K and 41.8 K agree with the initial temperatures of the two Quokka tests, which are set to the KI equilibrium.
+
+**What the difference means.**
+
+- Quokka's tests are nearly isothermal two-phase problems. The gas cools in a few hundred years, much faster than the front moves, so the ionized gas sits at its equilibrium of about 7800 K and the neutral gas at about 40 K. A shock into the neutral gas cools at once, so the shell is thin and dense. This is the regime of the Spitzer and Hosokawa & Inutsuka solutions that `DTypeFront_JAFF` checks against.
+- Honghu's Test 5 is Iliev et al. (2009) Test 5. It is not isothermal: at $10^{-3}$ cm$^{-3}$ the cooling is slow, the ionized gas is hotter (16.05 eV of heating against 4.88 eV, and weaker coolants), and the shocked neutral shell cannot cool. Its shell is warm and thick, and its expansion follows no isothermal solution exactly.
+- For the sphericity, the kernel result does not depend on this: the shape comes from the source in the R-type phase. But a cold, thin shell, as in Quokka, may respond differently to the same imprint than Honghu's warm, thick one (not tested). A Honghu run in Quokka's regime would need the KI terms and the collisionally excited line cooling in a network, the 13.6–26 eV band, and $n_{\rm H} \approx 100$ cm$^{-3}$. Honghu's networks do not have the first two yet.
+
 ## Caveats and what is not known
 
 - One band and overheated gas: the temperature of the ionized gas, hence the pressure and the expansion speed, is not the paper's.
