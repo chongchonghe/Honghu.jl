@@ -10,27 +10,43 @@ const _ILIEV_NH = 1e-3                              # hydrogen number density, c
 const _ILIEV_NDOT = 5e48                            # ionizing photons per second
 const _ILIEV_ALPHA_B = 2.59e-13                     # Test 1 case B recombination coefficient, cm^3 s^-1
 
-# The Gaussian source: width `1.5 dx` and cut at `2.5` widths, as Quokka's
-# `testStromgrenSphere.cpp` (there the width is 1.5 / 16 of the box). Its rate is
-# normalised over the *grid*, so the photons per second that the cells receive are exactly
-# `Ndot`, whatever the resolution and wherever the truncation falls among the cells. A
-# point source in one cell would print the grid axes onto the front instead.
-function _gaussian_source(xlo, dx, n, Ndot)
-    s = 1.5 * dx
-    rmax2 = (2.5 * s)^2
-    w(x, y, z) = (r2 = x^2 + y^2 + z^2; r2 < rmax2 ? exp(-r2 / (2 * s^2)) : 0.0)
+"""
+    gaussian_kernel(; width = 1.5, cut = 2.5)
+
+A deposition kernel for the source of [`stromgren_iliev`](@ref): a Gaussian of standard
+deviation `width * dx`, set to zero beyond `cut` standard deviations. The default is Quokka's
+(`testStromgrenSphere.cpp`). A kernel is a function `w(x, y, z, dx)` that gives the relative
+weight of the cell centred at `(x, y, z)`, with the source at the origin; `stromgren_iliev`
+normalises it over the grid.
+"""
+function gaussian_kernel(; width=1.5, cut=2.5)
+    return function (x, y, z, dx)
+        s = width * dx
+        r2 = x^2 + y^2 + z^2
+        r2 < (cut * s)^2 ? exp(-r2 / (2 * s^2)) : 0.0
+    end
+end
+
+# The emission of a source at the origin with the kernel `w`. Its rate is normalised over the
+# *grid*, so the photons per second that the cells receive are exactly `Ndot`, whatever the
+# resolution and wherever the kernel's edge falls among the cells.
+function _kernel_source(w, xlo, dx, n, Ndot)
     total = 0.0
     for k in 1:n, j in 1:n, i in 1:n
-        total += w(xlo + (i - 0.5) * dx, xlo + (j - 0.5) * dx, xlo + (k - 0.5) * dx)
+        total += w(xlo + (i - 0.5) * dx, xlo + (j - 0.5) * dx, xlo + (k - 0.5) * dx, dx)
     end
-    A = Ndot / (total * dx^3)                        # photons cm^-3 s^-1 at the source centre
+    total > 0 || throw(ArgumentError("the source kernel is zero in every cell"))
+    A = Ndot / (total * dx^3)                        # photons cm^-3 s^-1 per unit weight
     # Called from the threads of the chemistry step: it reads only captured constants.
-    return (x, y, z, t) -> A * w(x, y, z)
+    return (x, y, z, t) -> A * w(x, y, z, dx)
 end
+
+_gaussian_source(xlo, dx, n, Ndot) = _kernel_source(gaussian_kernel(), xlo, dx, n, Ndot)
 
 """
     stromgren_iliev(; test = 1, n = 32, centered = false, chat_factor = 1e-3,
-                    solver = RosenbrockChem(), kwargs...) -> (sim, tmax)
+                    solver = RosenbrockChem(), kernel = gaussian_kernel(),
+                    kwargs...) -> (sim, tmax)
 
 Test 1 or 2 of the Stromgren-sphere comparison of Iliev et al. (2006): an ionizing point
 source switched on in a uniform, static, hydrogen-only medium, run with the network
@@ -70,9 +86,13 @@ Choices that the paper does not make, and that are ours:
     would receive `Ndot`, is our choice (it is also Quokka's). `centered = true` is the whole
     sphere in `[-L, L]^3`, `Outflow` everywhere, and `Ndot` emitted, at eight times the cells
     for the same cell size.
-  - **The source.** A Gaussian at the origin of width `1.5 dx`, cut at `2.5` widths, whose
-    rate is normalised so that the cells receive exactly `Ndot / 8` (or `Ndot`) photons per
-    second. The width and the cut are Quokka's (`testStromgrenSphere.cpp`), not the paper's.
+  - **The source.** By default a Gaussian at the origin of width `1.5 dx`, cut at `2.5`
+    widths, whose rate is normalised so that the cells receive exactly `Ndot / 8` (or `Ndot`)
+    photons per second. The width and the cut are Quokka's (`testStromgrenSphere.cpp`), not
+    the paper's. `kernel = w` deposits the photons with another shape: `w(x, y, z, dx)` is the
+    relative weight of the cell centred at `(x, y, z)`, the source being at the origin, and
+    the same normalisation applies. `gaussian_kernel(; width, cut)` makes the Gaussian, with
+    `width` and the cut radius in units of `dx` and of the width.
   - **The radiation.** One group, zero opacity, `beta_order = 0` and a constant reduced
     speed of light, as a chemistry run requires. The initial radiation energy is zero: the
     default `a_r T^4` would put about `1e12` ionizing photons per cm^3 in the box.
@@ -91,7 +111,8 @@ r = ionized_radius(sim; x0 = 1.2e-3)
 ```
 """
 function stromgren_iliev(; test::Integer=1, n::Integer=32, centered::Bool=false,
-                         chat_factor=1e-3, solver=RosenbrockChem(), kwargs...)
+                         chat_factor=1e-3, solver=RosenbrockChem(),
+                         kernel=gaussian_kernel(), kwargs...)
     test in (1, 2) || throw(ArgumentError("test must be 1 or 2, got $test"))
     CGS = Honghu.CGS
     eV = CGS.eV
@@ -102,7 +123,7 @@ function stromgren_iliev(; test::Integer=1, n::Integer=32, centered::Bool=false,
     L = _ILIEV_L
     xlo, side = centered ? (-L, 2L) : (0.0, L)
     dx = side / n
-    emission = _gaussian_source(xlo, dx, n, centered ? _ILIEV_NDOT : _ILIEV_NDOT / 8)
+    emission = _kernel_source(kernel, xlo, dx, n, centered ? _ILIEV_NDOT : _ILIEV_NDOT / 8)
 
     rad = RadiationPhysics(c=CGS.c_light, chat=chat_factor * CGS.c_light, a_rad=CGS.a_rad,
                            k_B=CGS.k_B, opacity=ConstantOpacity(0.0), beta_order=0)
