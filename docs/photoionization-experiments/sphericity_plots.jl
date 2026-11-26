@@ -39,7 +39,7 @@ function kernel_figure(name)
     for tm in PLOT_TIMES
         x = readx(name, tm)
         push!(panels, heatmap(c, c, permutedims(1 .- x[:, :, N ÷ 2]);
-                              c=:viridis, clims=(0, 1),
+                              c=:viridis, clims=(0, 1), aspect_ratio=1,
                               xlims=extrema(c), ylims=extrema(c), xlabel="x (kpc)", ylabel="y (kpc)",
                               colorbar_title="x_H0", title="$name, $tm Myr: mid-plane"))
     end
@@ -86,7 +86,7 @@ function comparison_figure(names; tm_map=500, lim=0.15)
         for tm in PLOT_TIMES
             x = readx(name, tm)
             push!(panels, heatmap(c, c, permutedims(1 .- x[:, :, N ÷ 2]);
-                                  c=:viridis, clims=(0, 1),
+                                  c=:viridis, clims=(0, 1), aspect_ratio=1,
                                   xlims=extrema(c), ylims=extrema(c), colorbar=false,
                                   xlabel="x (kpc)", ylabel="y (kpc)",
                                   title="$name, $tm Myr: x_H0, 0 (dark) to 1"))

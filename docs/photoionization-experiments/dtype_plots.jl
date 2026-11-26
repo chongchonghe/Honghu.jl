@@ -27,7 +27,7 @@ readf(tag, name, tm) = (a = Array{Float32}(undef, N, N, N);
                         read!(joinpath(DT_OUT, "$(tag)_$(name)_$(SOLVER)_$(tm)Myr.f32"), a); Float64.(a))
 
 slice(f) = permutedims(f[:, :, N ÷ 2])
-sliceplot(z, title; kw...) = heatmap(CC, CC, z; colorbar=false, xlims=extrema(CC), ylims=extrema(CC),
+sliceplot(z, title; kw...) = heatmap(CC, CC, z; colorbar=false, aspect_ratio=1, xlims=extrema(CC), ylims=extrema(CC),
                                      xlabel="x (kpc)", ylabel="y (kpc)", title, kw...)
 
 function frontmap(x)
