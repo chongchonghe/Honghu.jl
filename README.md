@@ -15,7 +15,7 @@ Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a 
 ## Why Honghu
 
 - **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) ([Zingale 2014](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract); [Harpole et al. 2019](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract)) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, ideal MHD with constrained transport, and radiation with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
-- **Fast on a laptop.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 8.1 million cell updates per second with hydrodynamics, 3.4 million with radiation and 3.1 million with MHD. On four cores hydrodynamics reaches 25 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance).
+- **Fast on a laptop.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 8.3 million cell updates per second with hydrodynamics, 3.3 million with radiation and 3.4 million with MHD. On four cores hydrodynamics reaches 23 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance).
 - **The algorithms of a production code.** HLLC with Batten wave speeds, Rider's correction and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; HLLD and constrained transport for MHD; the M1 system with an HLL solver; and the IMEX PD-ARS scheme for stiff matter-radiation coupling. These are Quokka's methods, and every kernel is written so that it transliterates to Quokka's C++ and back. What you learn here is what production codes do.
 - **Where new methods are born.** Honghu is the reference implementation of the adaptive reduced speed of light approximation (He, Krumholz & Wibking, in preparation), with a stability bound that is exact for the scheme. Its matter-radiation coupling reduces each cell's implicit step to one equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where the Newton formulation Quokka uses fails on 75. Dust-gas thermal coupling is one equation too. Ideas proven here go into Quokka, and a fix found here went into SciML's BracketingNonlinearSolve.
 - **Verified, not only tested.** Over 1400 tests: exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks down to the Zel'dovich spike, measured convergence orders, and invariants that must hold exactly — conservation, direction isotropy, positivity. Every figure on this page is redrawn by the scripts in `docs/`. See [Verification](#verification).
@@ -305,24 +305,24 @@ The test suite (`julia --project=. -t 4 test/runtests.jl`, 1217 tests, ~70 s) ch
 
 ## Performance
 
-The cost of one step, per cell and per CPU core, for the same 3D blast wave at $128^3$ in three forms: the Sedov blast of `Honghu.Problems.sedov_blast`; the same blast with grey M1 radiation coupled to the gas ($\kappa = 100$, about one optical depth per cell, one radiation substep per step); and the same blast in a uniform magnetic field ($\beta = 1$ in the ambient gas). All three use PLM and SSP-RK2, with HLLC for the hydrodynamics and HLLD with constrained transport for MHD. One thread on a laptop (Apple M5 Max), Julia 1.12, `Float64`, measured 2026-11-27:
+The cost of one step, per cell and per CPU core, for the same 3D blast wave at $128^3$ in three forms: the Sedov blast of `Honghu.Problems.sedov_blast`; the same blast with grey M1 radiation coupled to the gas ($\kappa = 100$, about one optical depth per cell, one radiation substep per step); and the same blast in a uniform magnetic field ($\beta = 1$ in the ambient gas). All three use PLM and SSP-RK2, with HLLC for the hydrodynamics and HLLD with constrained transport for MHD. One thread on a laptop (Apple M5 Max), Julia 1.13, `Float64`, measured 2026-11-28:
 
 | | Hydrodynamics (blast wave) | Radiation hydrodynamics (blast wave + grey M1) | Magnetohydrodynamics (magnetised blast wave) |
 |:---|---:|---:|---:|
-| **Mcell-updates per CPU-second** | **8.07** | **3.41** | **3.14** |
-| **CPU-ns per cell-update** | **124** | **294** | **319** |
-| reconstruction (PLM) | 18 | 20 | 35 |
-| Riemann solver (HLLC, HLLD) | 75 | 76 | 169 |
+| **Mcell-updates per CPU-second** | **8.32** | **3.34** | **3.38** |
+| **CPU-ns per cell-update** | **120** | **299** | **296** |
+| reconstruction (PLM) | 16 | 17 | 28 |
+| Riemann solver (HLLC, HLLD) | 84 | 84 | 170 |
 | flux divergence and stage update | 10 | 10 | 11 |
-| EMF and induction (constrained transport) | — | — | 54 |
-| radiation transport (HLL) | — | 103 | — |
-| matter-radiation coupling (implicit) | — | 54 | — |
+| EMF and induction (constrained transport) | — | — | 49 |
+| radiation transport (HLL) | — | 112 | — |
+| matter-radiation coupling (implicit) | — | 53 | — |
 | conversions and floors | 6 | 11 | 13 |
-| ghost cells | 0.5 | 0.7 | 12 |
-| time step | 1 | 1 | 5 |
-| other (copies, combines) | 12 | 19 | 21 |
+| ghost cells | 0.4 | 0.4 | 11 |
+| time step | 1 | 1 | 3 |
+| other (copies, combines) | 4 | 11 | 10 |
 
-The rows below the totals are CPU-ns per cell-update and add up to the total: a profile of whole steps assigns each sample to the kernel it was in, and the radiation rows hold everything under the transport operator and the coupling solve, ghost cells and floors included. A radiation run with more substeps per step pays the two radiation rows once per substep. With radiation, reconstruction and the Riemann solver cost what they cost without it, and MHD costs 2.6 times hydrodynamics, mostly in the HLLD solver and the edge-centred EMFs. To measure it on your machine:
+The rows below the totals are CPU-ns per cell-update and add up to the total: a profile of whole steps assigns each sample to the kernel it was in, and the radiation rows hold everything under the transport operator and the coupling solve, ghost cells and floors included. A radiation run with more substeps per step pays the two radiation rows once per substep. With radiation, reconstruction and the Riemann solver cost what they cost without it, and MHD costs 2.5 times hydrodynamics, mostly in the HLLD solver and the edge-centred EMFs. To measure it on your machine:
 
 ```bash
 julia --project=. -t 1 test/benchmarks.jl        # prints this table; an argument sets n
@@ -342,14 +342,14 @@ JULIA_NUM_THREADS=6 julia --project=. script.jl   # the same as -t 6
 
 In the REPL, `Threads.nthreads()` gives the number, and the line `run!` prints at the end says how many threads the run used. A 1D run has a single row, so it runs on one thread whatever `-t` asks for; 2D and 3D runs use all of them. On the Apple M5 Max below, which has 6 performance and 12 efficiency cores, `-t auto` gives 6 threads.
 
-The 3D Sedov blast at $128^3$, `Honghu.Problems.sedov_blast(n = 128, reconstruction = PLM())` with SSP-RK2, the default, 20 steps after one warm-up step, Apple M5 Max, Julia 1.12, measured 2026-11-27:
+The 3D Sedov blast at $128^3$, `Honghu.Problems.sedov_blast(n = 128, reconstruction = PLM())` with SSP-RK2, the default, 20 steps after one warm-up step, Apple M5 Max, Julia 1.13, measured 2026-11-28:
 
 | Threads | 20 steps | per step | throughput |
 |:---|---:|---:|---:|
-| 1 | 5.28 s | 0.264 s | 7.94 Mcell-updates/s |
-| 4 | 1.70 s | 0.085 s | 24.7 Mcell-updates/s |
+| 1 | 5.11 s | 0.256 s | 8.21 Mcell-updates/s |
+| 4 | 1.83 s | 0.091 s | 22.9 Mcell-updates/s |
 
-Four threads are 3.1 times faster than one. To measure it on your machine, save this as `sedov_timing.jl` and run it with `-t 1` and with `-t 4`:
+Four threads are 2.8 times faster than one. To measure it on your machine, save this as `sedov_timing.jl` and run it with `-t 1` and with `-t 4`:
 
 ```julia
 using Honghu
