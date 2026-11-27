@@ -1,5 +1,5 @@
-# Steps per second of the 3D blast, one configuration per run, for performance-optimization-notes.md.
-#   julia --project=. -t 1 docs/performance-experiments/bench.jl hydro|rhd|mhd n [tile|none] [Float32|Float64] [PCM|PLM|PPM]
+# Steps per second of the 3D blast, one configuration per run, for notes/performance-findings.md.
+#   julia --project=. -t 1 notes/performance-experiments/bench.jl hydro|rhd|mhd n [tile|none] [Float32|Float64] [PCM|PLM|PPM]
 # NSTEPS=k sets the steps timed (default 2e7/n^3), NOFLUSH=1 runs with flush_subnormals = false.
 using Honghu, Printf
 physics = Symbol(ARGS[1]); n = parse(Int, ARGS[2])

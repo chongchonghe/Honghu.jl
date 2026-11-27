@@ -1,6 +1,6 @@
 # Whether LLVM vectorises a cell kernel's loop over a row: counts vector types, gathers and
 # scatters in the IR of the loop `launch!` runs, with the arguments `launch!` hands the kernel.
-#   KERN=mhd|emf|bcc|ind|recon|div julia --project=. docs/performance-experiments/vec.jl  (DUMP=1 writes the IR)
+#   KERN=mhd|emf|bcc|ind|recon|div julia --project=. notes/performance-experiments/vec.jl  (DUMP=1 writes the IR)
 include(joinpath(@__DIR__, "bench_setup.jl"))
 using InteractiveUtils
 const H = Honghu

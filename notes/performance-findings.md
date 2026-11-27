@@ -32,7 +32,7 @@ means the Riemann row must fall to about 100 ns, i.e. ~15 ns per HLLD solve.
 
 ## Scripts
 
-In `docs/performance-experiments/`, each with its usage in its header:
+In `notes/performance-experiments/`, each with its usage in its header:
 `bench.jl` (steps per second of one configuration), `vec.jl` (does a kernel's row
 loop vectorise, and with how many gathers), `micro.jl` (the MHD Riemann solvers
 alone), `athena_blast.jl` (Athena++'s MHD blast input in Honghu).

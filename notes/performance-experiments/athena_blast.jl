@@ -1,5 +1,5 @@
 # Athena++'s inputs/mhd/athinput.blast in Honghu, for a like-for-like comparison.
-#   julia --project=. -t 1 docs/performance-experiments/athena_blast.jl [n] [nsteps]
+#   julia --project=. -t 1 notes/performance-experiments/athena_blast.jl [n] [nsteps]
 using Honghu, Printf
 n = parse(Int, get(ARGS, 1, "128"))
 nsteps = parse(Int, get(ARGS, 2, "20"))

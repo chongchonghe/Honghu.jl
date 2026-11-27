@@ -8,33 +8,33 @@ Honghu is named after 鸿鹄 (hóng hú), an ancient Chinese term for the large,
 
 **Three-dimensional radiation magnetohydrodynamics in pure Julia: simple enough to learn from, fast enough to run on a laptop, and good enough to invent new methods with.**
 
-Honghu solves the Euler equations, or the equations of ideal MHD, coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — in one, two or three dimensions on a uniform Cartesian grid. It uses the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics ([Wibking & Krumholz 2022](https://scixplorer.org/abs/2022MNRAS.512.1430W/abstract); [He, Wibking & Krumholz 2024a](https://scixplorer.org/abs/2024MNRAS.531.1228H/abstract), [2024b](https://scixplorer.org/abs/2024MNRAS.535.3059H/abstract); [He et al. 2026](https://scixplorer.org/abs/2026OJAp....959235H/abstract)), written out so that a student can read them and a developer can change them.
+Honghu ([He 2026](https://doi.org/10.5281/zenodo.23569082)) solves the Euler equations, or the equations of ideal MHD, coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — in one, two or three dimensions on a uniform Cartesian grid. It uses the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics ([Wibking & Krumholz 2022](https://scixplorer.org/abs/2022MNRAS.512.1430W/abstract); [He, Wibking & Krumholz 2024a](https://scixplorer.org/abs/2024MNRAS.531.1228H/abstract), [2024b](https://scixplorer.org/abs/2024MNRAS.535.3059H/abstract); [He et al. 2026](https://scixplorer.org/abs/2026OJAp....959235H/abstract)), written out so that a student can read them and a developer can change them.
 
 Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, a guide to the physics, numerics and code design of each physics module (so far photochemistry and MHD), and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
 ## Speed against Athena++
 
-One core of an AMD Threadripper PRO 7975WX (Zen 4), Athena++'s own MHD blast (`inputs/mhd/athinput.blast`: PLM, HLLD, CFL 0.3, periodic) at $128^3$ as one block, 40 steps, no output:
+Athena++ ([Stone et al. 2020](https://scixplorer.org/abs/2020ApJS..249....4S/abstract)) is a production MHD code in C++, tuned for Intel CPUs and compilers. On one core of an AMD Threadripper PRO 7975WX (Zen 4), Honghu runs Athena++'s own MHD blast at **91% of Athena++'s speed**. The problem is `inputs/mhd/athinput.blast` (PLM, HLLD, CFL 0.3, periodic) at $128^3$ as one block, 40 steps, no output:
 
 | Code | Build | Mcell-updates/s |
 |:---|:---|---:|
 | Athena++ | Intel icpx, `-O3 -ipo -qopenmp-simd -march=native -fp-model=precise` | 2.91 |
 | **Honghu** | Julia 1.13 | **2.64** |
 
-Honghu does no reassociation and no approximate division, so Athena++ is built with IEEE-precise floating point too: both codes then do the arithmetic the source says. The schemes are close but not the same: Athena++'s VL2 predictor is a first-order half step, cheaper than the first of Honghu's two PLM stages of SSP-RK2, Honghu's HLLD carries the Minoshima & Miyoshi (2021) low-Mach and carbuncle terms, and its constrained transport is Q26 with LD04 averaging rather than Gardiner & Stone's. The builds and the flags tried are in [`performance-optimization-notes.md`](https://github.com/chongchonghe/Honghu.jl/blob/main/performance-optimization-notes.md). Honghu's side of the table:
+Honghu does no reassociation and no approximate division, so Athena++ is built with IEEE-precise floating point too: both codes then do the arithmetic the source says. The schemes are close but not the same: Athena++'s VL2 predictor is a first-order half step, cheaper than the first of Honghu's two PLM stages of SSP-RK2, Honghu's HLLD carries the Minoshima & Miyoshi (2021) low-Mach and carbuncle terms, and its constrained transport is Q26 with LD04 averaging rather than Gardiner & Stone's. The builds and the flags tried are in [`notes/performance-findings.md`](https://github.com/chongchonghe/Honghu.jl/blob/main/notes/performance-findings.md). Honghu's side of the table:
 
 ```bash
-julia --project=. -t 1 docs/performance-experiments/athena_blast.jl 128 40
+julia --project=. -t 1 notes/performance-experiments/athena_blast.jl 128 40
 ```
 
 ## Why Honghu
 
 - **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) ([Zingale 2014](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract); [Harpole et al. 2019](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract)) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, ideal MHD with constrained transport, and radiation with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
-- **Fast, on a laptop and against Athena++.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 8.3 million cell updates per second with hydrodynamics, 3.3 million with radiation and 3.4 million with MHD. On four cores hydrodynamics reaches 23 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance). On one core of a Linux server, Honghu runs Athena++'s own MHD blast within 10% of the speed of Athena++ built with Intel's compiler; see [the comparison](#speed-against-athena) above.
+- **Fast, on a laptop and against Athena++.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 8.3 million cell updates per second with hydrodynamics, 3.3 million with radiation and 3.4 million with MHD. On four cores hydrodynamics reaches 23 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance). On one core of a Linux server, Honghu runs Athena++'s own MHD blast at 91% of the speed of Athena++ built with Intel's compiler; see [the comparison](#speed-against-athena) above.
 - **The algorithms of a production code.** HLLC with Batten wave speeds, Rider's correction and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; HLLD and constrained transport for MHD; the M1 system with an HLL solver; and the IMEX PD-ARS scheme for stiff matter-radiation coupling. These are Quokka's methods, and every kernel is written so that it transliterates to Quokka's C++ and back. What you learn here is what production codes do.
-- **Where new methods are born.** Honghu is the reference implementation of the adaptive reduced speed of light approximation (He, Krumholz & Wibking, in preparation), with a stability bound that is exact for the scheme. Its matter-radiation coupling reduces each cell's implicit step to one equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where the Newton formulation Quokka uses fails on 75. Dust-gas thermal coupling is one equation too. Ideas proven here go into Quokka, and a fix found here went into SciML's BracketingNonlinearSolve.
-- **Verified, not only tested.** Over 1400 tests: exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks down to the Zel'dovich spike, measured convergence orders, and invariants that must hold exactly — conservation, direction isotropy, positivity. Every figure on this page is redrawn by the scripts in `docs/`. See [Verification](#verification).
-- **Reproducible research.** One script, `examples/irsla_paper.jl`, reproduces every number and data file of the numerical tests in the adaptive reduced speed of light paper.
+- **Where new methods are born.** Honghu is the reference implementation of the adaptive reduced speed of light approximation ([He, Krumholz & Wibking 2026](https://scixplorer.org/abs/2026arXiv261121353H/abstract)), with a stability bound that is exact for the scheme. Its matter-radiation coupling reduces each cell's implicit step to one equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where the Newton formulation Quokka uses fails on 75. Dust-gas thermal coupling is one equation too. Ideas proven here go into Quokka, and a fix found here went into SciML's BracketingNonlinearSolve.
+- **Verified, not only tested.** Over 2400 tests: exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks down to the Zel'dovich spike, measured convergence orders, and invariants that must hold exactly — conservation, direction isotropy, positivity. Every figure on this page is redrawn by the scripts in `docs/`. See [Verification](#verification).
+- **Reproducible research.** One script, `examples/irsla_paper.jl`, reproduces every number and data file of the numerical tests in the [adaptive reduced speed of light paper](https://scixplorer.org/abs/2026arXiv261121353H/abstract).
 - **Built to be extended.** A new equation of state, opacity law, Riemann solver, reconstruction, coupling solver or speed-of-light limiter is a new type and a few methods. Julia's multiple dispatch compiles it into the same allocation-free kernels, with no change to the core. See [Extending](#extending).
 - **Light to install.** Three standard libraries and three packages; plotting loads only when you load Plots. Julia 1.10, the long-term-support release, and newer, tested on both in CI.
 - **Documentation for people and for AI agents.** Every page of the [documentation](https://chongchonghe.github.io/Honghu.jl/) is published as HTML and as Markdown, all pages come as one file, and an `llms.txt` index points coding agents at them.
@@ -287,7 +287,7 @@ Problems with an exact solution carry their own metrics (`default_metrics`, one 
 Every figure below is regenerated by `julia --project=. -t auto docs/make_figures.jl`, or by running the test suite with `--figures`. Each compares the code against something independent: an exact Riemann solution, an analytic diffusion solution, a measured convergence slope, or a similarity solution.
 
 ```bash
-julia --project=. -t 4 test/runtests.jl             # 1217 tests, ~70 s
+julia --project=. -t 4 test/runtests.jl             # 2430 tests, ~2.5 min
 julia --project=. -t auto test/runtests.jl --figures # ... and redraw the figures below
 ```
 
@@ -304,7 +304,7 @@ julia --project=. -t auto test/runtests.jl --figures # ... and redraw the figure
 
 **Mach 3 radiative shock** ([Lowrie & Edwards 2008](https://scixplorer.org/abs/2008ShWav..18..129L/abstract)), against the semi-analytic solution. This is the most demanding one-dimensional problem in the suite: an optically thick, strongly coupled shock with a radiative precursor ahead of the front and, just behind it, a *Zel'dovich spike* where the matter temperature overshoots its own downstream value ($4.26$ against $3.66$). The spike appears only if the velocity-dependent coupling terms, the implicit solve and the shock capturing are all correct at once. Relative $L_1$ error in $T_\mathrm{rad}$ is $0.19\%$ at 256 cells, against the $1\%$ Quokka asks for.
 
-The test suite (`julia --project=. -t 4 test/runtests.jl`, 1217 tests, ~70 s) checks, among other things:
+The test suite (`julia --project=. -t 4 test/runtests.jl`, 2430 tests, ~2.5 min) checks, among other things:
 
 - **Order of accuracy** on smooth advection: PCM 1, PLM 2, PPM 2.3. PPM stops short of 3 because the Colella-Woodward monotonicity constraint drops to a limited line at the two extrema of the sine wave; this matches the same limiter in Athena++ and Quokka.
 - **Toro's five shock tubes**, including the "123" near-vacuum problem and both strong blasts, all staying positive with no help from the floors.
@@ -605,6 +605,9 @@ Quokka:
 
 Methods and test problems:
 
+- C.-C. He, 2026, Honghu.jl v0.1.0, Zenodo, [doi:10.5281/zenodo.23569082](https://doi.org/10.5281/zenodo.23569082) — this code
+- [Stone et al. (2020)](https://scixplorer.org/abs/2020ApJS..249....4S/abstract), *ApJS* 249, 4 — Athena++, in the speed comparison
+- [He, Krumholz & Wibking (2026)](https://scixplorer.org/abs/2026arXiv261121353H/abstract), arXiv:2611.21353 — the adaptive reduced speed of light approximation (`StabilityBound`)
 - [Colella & Woodward (1984)](https://scixplorer.org/abs/1984JCoPh..54..174C/abstract), *JCP* 54, 174 — PPM
 - [Toro (2009)](https://doi.org/10.1007/b79761), *Riemann Solvers and Numerical Methods for Fluid Dynamics* — HLLC, exact Riemann solver
 - [Miyoshi & Kusano (2005)](https://scixplorer.org/abs/2005JCoPh.208..315M/abstract), *JCP* 208, 315 — HLLD
@@ -622,7 +625,7 @@ Methods and test problems:
 
 Questions, bug reports and feature requests are welcome on the [issue tracker](https://github.com/chongchonghe/Honghu.jl/issues). [CONTRIBUTING.md](https://github.com/chongchonghe/Honghu.jl/blob/main/CONTRIBUTING.md) explains how to report a problem, how to propose a change, and how to run the tests and the documentation build. Everyone taking part is expected to follow the [code of conduct](https://github.com/chongchonghe/Honghu.jl/blob/main/CODE_OF_CONDUCT.md). Honghu is maintained by its author, who reads every issue and decides what is merged.
 
-If you use Honghu in your research, please cite it. Every release is archived on Zenodo, and the DOI [10.5281/zenodo.23569081](https://doi.org/10.5281/zenodo.23569081) always resolves to the latest version; each version also has its own DOI, listed on that page. [CITATION.cff](https://github.com/chongchonghe/Honghu.jl/blob/main/CITATION.cff) holds the metadata, and GitHub's "Cite this repository" button formats it.
+If you use Honghu in your research, please cite the Zenodo record of the version you used; for v0.1.0 that is [10.5281/zenodo.23569082](https://doi.org/10.5281/zenodo.23569082). Every release is archived on Zenodo, and the DOI [10.5281/zenodo.23569081](https://doi.org/10.5281/zenodo.23569081) always resolves to the latest version; each version also has its own DOI, listed on that page. [CITATION.cff](https://github.com/chongchonghe/Honghu.jl/blob/main/CITATION.cff) holds the metadata, and GitHub's "Cite this repository" button formats it.
 
 ## License
 

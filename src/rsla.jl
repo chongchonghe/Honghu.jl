@@ -8,7 +8,7 @@
 # enough that the implicit source update stabilises a CFL-violating transport
 # step. Making `phi` local removes the error where it is large and keeps the
 # reduction where it pays: this is the adaptive RSLA (ARSA; IRSLA in this code)
-# of He, Krumholz & Wibking.
+# of He, Krumholz & Wibking (2026), arXiv:2611.21353.
 #
 # This file holds the rule and nothing else: `AbstractChatLimiter`, the local
 # quantities it reads (`LocalCell`), and the pointwise `chat_factor`. The array
@@ -101,7 +101,7 @@ the step is still stable at.
 Accuracy increases monotonically with `phi` up to the stability limit, so the
 optimal local choice is the limit itself -- and for the IMEX PD-ARS update used
 here, with the HLL transport flux, that limit is known exactly. A von Neumann
-analysis of one substep (He, Krumholz & Wibking, Sec. 3) finds the worst mode is
+analysis of one substep ([He, Krumholz & Wibking 2026](https://scixplorer.org/abs/2026arXiv261121353H/abstract), Sec. 3) finds the worst mode is
 always the grid-scale checkerboard, for which the transport symbol is a pure
 dissipation and the coupling splits into an energy block `(T, E)` and a momentum
 block `(v, F)`. Each block is a 2×2 problem with a closed-form boundary:
@@ -125,7 +125,7 @@ substep divided by the gas cooling time at the *true* speed of light, and
     ratio of radiation to gas *inertia*. It is smaller than `K` by about
     `(a/c)^2`, but it is kept: the bound is a difference of two large terms
     when the cell is thick, and dropping even a small `K_F` can then select an
-    unstable `phi` (He, Krumholz & Wibking, Sec. 3.2).
+    unstable `phi` (He, Krumholz & Wibking 2026, Sec. 3.2).
 
 Both are *exact* for this scheme, not estimates: they agree with the full
 five-variable amplification matrix to the precision of a bisection, for any

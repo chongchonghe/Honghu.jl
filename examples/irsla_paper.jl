@@ -1,5 +1,6 @@
 # Every number and data file behind the numerical tests of He, Krumholz &
-# Wibking, "An Adaptive Reduced Speed of Light Approximation" (Sec. 5), except the
+# Wibking (2026), "An Adaptive Reduced Speed of Light Approximation",
+# arXiv:2611.21353 (Sec. 5), except the
 # linear waves, which are `linear_waves_rhd.jl`.
 #
 #     julia --project=. -t 4 examples/irsla_paper.jl --outdir=DIR [section ...]

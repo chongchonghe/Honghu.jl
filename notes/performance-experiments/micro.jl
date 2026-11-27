@@ -1,5 +1,5 @@
 # The MHD Riemann solvers alone, on random states: ns per solve of a scalar loop.
-#   julia --project=. -t 1 docs/performance-experiments/micro.jl
+#   julia --project=. -t 1 notes/performance-experiments/micro.jl
 using Honghu, Printf
 const H = Honghu
 function run(N, solver)
