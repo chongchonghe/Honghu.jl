@@ -223,13 +223,44 @@ states, field and CFL; SSPRK2 instead of VL2, also two stages per step):
 | `docs/readme-performance` (`3b89a4b`) | 1.42 |
 | this branch | 3.36 |
 
-So on this core Honghu went from 0.7x Athena++ (g++, AVX-512) to 1.6x. The 2.9
-quoted for the Skylake Gold 6148 was presumably the Intel compiler (FTZ by
-default, `-xCORE-AVX512`, a vectorised `pow`/`sqrt` library); icpx is not
-installed here to check. The schemes are not identical either: Honghu's HLLD
+So on this core Honghu went from 0.7x Athena++ (g++, AVX-512) to 1.6x. That ratio is
+mostly a compiler artefact, as the next section shows. The schemes are not identical either: Honghu's HLLD
 carries the MM21 low-Mach and carbuncle terms, and its CT is Q26 + LD04 rather
 than Athena++'s Gardiner & Stone CT, so this is a comparison of codes, not of
 implementations of one algorithm.
+
+## Why Athena++ gets 2.1 here and 2.9 in its paper
+
+The paper's number (Stone et al. 2020, Sec. III.6.1, Table 2: 2.924 MZone-cycles/s, MHD
+PLM HLLD) is for the blast problem as one 64^3 MeshBlock, VL2, on one core of a Skylake-SP
+Gold 6148. The paper does not name the compiler. Athena++'s `configure.py` for `icpc` uses
+`-O3 -ipo -xhost -inline-forceinline -qopenmp-simd`, and icpc's defaults add FTZ and
+`-fp-model fast=1`.
+
+Athena++ on this core, the same 64^3 single-MeshBlock blast, no output, 40 cycles:
+
+| g++ 14 build | MZone-cycles/s |
+|:---|---:|
+| `-O3` (SSE2) | 1.69 |
+| `-O3 -march=native -fopenmp-simd` | 1.41 |
+| ... `-mdaz-ftz` (flush subnormals) | 1.76 |
+| ... `-fno-math-errno -flto` (≈ icpc's `-ipo`) | 2.00 |
+| `-Ofast -march=native -fopenmp-simd -flto` | 2.09 |
+| ... `-mrecip=all` | 2.09 |
+
+`-fopt-info-vec` on the LTO link shows why the flags stop at 2.1: g++ does not vectorise
+the HLLD `#pragma omp simd` loop (`hlld.cpp:54`, "Analysis failed"), nor PLM's main
+loops, nor the cons-to-prim and CT loops. Only `calculate_fluxes`, `calculate_corner_e`
+and one PLM loop vectorise. The paper says about 85% of the MHD code vectorises with
+icpc. So this build runs Athena++'s dominant kernel scalar, which is the gap to its paper.
+
+The CPUs also differ less than their clocks suggest. A Gold 6148 core has two 512-bit FMA
+units (32 double flops a cycle) at about 3 GHz under AVX-512 load. Zen 4 executes AVX-512
+as two 256-bit halves (16 flops a cycle) at up to 5.3 GHz. Peak vector throughput per core
+is about 100 against 85 GFLOP/s, so for vectorised code the Skylake core is not the weaker
+one. Zen 4's advantage is in scalar code, which is what g++ produced.
+
+Not measured: icpx (oneAPI) is not installed here, and neither is clang.
 
 ## Summary, 128^3 Sedov blast, one core
 
