@@ -27,8 +27,8 @@ struct HLLC <: AbstractRiemannSolver end
 @inline function riemann_flux(::HLLC, sL::HydroState{T}, sR::HydroState{T},
                               gamma::T, du::T, dw::T) where {T<:AbstractFloat}
     # --- Roe averages --------------------------------------------------------
-    wl = sqrt(sL.rho)
-    wr = sqrt(sR.rho)
+    wl = _sqrt(sL.rho)
+    wr = _sqrt(sR.rho)
     nrm = one(T) / (wl + wr)
     ut = (wl * sL.u + wr * sR.u) * nrm
     vt = (wl * sL.v + wr * sR.v) * nrm
@@ -38,7 +38,7 @@ struct HLLC <: AbstractRiemannSolver end
     HR = (sR.E + sR.P) / sR.rho
     Ht = (wl * HL + wr * HR) * nrm
     csq = (gamma - 1) * (Ht - vsq / 2)
-    cst = csq > zero(T) ? sqrt(csq) : (sL.cs + sR.cs) / 2
+    cst = csq > zero(T) ? _sqrt(csq) : (sL.cs + sR.cs) / 2
 
     # --- wave speeds (Batten+ 1997) with Rider's nonlinear correction --------
     # The correction only acts in compression (uL > uR).
@@ -59,8 +59,8 @@ struct HLLC <: AbstractRiemannSolver end
               (sL.rho * sL.u * (S_L - sL.u) - sR.rho * sR.u * (S_R - sR.u))) / (dmL - dmR)
 
     # --- low-dissipation pressure, Minoshima & Miyoshi (2021) eq. 23 ---------
-    vmagL = sqrt(sL.u * sL.u + sL.v * sL.v + sL.w * sL.w)
-    vmagR = sqrt(sR.u * sR.u + sR.v * sR.v + sR.w * sR.w)
+    vmagL = _sqrt(sL.u * sL.u + sL.v * sL.v + sL.w * sL.w)
+    vmagR = _sqrt(sR.u * sR.u + sR.v * sR.v + sR.w * sR.w)
     chi = min(one(T), max(vmagL, vmagR) / cs_max)
     phi = chi * (2 - chi)
     # The linearised star pressure can go negative when two strong rarefactions

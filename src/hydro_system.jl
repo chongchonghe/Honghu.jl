@@ -275,7 +275,9 @@ function hydro_fluxes!(flux::A, qL::A, qR::A, prim::A, eos::AbstractEOS,
     act2 = g.active[_tdir2(Val(D))]
     gam = T(adiabatic_index(eos))
     launch!(CPUThreads(), face_ranges(g, Val(D)), _hydro_flux_cell!, flux, qL, qR, prim,
-            eos, solver, Val(D), gam, act1, act2, Int(nscalars))
+            eos, solver, Val(D), gam, act1, act2)
+    nscalars > 0 && launch!(CPUThreads(), face_ranges(g, Val(D)), _scalar_flux_cell!, flux,
+                            qL, qR, prim, Val(D), Int(nscalars))
     return nothing
 end
 
@@ -285,7 +287,7 @@ end
 # carbuncle inputs read cell-centred neighbours.
 @inline function _hydro_flux_cell!(i, j, k, flux, qL, qR, prim, eos::AbstractEOS,
                                    solver::AbstractRiemannSolver, ::Val{D}, gam::T,
-                                   act1::Bool, act2::Bool, nscalars::Int) where {D,T}
+                                   act1::Bool, act2::Bool) where {D,T}
     e1, e2, e3 = _shift(Val(D))
     s1 = _tshift1(Val(D))
     s2 = _tshift2(Val(D))
@@ -295,35 +297,22 @@ end
     @inbounds begin
         im, jm, km = i - e1, j - e2, k - e3   # cell on the low side of the face
 
-        rhoL = qL[IRHO, i, j, k]
-        pL = qL[IPRE, i, j, k]
-        uL = qL[iu, i, j, k]
-        vL = qL[iv, i, j, k]
-        wL = qL[iw, i, j, k]
-        fallbackL = false
-        if !(rhoL > 0) || !(pL > 0)
-            fallbackL = true
-            rhoL = prim[IRHO, im, jm, km]
-            pL = prim[IPRE, im, jm, km]
-            uL = prim[iu, im, jm, km]
-            vL = prim[iv, im, jm, km]
-            wL = prim[iw, im, jm, km]
-        end
+        # An inadmissible side falls back to its cell. A select rather than a branch,
+        # both candidates loaded, so that the loop over a row is straight-line code
+        # and vectorises; every index is inside the arrays whichever side is taken.
+        okL = (qL[IRHO, i, j, k] > 0) & (qL[IPRE, i, j, k] > 0)
+        rhoL = ifelse(okL, qL[IRHO, i, j, k], prim[IRHO, im, jm, km])
+        pL = ifelse(okL, qL[IPRE, i, j, k], prim[IPRE, im, jm, km])
+        uL = ifelse(okL, qL[iu, i, j, k], prim[iu, im, jm, km])
+        vL = ifelse(okL, qL[iv, i, j, k], prim[iv, im, jm, km])
+        wL = ifelse(okL, qL[iw, i, j, k], prim[iw, im, jm, km])
 
-        rhoR = qR[IRHO, i, j, k]
-        pR = qR[IPRE, i, j, k]
-        uR = qR[iu, i, j, k]
-        vR = qR[iv, i, j, k]
-        wR = qR[iw, i, j, k]
-        fallbackR = false
-        if !(rhoR > 0) || !(pR > 0)
-            fallbackR = true
-            rhoR = prim[IRHO, i, j, k]
-            pR = prim[IPRE, i, j, k]
-            uR = prim[iu, i, j, k]
-            vR = prim[iv, i, j, k]
-            wR = prim[iw, i, j, k]
-        end
+        okR = (qR[IRHO, i, j, k] > 0) & (qR[IPRE, i, j, k] > 0)
+        rhoR = ifelse(okR, qR[IRHO, i, j, k], prim[IRHO, i, j, k])
+        pR = ifelse(okR, qR[IPRE, i, j, k], prim[IPRE, i, j, k])
+        uR = ifelse(okR, qR[iu, i, j, k], prim[iu, i, j, k])
+        vR = ifelse(okR, qR[iv, i, j, k], prim[iv, i, j, k])
+        wR = ifelse(okR, qR[iw, i, j, k], prim[iw, i, j, k])
 
         csL = soundspeed(eos, rhoL, pL)
         csR = soundspeed(eos, rhoR, pR)
@@ -344,13 +333,30 @@ end
         flux[iv, i, j, k] = F[3]
         flux[iw, i, j, k] = F[4]
         flux[IEGAS, i, j, k] = F[5]
+    end
+    return nothing
+end
 
-        # passive scalars ride the mass flux, with the upwind mass fraction
+# The fluxes of the passive scalars through the face `(i, j, k)`, a kernel for
+# [`launch!`](@ref): the mass flux, already in `flux`, times the upwind mass fraction,
+# taken from the reconstructed state or, where that side fell back, from the
+# adjoining cell, exactly as the flux kernel chose. Separate from the flux kernel so
+# that the latter has no inner loop and vectorises over the row.
+@inline function _scalar_flux_cell!(i, j, k, flux, qL, qR, prim, ::Val{D},
+                                    nscalars::Int) where {D}
+    e1, e2, e3 = _shift(Val(D))
+    @inbounds begin
+        im, jm, km = i - e1, j - e2, k - e3
+        fallbackL = !(qL[IRHO, i, j, k] > 0) || !(qL[IPRE, i, j, k] > 0)
+        fallbackR = !(qR[IRHO, i, j, k] > 0) || !(qR[IPRE, i, j, k] > 0)
+        rhoL = fallbackL ? prim[IRHO, im, jm, km] : qL[IRHO, i, j, k]
+        rhoR = fallbackR ? prim[IRHO, i, j, k] : qR[IRHO, i, j, k]
+        F1 = flux[IRHO, i, j, k]
         for s in 1:nscalars
             idx = scalar_index(s)
             XL = (fallbackL ? prim[idx, im, jm, km] : qL[idx, i, j, k]) / rhoL
             XR = (fallbackR ? prim[idx, i, j, k] : qR[idx, i, j, k]) / rhoR
-            flux[idx, i, j, k] = F[1] * (F[1] >= zero(T) ? XL : XR)
+            flux[idx, i, j, k] = F1 * (F1 >= zero(F1) ? XL : XR)
         end
     end
     return nothing
@@ -414,7 +420,7 @@ end
 # Past the function barrier `overwrite` is a type, so a kernel never tests it.
 function _flux_divergence!(backend::AbstractBackend, box, dU, flux, ::Val{D}, invdx, nvar,
                            ow::Val, update) where {D}
-    launch!(backend, box, _divergence_cell!, dU, flux, Val(D), invdx, nvar, ow, update)
+    launch!(backend, box, _divergence_cell!, dU, flux, Val(D), invdx, Val(nvar), ow, update)
     return nothing
 end
 
@@ -426,7 +432,7 @@ end
                                    update::Tuple) where {D,OW}
     e1, e2, e3 = _shift(Val(D))
     a, U0, b, U, c = update
-    @inbounds for n in 1:nvar
+    @inbounds for n in 1:_count(nvar)
         d = OW ? -(invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])) :
             dU[n, i, j, k] - invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k])
         U[n, i, j, k] = a * U0[n, i, j, k] + b * U[n, i, j, k] + c * d
@@ -437,7 +443,7 @@ end
 @inline function _divergence_cell!(i, j, k, dU, flux, ::Val{D}, invdx, nvar, ::Val{OW},
                                    ::Nothing) where {D,OW}
     e1, e2, e3 = _shift(Val(D))
-    @inbounds for n in 1:nvar
+    @inbounds for n in 1:_count(nvar)
         if OW
             dU[n, i, j, k] = -(invdx * (flux[n, i+e1, j+e2, k+e3] - flux[n, i, j, k]))
         else

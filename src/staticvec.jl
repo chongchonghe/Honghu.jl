@@ -85,3 +85,11 @@ Euclidean 2-norm.
 function Base.show(io::IO, v::SVec{N,T}) where {N,T}
     print(io, "SVec{", N, ", ", T, "}", v.data)
 end
+
+# The IEEE square root without Julia's domain check, as C's `std::sqrt`: a negative
+# argument gives NaN rather than a branch to `throw(DomainError)`. A cell kernel with
+# such a branch in it is not straight-line code, and LLVM will not vectorise its loop
+# over cells; the branches cost the scalar code too. For the sound and fast speeds
+# and the Riemann solvers, whose arguments are non-negative by construction.
+@inline _sqrt(x::Union{Float32,Float64}) = Core.Intrinsics.sqrt_llvm(x)
+@inline _sqrt(x) = sqrt(x)

@@ -63,22 +63,98 @@ to entries no other cell of the box writes).
 """
 function launch!(::CPUThreads, box::NTuple{3,UnitRange{Int}}, f::F,
                  args::Vararg{Any,N}) where {F,N}
+    isempty(box[1]) && return nothing
+    _launch_threads!(box, f, _static_rows(args)...)
+    return nothing
+end
+
+# Past the function barrier the arrays carry their row count in their type.
+function _launch_threads!(box::NTuple{3,UnitRange{Int}}, f::F, args::Vararg{Any,N}) where {F,N}
     ir = box[1]
-    isempty(ir) && return nothing
+    # `ivdep`: the calls are independent, which is this function's contract, but
+    # LLVM cannot see it through the kernel's array arguments, which may alias, and
+    # without it leaves the loop scalar. With it a straight-line kernel runs over
+    # eight cells at a time (AVX-512). Each lane does the same IEEE arithmetic as
+    # the scalar loop, so the answer is the same to the bit.
     threaded_jk(box[2], box[3]) do j, k
-        for i in ir
+        @simd ivdep for i in ir
             f(i, j, k, args...)
         end
     end
     return nothing
 end
 
+# The arguments go to the kernel as they are: `CPUSerial` runs one small box of a
+# task, many times over, and a dynamic dispatch per launch would allocate per box. Its
+# caller, the tiled sweep, hands it `StaticRows` it built type-stably instead.
 function launch!(::CPUSerial, box::NTuple{3,UnitRange{Int}}, f::F,
                  args::Vararg{Any,N}) where {F,N}
-    for k in box[3], j in box[2], i in box[1]
-        f(i, j, k, args...)
+    for k in box[3], j in box[2]
+        @simd ivdep for i in box[1]        # see `_launch_threads!`
+            f(i, j, k, args...)
+        end
     end
     return nothing
+end
+
+# The number of variables a kernel loops over, given as an `Int` or as `Val(n)`. The
+# launch sites pass `Val(nvar)`: a constant trip count lets LLVM unroll the loop over
+# variables, which leaves the loop over `i` innermost, the one it vectorises.
+@inline _count(n::Integer) = n
+@inline _count(::Val{N}) where {N} = N
+@inline _val(n::Integer) = Val(n)
+@inline _val(v::Val) = v
+
+"""
+    StaticRows{R}(data, dims, offset)
+
+A four-index array `(n, i, j, k)` whose row count `R = dims[1]` is part of its
+type: what [`launch!`](@ref) hands a cell kernel on the CPU in place of an
+`Array{T,4}` or a [`TileArray`](@ref), at the same memory. An `Array`'s stride
+along `i` is `size(A, 1)`, a run-time number, so a vectorised loop over `i` has
+to gather every element it reads from a separate address; with the stride a
+constant, LLVM loads a face array (`R = 1`) contiguously and a state array
+(`R = 5`) with wide loads and shuffles. The kernels index it as they index the
+array, and the addresses are the same, so the answer is the same to the bit.
+"""
+struct StaticRows{R,T,A<:AbstractArray{T}} <: AbstractArray{T,4}
+    data::A
+    dims::NTuple{4,Int}
+    offset::NTuple{3,Int}
+end
+
+Base.size(A::StaticRows) = A.dims
+Base.axes(A::StaticRows) = (Base.OneTo(A.dims[1]), (A.offset[d-1] .+ (1:A.dims[d]) for d in 2:4)...)
+
+@inline function _rows_index(A::StaticRows{R}, n::Int, i::Int, j::Int, k::Int) where {R}
+    d, o = A.dims, A.offset
+    return n + R * ((i - o[1] - 1) + d[2] * ((j - o[2] - 1) + d[3] * (k - o[3] - 1)))
+end
+Base.@propagate_inbounds Base.getindex(A::StaticRows, n::Int, i::Int, j::Int, k::Int) =
+    A.data[_rows_index(A, n, i, j, k)]
+Base.@propagate_inbounds Base.setindex!(A::StaticRows, v, n::Int, i::Int, j::Int, k::Int) =
+    (A.data[_rows_index(A, n, i, j, k)] = v)
+
+# The arguments of a launch with every array of a few rows given its row count as a
+# type, and tuples (a Runge-Kutta `update`) walked into. One dynamic dispatch per
+# launch, which the barrier `_launch_threads!` / `_launch_serial!` absorbs.
+_static_rows(args::Tuple) = map(_static_row, args)
+_static_row(x) = x
+_static_row(t::Tuple) = map(_static_row, t)
+function _static_row(A::Array{T,4}) where {T}
+    R = size(A, 1)
+    1 <= R <= 16 || return A
+    return StaticRows{R,T,Array{T,4}}(A, size(A), (0, 0, 0))
+end
+
+# The same, type-stably, for a caller that knows the row count `R` of every array it
+# passes: each wrapped, anything else passed through. Returning the bare array on a
+# mismatch would make the result a `Union` and allocate, so a mismatch is an error.
+_static_row(x, ::Val) = x
+_static_row(t::Tuple, r::Val) = map(a -> _static_row(a, r), t)
+function _static_row(A::Array{T,4}, ::Val{R}) where {T,R}
+    size(A, 1) == R || throw(DimensionMismatch("expected $R rows, got $(size(A, 1))"))
+    return StaticRows{R,T,Array{T,4}}(A, size(A), (0, 0, 0))
 end
 
 function launch!(b::KABackend, box::NTuple{3,UnitRange{Int}}, f, args...)

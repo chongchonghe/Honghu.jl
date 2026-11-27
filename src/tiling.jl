@@ -105,6 +105,11 @@ Base.@propagate_inbounds Base.getindex(A::TileArray, n::Int, i::Int, j::Int, k::
 Base.@propagate_inbounds Base.setindex!(A::TileArray, v, n::Int, i::Int, j::Int, k::Int) =
     (A.buf[_tile_index(A, n, i, j, k)] = v)
 
+# A tile's scratch as the tiled sweep hands it to its kernels (see `StaticRows`): the
+# row count is the caller's `Val`, so that building it is type-stable.
+_static_tile(buf::Vector{T}, dims, off, ::Val{R}) where {T,R} =
+    StaticRows{R,T,Vector{T}}(buf, dims, off)
+
 """
     has_tiled_method(reconstruction) -> Bool
 
@@ -215,16 +220,17 @@ function _hydro_sweep!(dU, prim, scratch, recon, eos, solver, ::Val{D}, g::Carte
         nch = min(length(tiles.scratch), length(tiles.boxes[D]))
         if nch <= 1
             _sweep_chunk!(dU, prim, tiles, 1, 1, recon, eos, solver, Val(D), g, gam, act1,
-                          act2, invdx, nvar, nscalars, ow, update)
+                          act2, invdx, Val(nvar), nscalars, ow, update)
         else
             # Each task picks its scratch and its boxes from its chunk number `c`, the
             # loop variable, which is a fresh binding per iteration. Destructuring the
             # scratch out here instead would assign the same locals on every iteration
             # and box them, and the tasks would share one scratch.
+            ftz = get_zero_subnormals()
             @sync for c in 1:nch
-                Threads.@spawn _sweep_chunk!(dU, prim, tiles, c, nch, recon, eos, solver,
-                                             Val(D), g, gam, act1, act2, invdx, nvar,
-                                             nscalars, ow, update)
+                Threads.@spawn _with_ftz(_sweep_chunk!, ftz, dU, prim, tiles, c, nch, recon,
+                                         eos, solver, Val(D), g, gam, act1, act2, invdx,
+                                         Val(nvar), nscalars, ow, update)
             end
         end
     else
@@ -236,17 +242,21 @@ function _hydro_sweep!(dU, prim, scratch, recon, eos, solver, ::Val{D}, g::Carte
 end
 
 function _sweep_chunk!(dU, prim, tiles::HydroTiles, c::Int, nch::Int, recon, eos, solver,
-                       ::Val{D}, g, gam, act1, act2, invdx, nvar, nscalars, ow::Val,
-                       update) where {D}
+                       ::Val{D}, g, gam, act1, act2, invdx, nv::Val{NV}, nscalars, ow::Val,
+                       update) where {D,NV}
     qL, qR, fl = tiles.scratch[c]
     boxes = tiles.boxes[D]
     dims = tiles.dims[D]
+    # Every array the kernels see carries its row count in its type (`StaticRows`),
+    # built here from `Val(nvar)` so that it costs no dispatch per box.
+    dUs, prims, updates = _static_row(dU, nv), _static_row(prim, nv), _static_row(update, nv)
     for b in _chunk(length(boxes), nch, c)
         box = boxes[b]
         off = ntuple(d -> d == D ? g.lo[d] - 2 : first(box[d]) - 1, Val(3))
-        _sweep_box!(CPUSerial(), box, TileArray(qL, dims, off), TileArray(qR, dims, off),
-                    TileArray(fl, dims, off), dU, prim, recon, eos, solver, Val(D), g, gam,
-                    act1, act2, invdx, nvar, nscalars, ow, update)
+        _sweep_box!(CPUSerial(), box, _static_tile(qL, dims, off, nv),
+                    _static_tile(qR, dims, off, nv), _static_tile(fl, dims, off, nv), dUs,
+                    prims, recon, eos, solver, Val(D), g, gam, act1, act2, invdx, nv,
+                    nscalars, ow, updates)
     end
     return nothing
 end
@@ -268,14 +278,15 @@ function _sweep_box!(backend::AbstractBackend, box::NTuple{3,UnitRange{Int}}, qL
                      nscalars, ow::Val, update) where {D}
     if has_tiled_method(recon)
         cr = ntuple(d -> d == D ? ((first(box[d]) - 1):(last(box[d]) + 1)) : box[d], Val(3))
-        launch!(backend, cr, _reconstruct_cell!, qL, qR, prim, recon, Val(D), nvar)
+        launch!(backend, cr, _reconstruct_cell!, qL, qR, prim, recon, Val(D), _val(nvar))
     else
         # no cell kernel: the reconstruction's own whole-grid sweep (never tiled)
-        reconstruct!(qL, qR, prim, recon, Val(D), g, nvar)
+        reconstruct!(qL, qR, prim, recon, Val(D), g, _count(nvar))
     end
     fr = ntuple(d -> d == D ? (first(box[d]):(last(box[d]) + 1)) : box[d], Val(3))
     launch!(backend, fr, _hydro_flux_cell!, fl, qL, qR, prim, eos, solver, Val(D), gam, act1,
-            act2, nscalars)
-    launch!(backend, box, _divergence_cell!, dU, fl, Val(D), invdx, nvar, ow, update)
+            act2)
+    nscalars > 0 && launch!(backend, fr, _scalar_flux_cell!, fl, qL, qR, prim, Val(D), nscalars)
+    launch!(backend, box, _divergence_cell!, dU, fl, Val(D), invdx, _val(nvar), ow, update)
     return nothing
 end

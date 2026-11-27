@@ -72,7 +72,7 @@ function reconstruct! end
 
 function reconstruct!(qL::A, qR::A, q::A, m::PCM, ::Val{D}, g::CartesianGrid,
                       nvar::Int) where {T,A<:AbstractArray{T,4},D}
-    launch!(CPUThreads(), cell_ranges(g, Val(D)), _reconstruct_cell!, qL, qR, q, m, Val(D), nvar)
+    launch!(CPUThreads(), cell_ranges(g, Val(D)), _reconstruct_cell!, qL, qR, q, m, Val(D), Val(nvar))
     return nothing
 end
 
@@ -83,7 +83,7 @@ end
 # ([`TileArray`](@ref)) or device arrays, hence their own types.
 @inline function _reconstruct_cell!(i, j, k, qL, qR, q, ::PCM, ::Val{D}, nvar) where {D}
     d1, d2, d3 = _shift(Val(D))
-    @inbounds for n in 1:nvar
+    @inbounds for n in 1:_count(nvar)
         v = q[n, i, j, k]
         qR[n, i, j, k] = v
         qL[n, i+d1, j+d2, k+d3] = v
@@ -93,14 +93,14 @@ end
 
 function reconstruct!(qL::A, qR::A, q::A, m::PLM, ::Val{D}, g::CartesianGrid,
                       nvar::Int) where {T,A<:AbstractArray{T,4},D}
-    launch!(CPUThreads(), cell_ranges(g, Val(D)), _reconstruct_cell!, qL, qR, q, m, Val(D), nvar)
+    launch!(CPUThreads(), cell_ranges(g, Val(D)), _reconstruct_cell!, qL, qR, q, m, Val(D), Val(nvar))
     return nothing
 end
 
 @inline function _reconstruct_cell!(i, j, k, qL, qR, q, m::PLM, ::Val{D}, nvar) where {D}
     d1, d2, d3 = _shift(Val(D))
     lim = m.limiter
-    @inbounds for n in 1:nvar
+    @inbounds for n in 1:_count(nvar)
         qc = q[n, i, j, k]
         qm = q[n, i-d1, j-d2, k-d3]
         qp = q[n, i+d1, j+d2, k+d3]
@@ -113,13 +113,13 @@ end
 
 function reconstruct!(qL::A, qR::A, q::A, m::PPM, ::Val{D}, g::CartesianGrid,
                       nvar::Int) where {T,A<:AbstractArray{T,4},D}
-    launch!(CPUThreads(), cell_ranges(g, Val(D)), _reconstruct_cell!, qL, qR, q, m, Val(D), nvar)
+    launch!(CPUThreads(), cell_ranges(g, Val(D)), _reconstruct_cell!, qL, qR, q, m, Val(D), Val(nvar))
     return nothing
 end
 
 @inline function _reconstruct_cell!(i, j, k, qL, qR, q, ::PPM, ::Val{D}, nvar) where {D}
     d1, d2, d3 = _shift(Val(D))
-    @inbounds for n in 1:nvar
+    @inbounds for n in 1:_count(nvar)
         qmm = q[n, i-2d1, j-2d2, k-2d3]
         qm = q[n, i-d1, j-d2, k-d3]
         qc = q[n, i, j, k]

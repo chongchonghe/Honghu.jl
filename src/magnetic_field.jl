@@ -95,7 +95,7 @@ The fast magnetosonic speed for propagation along the direction of `bn`, with
     bsq = bn * bn + btsq
     bpg = bsq + gp
     bmg = bsq - gp
-    return sqrt(T(0.5) * (bpg + sqrt(bmg * bmg + 4 * gp * btsq)) / rho)
+    return _sqrt(T(0.5) * (bpg + _sqrt(bmg * bmg + 4 * gp * btsq)) / rho)
 end
 
 # --- boundary conditions -----------------------------------------------------

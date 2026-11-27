@@ -80,7 +80,7 @@ Internal energy *density* from mass density and pressure.
 
 Adiabatic sound speed.
 """
-@inline soundspeed(eos::IdealGas, rho, p) = sqrt(eos.gamma * p / rho)
+@inline soundspeed(eos::IdealGas, rho, p) = _sqrt(eos.gamma * p / rho)
 
 """
     temperature(eos, rho, eint)

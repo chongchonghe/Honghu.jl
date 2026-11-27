@@ -109,7 +109,7 @@ end
 # the adjoining cell, field included.
 @inline function _mhd_flux_cell!(i, j, k, flux, fspd, ustar, qL, qR, bL, bR, prim, bcc, Bn,
                                  eos::AbstractEOS, solver::AbstractMHDRiemannSolver, ::Val{D},
-                                 gam::T, act1::Bool, act2::Bool, nscalars::Int) where {D,T}
+                                 gam::T, act1::Bool, act2::Bool) where {D,T}
     e1, e2, e3 = _shift(Val(D))
     iu = D + 1
     iv = _tdir1(Val(D)) + 1
@@ -120,27 +120,26 @@ end
         im, jm, km = i - e1, j - e2, k - e3
         bx = Bn[1, i, j, k]
 
-        rhoL, pL = qL[IRHO, i, j, k], qL[IPRE, i, j, k]
-        uL, vL, wL = qL[iu, i, j, k], qL[iv, i, j, k], qL[iw, i, j, k]
-        byL, bzL = bL[kv, i, j, k], bL[kw, i, j, k]
-        fallbackL = false
-        if !(rhoL > 0) || !(pL > 0)
-            fallbackL = true
-            rhoL, pL = prim[IRHO, im, jm, km], prim[IPRE, im, jm, km]
-            uL, vL, wL = prim[iu, im, jm, km], prim[iv, im, jm, km], prim[iw, im, jm, km]
-            byL, bzL = bcc[kv, im, jm, km], bcc[kw, im, jm, km]
-        end
+        # The fallback is a select, not a branch: both candidates are loaded, so the
+        # loop over a row is straight-line code that LLVM can vectorise. Every index
+        # read is inside the arrays whichever side is taken.
+        okL = (qL[IRHO, i, j, k] > 0) & (qL[IPRE, i, j, k] > 0)
+        rhoL = ifelse(okL, qL[IRHO, i, j, k], prim[IRHO, im, jm, km])
+        pL = ifelse(okL, qL[IPRE, i, j, k], prim[IPRE, im, jm, km])
+        uL = ifelse(okL, qL[iu, i, j, k], prim[iu, im, jm, km])
+        vL = ifelse(okL, qL[iv, i, j, k], prim[iv, im, jm, km])
+        wL = ifelse(okL, qL[iw, i, j, k], prim[iw, im, jm, km])
+        byL = ifelse(okL, bL[kv, i, j, k], bcc[kv, im, jm, km])
+        bzL = ifelse(okL, bL[kw, i, j, k], bcc[kw, im, jm, km])
 
-        rhoR, pR = qR[IRHO, i, j, k], qR[IPRE, i, j, k]
-        uR, vR, wR = qR[iu, i, j, k], qR[iv, i, j, k], qR[iw, i, j, k]
-        byR, bzR = bR[kv, i, j, k], bR[kw, i, j, k]
-        fallbackR = false
-        if !(rhoR > 0) || !(pR > 0)
-            fallbackR = true
-            rhoR, pR = prim[IRHO, i, j, k], prim[IPRE, i, j, k]
-            uR, vR, wR = prim[iu, i, j, k], prim[iv, i, j, k], prim[iw, i, j, k]
-            byR, bzR = bcc[kv, i, j, k], bcc[kw, i, j, k]
-        end
+        okR = (qR[IRHO, i, j, k] > 0) & (qR[IPRE, i, j, k] > 0)
+        rhoR = ifelse(okR, qR[IRHO, i, j, k], prim[IRHO, i, j, k])
+        pR = ifelse(okR, qR[IPRE, i, j, k], prim[IPRE, i, j, k])
+        uR = ifelse(okR, qR[iu, i, j, k], prim[iu, i, j, k])
+        vR = ifelse(okR, qR[iv, i, j, k], prim[iv, i, j, k])
+        wR = ifelse(okR, qR[iw, i, j, k], prim[iw, i, j, k])
+        byR = ifelse(okR, bR[kv, i, j, k], bcc[kv, i, j, k])
+        bzR = ifelse(okR, bR[kw, i, j, k], bcc[kw, i, j, k])
 
         csL = soundspeed(eos, rhoL, pL)
         csR = soundspeed(eos, rhoR, pR)
@@ -161,18 +160,13 @@ end
         flux[iv, i, j, k] = F[3]
         flux[iw, i, j, k] = F[4]
         flux[IEGAS, i, j, k] = F[5]
-        for s in 1:nscalars
-            idx = scalar_index(s)
-            XL = (fallbackL ? prim[idx, im, jm, km] : qL[idx, i, j, k]) / rhoL
-            XR = (fallbackR ? prim[idx, i, j, k] : qR[idx, i, j, k]) / rhoR
-            flux[idx, i, j, k] = F[1] * (F[1] >= zero(T) ? XL : XR)
-        end
 
         # the bounding speeds, and the Q26 face velocity from them (Quokka
         # hydro_system.hpp, the face velocity of the MHD branch; paper eq. for u*)
         fspd[1, i, j, k] = am
         fspd[2, i, j, k] = ap
-        ustar[1, i, j, k] = ap + am > zero(T) ? (ap * uL + am * uR) / (ap + am) : (uL + uR) / 2
+        ustar[1, i, j, k] = ifelse(ap + am > zero(T), (ap * uL + am * uR) / (ap + am),
+                                   (uL + uR) / 2)
     end
     return nothing
 end
@@ -191,13 +185,17 @@ function _mhd_sweep!(dU, sim, ::Val{D}, ow::Val, update) where {D}
     cells = ntuple(d -> d == D ? ((g.lo[d] - 1):(g.hi[d] + 1)) : across[d], Val(3))
     faces = ntuple(d -> d == D ? (g.lo[d]:(g.hi[d] + 1)) : across[d], Val(3))
     be = CPUThreads()
-    launch!(be, cells, _reconstruct_cell!, hw.qL, hw.qR, hw.prim, recon, Val(D), nvar)
-    launch!(be, cells, _reconstruct_cell!, mw.bL, mw.bR, mw.bcc, recon, Val(D), 3)
+    launch!(be, cells, _reconstruct_cell!, hw.qL, hw.qR, hw.prim, recon, Val(D), Val(nvar))
+    launch!(be, cells, _reconstruct_cell!, mw.bL, mw.bR, mw.bcc, recon, Val(D), Val(3))
     launch!(be, faces, _mhd_flux_cell!, hw.flux, mw.fspd[D], mw.ustar[D], hw.qL, hw.qR, mw.bL,
             mw.bR, hw.prim, mw.bcc, sim.B.b[D], sim.eos, sim.riemann, Val(D),
-            T(adiabatic_index(sim.eos)), g.active[_tdir1(Val(D))], g.active[_tdir2(Val(D))],
-            sim.nscalars)
-    launch!(be, interior_box(g), _divergence_cell!, dU, hw.flux, Val(D), one(T) / g.dx[D], nvar,
+            T(adiabatic_index(sim.eos)), g.active[_tdir1(Val(D))], g.active[_tdir2(Val(D))])
+    # The passive scalars in a kernel of their own: an inner loop over them would
+    # keep LLVM from vectorising the Riemann solver's loop over the row.
+    sim.nscalars > 0 &&
+        launch!(be, faces, _scalar_flux_cell!, hw.flux, hw.qL, hw.qR, hw.prim, Val(D),
+                sim.nscalars)
+    launch!(be, interior_box(g), _divergence_cell!, dU, hw.flux, Val(D), one(T) / g.dx[D], Val(nvar),
             ow, update)
     return nothing
 end

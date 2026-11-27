@@ -55,8 +55,12 @@ struct HLLD <: AbstractMHDRiemannSolver end
     mx_L, mx_R = sL.u * rho_L, sR.u * rho_R
     my_L, my_R = sL.v * rho_L, sR.v * rho_R
     mz_L, mz_R = sL.w * rho_L, sR.w * rho_R
-    E_L = ke_L + pb_L + sL.P / (gamma - 1)
-    E_R = ke_R + pb_R + sR.P / (gamma - 1)
+    # Reciprocals formed once and multiplied by, as Athena++'s hlld.cpp does: a
+    # division costs several multiplications of throughput, and this solver is
+    # bound by its divider, not its arithmetic.
+    igm1 = one(T) / (gamma - 1)
+    E_L = ke_L + pb_L + sL.P * igm1
+    E_R = ke_R + pb_R + sR.P * igm1
 
     #--- Step 2. L & R wave speeds, MK5 eq. 67
     spd_fms_L = fast_magnetosonic_speed(gamma, sL.rho, sL.P, bx, sL.by, sL.bz)
@@ -92,7 +96,8 @@ struct HLLD <: AbstractMHDRiemannSolver end
 
     # S_M, MK5 eq. 38, with the full total-pressure jump
     sm_denom = siui_R * rho_R - siui_L * rho_L
-    S2 = (siui_R * mx_R - siui_L * mx_L + (ptot_L - ptot_R)) / sm_denom
+    sm_denom_inv = one(T) / sm_denom
+    S2 = (siui_R * mx_R - siui_L * mx_L + (ptot_L - ptot_R)) * sm_denom_inv
     sism_L = S0 - S2                       # S_i - S_M
     sism_R = S4 - S2
     sism_inv_L = one(T) / sism_L
@@ -102,26 +107,28 @@ struct HLLD <: AbstractMHDRiemannSolver end
 
     rhos_inv_L = one(T) / rhos_L
     rhos_inv_R = one(T) / rhos_R
-    rho_sqrt_L = sqrt(rhos_L)
-    rho_sqrt_R = sqrt(rhos_R)
-    S1 = S2 - abs(bx) / rho_sqrt_L         # MK5 eq. 51
-    S3 = S2 + abs(bx) / rho_sqrt_R
+    rho_sqrt_L = _sqrt(rhos_L)
+    rho_sqrt_R = _sqrt(rhos_R)
+    S1 = S2 - abs(bx) * (rho_sqrt_L * rhos_inv_L)  # MK5 eq. 51; 1/sqrt(r) = sqrt(r)/r
+    S3 = S2 + abs(bx) * (rho_sqrt_R * rhos_inv_R)
 
     #--- Step 5. intermediate states
     # total pressure with the MM21 low-Mach correction (eqs. 8, 14-16)
-    spd_ca_sq_L = b_magn_sq_L / sL.rho
-    spd_ca_sq_R = b_magn_sq_R / sR.rho
-    spd_cax_sq_L = bx_sq / sL.rho
-    spd_cax_sq_R = bx_sq / sR.rho
+    rho_inv_L = one(T) / rho_L
+    rho_inv_R = one(T) / rho_R
+    spd_ca_sq_L = b_magn_sq_L * rho_inv_L
+    spd_ca_sq_R = b_magn_sq_R * rho_inv_R
+    spd_cax_sq_L = bx_sq * rho_inv_L
+    spd_cax_sq_R = bx_sq * rho_inv_R
     cu_arg_L = max(z, (spd_ca_sq_L + vel_magn_sq_L)^2 - 4 * vel_magn_sq_L * spd_cax_sq_L)
     cu_arg_R = max(z, (spd_ca_sq_R + vel_magn_sq_R)^2 - 4 * vel_magn_sq_R * spd_cax_sq_R)
-    spd_cu_sq_L = half * ((spd_ca_sq_L + vel_magn_sq_L) + sqrt(cu_arg_L))
-    spd_cu_sq_R = half * ((spd_ca_sq_R + vel_magn_sq_R) + sqrt(cu_arg_R))
-    spd_cu_max = max(sqrt(max(z, spd_cu_sq_L)), sqrt(max(z, spd_cu_sq_R)))
+    spd_cu_sq_L = half * ((spd_ca_sq_L + vel_magn_sq_L) + _sqrt(cu_arg_L))
+    spd_cu_sq_R = half * ((spd_ca_sq_R + vel_magn_sq_R) + _sqrt(cu_arg_R))
+    spd_cu_max = _sqrt(max(z, spd_cu_sq_L, spd_cu_sq_R))  # sqrt is monotonic
     chi = min(one(T), spd_cu_max / max(T(1e-14), spd_fms_max))
     phi = chi * (2 - chi)
     ptot_star = ((siui_R * rho_R) * ptot_L - (siui_L * rho_L) * ptot_R +
-                 phi * (rho_L * rho_R) * (siui_R * siui_L) * (sR.u - sL.u)) / sm_denom
+                 phi * (rho_L * rho_R) * (siui_R * siui_L) * (sR.u - sL.u)) * sm_denom_inv
 
     # the star states, MK5 eqs. 39, 44-48
     mxs_L, mys_L, mzs_L, bys_L, bzs_L, Es_L, vbs_L =
@@ -147,8 +154,8 @@ struct HLLD <: AbstractMHDRiemannSolver end
                            bx_sign * rho_sqrt_L * rho_sqrt_R *
                            ((mzs_R * rhos_inv_R) - (mzs_L * rhos_inv_L)))
     # the shared v . b, averaged over its L and R evaluations for symmetry
-    vb_ss = S2 * bx + half * ((myss_L * by_ss + mzss_L * bz_ss) / rhos_L +
-                              (myss_R * by_ss + mzss_R * bz_ss) / rhos_R)
+    vb_ss = S2 * bx + half * ((myss_L * by_ss + mzss_L * bz_ss) * rhos_inv_L +
+                              (myss_R * by_ss + mzss_R * bz_ss) * rhos_inv_R)
     Ess_L = Es_L - rho_sqrt_L * bx_sign * (vbs_L - vb_ss)
     Ess_R = Es_R + rho_sqrt_R * bx_sign * (vbs_R - vb_ss)
 
@@ -181,7 +188,7 @@ struct HLLD <: AbstractMHDRiemannSolver end
 
     # inside the fan, blend the whole flux toward HLL with the MM21 weight
     if theta < one(T) && S0 < z && S4 > z
-        F_HLL = (S4 * F_L - S0 * F_R + S0 * S4 * (U_R - U_L)) / (S4 - S0)
+        F_HLL = (S4 * F_L - S0 * F_R + S0 * S4 * (U_R - U_L)) * (one(T) / (S4 - S0))
         F = theta * F + (one(T) - theta) * F_HLL
     end
 
@@ -202,10 +209,11 @@ end
         bys = by
         bzs = bz
     else
-        tmp = bx * (siui - sism) / den                 # MK5 eqs. 44, 46
+        den_inv = one(T) / den
+        tmp = bx * (siui - sism) * den_inv             # MK5 eqs. 44, 46
         mys = rhos * (v - by * tmp)
         mzs = rhos * (w - bz * tmp)
-        tmp = (rho * (siui * siui) - bx_sq) / den      # MK5 eqs. 45, 47
+        tmp = (rho * (siui * siui) - bx_sq) * den_inv  # MK5 eqs. 45, 47
         bys = by * tmp
         bzs = bz * tmp
     end

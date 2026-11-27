@@ -180,8 +180,9 @@ Call `f(j, k)` for every pair in `jrange × krange`, spreading the work over
             f(j0 + t % nj, k0 + t ÷ nj)
         end
     else
+        ftz = get_zero_subnormals()
         Threads.@threads for t in 0:(ntot-1)
-            f(j0 + t % nj, k0 + t ÷ nj)
+            _with_ftz(f, ftz, j0 + t % nj, k0 + t ÷ nj)
         end
     end
     return nothing
@@ -225,11 +226,27 @@ function threaded_chunks(f::F, ntot::Integer; minchunk::Integer=1) where {F}
         ntot > 0 && f(1:ntot)
         return nothing
     end
+    ftz = get_zero_subnormals()
     @sync for c in 1:nch
         r = _chunk(ntot, nch, c)
-        Threads.@spawn f(r)
+        Threads.@spawn _with_ftz(f, ftz, r)
     end
     return nothing
+end
+
+# `f(args...)` with subnormals flushed to zero as `ftz` says, and the thread's own mode
+# restored after. A spawned task runs on whichever thread the scheduler gives it, and
+# the mode is per thread, so each task copies the mode of the code that spawned it
+# (`Simulation(flush_subnormals)`, set by `step!`). Two `ldmxcsr` per row or chunk.
+@inline function _with_ftz(f::F, ftz::Bool, args::Vararg{Any,N}) where {F,N}
+    old = get_zero_subnormals()
+    old == ftz && return f(args...)
+    set_zero_subnormals(ftz)
+    try
+        return f(args...)
+    finally
+        set_zero_subnormals(old)
+    end
 end
 
 # The `c`-th of `nch` near-equal contiguous ranges partitioning `1:ntot`.

@@ -52,7 +52,7 @@ Eddington factor for the reduced flux `f = |F| / (c E)`.
 """
 @inline function eddington_factor(::LevermoreClosure, f_in::T) where {T<:AbstractFloat}
     f = clamp(f_in, zero(T), one(T))
-    ffac = sqrt(4 - 3 * f * f)
+    ffac = _sqrt(4 - 3 * f * f)
     (3 + 4 * f * f) / (5 + 2 * ffac)
 end
 
@@ -78,7 +78,7 @@ end
 Build the Eddington tensor from the reduced flux vector.
 """
 @inline function eddington_tensor(cl::AbstractClosure, fx::T, fy::T, fz::T) where {T<:AbstractFloat}
-    f = sqrt(fx * fx + fy * fy + fz * fz)
+    f = _sqrt(fx * fx + fy * fy + fz * fz)
     s = f > zero(T) ? one(T) / f : zero(T)
     chi = eddington_factor(cl, f)
     EddingtonTensor((1 - chi) / 2, (3 * chi - 1) / 2, SVec(fx * s, fy * s, fz * s))
@@ -105,7 +105,7 @@ flux) from occurring in cells where the Eddington tensor becomes degenerate.
 @inline function m1_flux(er::T, Fx::T, Fy::T, Fz::T, tedd::EddingtonTensor{T}, D::Int) where {T}
     Fn = D == 1 ? Fx : D == 2 ? Fy : Fz
     F = SVec(Fn, tedd[D, 1] * er, tedd[D, 2] * er, tedd[D, 3] * er)
-    S = max(T(0.1), sqrt(tedd[D, D]))
+    S = max(T(0.1), _sqrt(tedd[D, D]))
     return F, S
 end
 

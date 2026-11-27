@@ -399,62 +399,57 @@ function rad_fluxes!(flux::A, qL::A, qR::A, R::A, chat::Union{A,Nothing},
                      phys::RadiationPhysics{NG,MM,T},
                      ::Val{D}, g::CartesianGrid{T},
                      chiF::Union{A,Nothing}=nothing) where {NG,MM,T,A<:AbstractArray{T,4},D}
+    launch!(CPUThreads(), face_ranges(g, Val(D)), _rad_flux_cell!, flux, qL, qR, R, chat,
+            phys.c, phys.closure, g.dx[D], chiF, Val(D), Val(NG))
+    return nothing
+end
+
+# The body of `rad_fluxes!` for the face `(i, j, k)`, a kernel for `launch!`. Groups
+# are transported independently -- the M1 system couples them only through the
+# implicit source term -- so this is the single-group flux run NG times at an offset,
+# and `hll_radiation` never learns about groups. The fallback is a select of two
+# loaded states, not a branch, so that the loop over a row vectorises.
+@inline function _rad_flux_cell!(i, j, k, flux, qL, qR, R, chat, c::T, cl, dl::T, chiF,
+                                 ::Val{D}, ::Val{NG}) where {T,D,NG}
     e1, e2, e3 = _shift(Val(D))
-    c = phys.c
-    cl = phys.closure
-    dl = g.dx[D]
-    ir, jr, kr = face_ranges(g, Val(D))
-    threaded_jk(jr, kr) do j, k
-        # Groups are transported independently -- the M1 system couples them only
-        # through the implicit source term -- so this is the single-group sweep
-        # run NG times at an offset, and `hll_radiation` never learns about groups.
-        @inbounds for i in ir, gr in 1:NG
-            im, jm, km = i - e1, j - e2, k - e3
-            b = gbase(gr)
+    im, jm, km = i - e1, j - e2, k - e3
+    @inbounds for gr in 1:NG
+        b = gbase(gr)
 
-            erL = qL[b+IERAD, i, j, k]
-            fxL = qL[b+IFRX, i, j, k]
-            fyL = qL[b+IFRY, i, j, k]
-            fzL = qL[b+IFRZ, i, j, k]
-            erR = qR[b+IERAD, i, j, k]
-            fxR = qR[b+IFRX, i, j, k]
-            fyR = qR[b+IFRY, i, j, k]
-            fzR = qR[b+IFRZ, i, j, k]
+        erL = qL[b+IERAD, i, j, k]
+        fxL = qL[b+IFRX, i, j, k]
+        fyL = qL[b+IFRY, i, j, k]
+        fzL = qL[b+IFRZ, i, j, k]
+        erR = qR[b+IERAD, i, j, k]
+        fxR = qR[b+IFRX, i, j, k]
+        fyR = qR[b+IFRY, i, j, k]
+        fzR = qR[b+IFRZ, i, j, k]
 
-            fL = sqrt(fxL * fxL + fyL * fyL + fzL * fzL)
-            fR = sqrt(fxR * fxR + fyR * fyR + fzR * fzR)
+        fL = _sqrt(fxL * fxL + fyL * fyL + fzL * fzL)
+        fR = _sqrt(fxR * fxR + fyR * fyR + fzR * fzR)
 
-            ceL = c * erL
-            ceR = c * erR
-            FxL = fxL * ceL
-            FyL = fyL * ceL
-            FzL = fzL * ceL
-            FxR = fxR * ceR
-            FyR = fyR * ceR
-            FzR = fzR * ceR
+        ceL = c * erL
+        ceR = c * erR
+        ok = (erL > 0) & (erR > 0) & (fL < 1) & (fR < 1)
+        FxL = ifelse(ok, fxL * ceL, R[b+IFRX, im, jm, km])
+        FyL = ifelse(ok, fyL * ceL, R[b+IFRY, im, jm, km])
+        FzL = ifelse(ok, fzL * ceL, R[b+IFRZ, im, jm, km])
+        FxR = ifelse(ok, fxR * ceR, R[b+IFRX, i, j, k])
+        FyR = ifelse(ok, fyR * ceR, R[b+IFRY, i, j, k])
+        FzR = ifelse(ok, fzR * ceR, R[b+IFRZ, i, j, k])
+        erL = ifelse(ok, erL, R[b+IERAD, im, jm, km])
+        erR = ifelse(ok, erR, R[b+IERAD, i, j, k])
 
-            if !(erL > 0) || !(erR > 0) || !(fL < 1) || !(fR < 1)
-                erL = R[b+IERAD, im, jm, km]
-                FxL = R[b+IFRX, im, jm, km]
-                FyL = R[b+IFRY, im, jm, km]
-                FzL = R[b+IFRZ, im, jm, km]
-                erR = R[b+IERAD, i, j, k]
-                FxR = R[b+IFRX, i, j, k]
-                FyR = R[b+IFRY, i, j, k]
-                FzR = R[b+IFRZ, i, j, k]
-            end
+        chatf = _face_chat(chat, c, gr, im, jm, km, i, j, k)
 
-            chatf = _face_chat(chat, c, gr, im, jm, km, i, j, k)
+        eps = _face_epsilon(chiF, dl, gr, im, jm, km, i, j, k)
+        F = hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chatf, Val(D), cl,
+                          eps)
 
-            eps = _face_epsilon(chiF, dl, gr, im, jm, km, i, j, k)
-            F = hll_radiation(erL, FxL, FyL, FzL, erR, FxR, FyR, FzR, c, chatf, Val(D), cl,
-                              eps)
-
-            flux[b+IERAD, i, j, k] = F[1]
-            flux[b+IFRX, i, j, k] = F[2]
-            flux[b+IFRY, i, j, k] = F[3]
-            flux[b+IFRZ, i, j, k] = F[4]
-        end
+        flux[b+IERAD, i, j, k] = F[1]
+        flux[b+IFRX, i, j, k] = F[2]
+        flux[b+IFRY, i, j, k] = F[3]
+        flux[b+IFRZ, i, j, k] = F[4]
     end
     return nothing
 end
