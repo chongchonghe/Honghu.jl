@@ -120,15 +120,15 @@ end
 
 Threads.nthreads() == 1 ||
     @warn "run on one thread (-t 1): the per-CPU numbers assume it"
-@printf("Honghu %s, Julia %s, %d thread(s), %d^3 cells, %d steps\n",
-        pkgversion(Honghu), VERSION, Threads.nthreads(), N, NSTEPS)
+@printf("Honghu %s, Julia %s, %d thread(s), %d^3 cells\n",
+        pkgversion(Honghu), VERSION, Threads.nthreads(), N)
 
 cols = (:hydro, :rhd, :mhd)
 res = Dict(p => measure(p) for p in cols)
 for p in cols
     sim = res[p][3]
-    @printf("%-5s %.3f s/step, %d radiation substeps in %d steps\n", p, res[p][1],
-            sim.diag.rad_substeps, sim.diag.steps)
+    @printf("%-5s %.3f s/step averaged over %d steps, %g radiation substeps per step\n", p,
+            res[p][1], NSTEPS, sim.diag.rad_substeps / sim.diag.steps)
 end
 
 cells = N^3
