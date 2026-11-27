@@ -15,7 +15,7 @@ Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a 
 ## Why Honghu
 
 - **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) ([Zingale 2014](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract); [Harpole et al. 2019](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract)) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, ideal MHD with constrained transport, and radiation with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
-- **Fast on a laptop.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 3.9 million cell updates per second with hydrodynamics, 2.1 million with radiation and 1.4 million with MHD. On four cores hydrodynamics reaches 12.7 million, about one-eighth of the throughput of Quokka on a single NVIDIA V100 GPU. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance).
+- **Fast on a laptop.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 8.1 million cell updates per second with hydrodynamics, 3.4 million with radiation and 3.1 million with MHD. On four cores hydrodynamics reaches 25 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance).
 - **The algorithms of a production code.** HLLC with Batten wave speeds, Rider's correction and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; HLLD and constrained transport for MHD; the M1 system with an HLL solver; and the IMEX PD-ARS scheme for stiff matter-radiation coupling. These are Quokka's methods, and every kernel is written so that it transliterates to Quokka's C++ and back. What you learn here is what production codes do.
 - **Where new methods are born.** Honghu is the reference implementation of the adaptive reduced speed of light approximation (He, Krumholz & Wibking, in preparation), with a stability bound that is exact for the scheme. Its matter-radiation coupling reduces each cell's implicit step to one equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where the Newton formulation Quokka uses fails on 75. Dust-gas thermal coupling is one equation too. Ideas proven here go into Quokka, and a fix found here went into SciML's BracketingNonlinearSolve.
 - **Verified, not only tested.** Over 1400 tests: exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks down to the Zel'dovich spike, measured convergence orders, and invariants that must hold exactly — conservation, direction isotropy, positivity. Every figure on this page is redrawn by the scripts in `docs/`. See [Verification](#verification).
@@ -60,7 +60,7 @@ Space and time are separated by the **method of lines**: a spatial operator $L(U
 | Hydro Riemann solver | `HLLC` (default) with Batten wave speeds, Rider's nonlinear correction, and the [Minoshima & Miyoshi (2021)](https://scixplorer.org/abs/2021JCoPh.44610639M/abstract) carbuncle cure and low-dissipation pressure; or `LLF` |
 | MHD | `HLLD` (default; [Miyoshi & Kusano 2005](https://scixplorer.org/abs/2005JCoPh.208..315M/abstract) with the [Minoshima & Miyoshi 2021](https://scixplorer.org/abs/2021JCoPh.44610639M/abstract) corrections), `LLFMHD` or `HLLMHD`; constrained transport with the Q26 EMF and LD04 averaging |
 | Radiation Riemann solver | `HLL` on the M1 system with frozen-Eddington-tensor wave speeds ([Skinner & Ostriker 2013](https://scixplorer.org/abs/2013ApJS..206...21S/abstract); [Balsara 1999](https://scixplorer.org/abs/1999JQSRT..61..617B/abstract)) |
-| Hydro time integration | SSP Runge-Kutta, first to third order (`ForwardEuler`, `SSPRK2`, `SSPRK3`) |
+| Hydro time integration | SSP Runge-Kutta, first to third order (`ForwardEuler`, `SSPRK2` (default), `SSPRK3`) |
 | Radiation time integration | **IMEX PD-ARS**: transport explicit, stiff matter coupling implicit; second order and asymptotic-preserving |
 | Matter-radiation coupling, grey | 2×2 Newton-Raphson per cell in $(E_\mathrm{int}, R)$, with an analytic flux/momentum update and a lagged outer iteration for the $\mathbf{v}\cdot\mathbf{F}$ work term |
 | Matter-radiation coupling, $N_g$ groups | a $(1+N_g)$-dimensional implicit solve per cell, by one of three interchangeable [coupling solvers](#matter-radiation-coupling-solvers) |
@@ -305,24 +305,24 @@ The test suite (`julia --project=. -t 4 test/runtests.jl`, 1217 tests, ~70 s) ch
 
 ## Performance
 
-The cost of one step, per cell and per CPU core, for the same 3D blast wave at $128^3$ in three forms: the Sedov blast of `Honghu.Problems.sedov_blast`; the same blast with grey M1 radiation coupled to the gas ($\kappa = 100$, about one optical depth per cell, one radiation substep per step); and the same blast in a uniform magnetic field ($\beta = 1$ in the ambient gas). All three use PPM and SSP-RK3, with HLLC for the hydrodynamics and HLLD with constrained transport for MHD. One thread on a laptop (Apple M5 Max), Julia 1.12, `Float64`, measured 2026-11-27:
+The cost of one step, per cell and per CPU core, for the same 3D blast wave at $128^3$ in three forms: the Sedov blast of `Honghu.Problems.sedov_blast`; the same blast with grey M1 radiation coupled to the gas ($\kappa = 100$, about one optical depth per cell, one radiation substep per step); and the same blast in a uniform magnetic field ($\beta = 1$ in the ambient gas). All three use PLM and SSP-RK2, with HLLC for the hydrodynamics and HLLD with constrained transport for MHD. One thread on a laptop (Apple M5 Max), Julia 1.12, `Float64`, measured 2026-11-27:
 
 | | Hydrodynamics (blast wave) | Radiation hydrodynamics (blast wave + grey M1) | Magnetohydrodynamics (magnetised blast wave) |
 |:---|---:|---:|---:|
-| **Mcell-updates per CPU-second** | **3.92** | **2.14** | **1.39** |
-| **CPU-ns per cell-update** | **255** | **467** | **721** |
-| reconstruction (PPM) | 97 | 100 | 169 |
-| Riemann solver (HLLC, HLLD) | 115 | 117 | 267 |
-| flux divergence and stage update | 16 | 17 | 18 |
-| EMF and induction (constrained transport) | — | — | 195 |
-| radiation transport (HLL) | — | 139 | — |
-| matter-radiation coupling (implicit) | — | 53 | — |
-| conversions and floors | 8 | 14 | 19 |
-| ghost cells | 2 | 2 | 19 |
-| time step | 1 | 1 | 4 |
-| other (copies, combines) | 17 | 25 | 30 |
+| **Mcell-updates per CPU-second** | **8.07** | **3.41** | **3.14** |
+| **CPU-ns per cell-update** | **124** | **294** | **319** |
+| reconstruction (PLM) | 18 | 20 | 35 |
+| Riemann solver (HLLC, HLLD) | 75 | 76 | 169 |
+| flux divergence and stage update | 10 | 10 | 11 |
+| EMF and induction (constrained transport) | — | — | 54 |
+| radiation transport (HLL) | — | 103 | — |
+| matter-radiation coupling (implicit) | — | 54 | — |
+| conversions and floors | 6 | 11 | 13 |
+| ghost cells | 0.5 | 0.7 | 12 |
+| time step | 1 | 1 | 5 |
+| other (copies, combines) | 12 | 19 | 21 |
 
-The rows below the totals are CPU-ns per cell-update and add up to the total: a profile of whole steps assigns each sample to the kernel it was in, and the radiation rows hold everything under the transport operator and the coupling solve, ghost cells and floors included. A radiation run with more substeps per step pays the two radiation rows once per substep. With radiation, reconstruction and the Riemann solver cost what they cost without it, and MHD costs 2.8 times hydrodynamics, mostly in the HLLD solver and the edge-centred EMFs. To measure it on your machine:
+The rows below the totals are CPU-ns per cell-update and add up to the total: a profile of whole steps assigns each sample to the kernel it was in, and the radiation rows hold everything under the transport operator and the coupling solve, ghost cells and floors included. A radiation run with more substeps per step pays the two radiation rows once per substep. With radiation, reconstruction and the Riemann solver cost what they cost without it, and MHD costs 2.6 times hydrodynamics, mostly in the HLLD solver and the edge-centred EMFs. To measure it on your machine:
 
 ```bash
 julia --project=. -t 1 test/benchmarks.jl        # prints this table; an argument sets n
@@ -342,18 +342,18 @@ JULIA_NUM_THREADS=6 julia --project=. script.jl   # the same as -t 6
 
 In the REPL, `Threads.nthreads()` gives the number, and the line `run!` prints at the end says how many threads the run used. A 1D run has a single row, so it runs on one thread whatever `-t` asks for; 2D and 3D runs use all of them. On the Apple M5 Max below, which has 6 performance and 12 efficiency cores, `-t auto` gives 6 threads.
 
-The 3D Sedov blast at $128^3$, `Honghu.Problems.sedov_blast(n = 128)` with its defaults, 20 steps after one warm-up step, Apple M5 Max, Julia 1.12, measured 2026-11-20:
+The 3D Sedov blast at $128^3$, `Honghu.Problems.sedov_blast(n = 128, reconstruction = PLM())` with SSP-RK2, the default, 20 steps after one warm-up step, Apple M5 Max, Julia 1.12, measured 2026-11-27:
 
 | Threads | 20 steps | per step | throughput |
 |:---|---:|---:|---:|
-| 1 | 10.7 s | 0.534 s | 3.93 Mcell-updates/s |
-| 4 | 3.30 s | 0.165 s | 12.7 Mcell-updates/s |
+| 1 | 5.28 s | 0.264 s | 7.94 Mcell-updates/s |
+| 4 | 1.70 s | 0.085 s | 24.7 Mcell-updates/s |
 
-Four threads are 3.2 times faster than one. To measure it on your machine, save this as `sedov_timing.jl` and run it with `-t 1` and with `-t 4`:
+Four threads are 3.1 times faster than one. To measure it on your machine, save this as `sedov_timing.jl` and run it with `-t 1` and with `-t 4`:
 
 ```julia
 using Honghu
-sim, _ = Honghu.Problems.sedov_blast(n = 128)
+sim, _ = Honghu.Problems.sedov_blast(n = 128, reconstruction = PLM())
 step!(sim)                                         # warm-up: compiles the step
 t = @elapsed for _ in 1:20; step!(sim); end
 println(Threads.nthreads(), " threads: ", t / 20, " s per step")
@@ -366,7 +366,7 @@ julia --project=. -t 4 sedov_timing.jl
 
 #### On a compute node
 
-On a 32-core workstation node (AMD Threadripper PRO 7975WX, one NUMA domain), the same Sedov blast, measured with `test/benchmarks_parallel.jl`:
+On a 32-core workstation node (AMD Threadripper PRO 7975WX, one NUMA domain), the Sedov blast with PPM and SSP-RK3, the defaults before 2026-11-27, measured with `test/benchmarks_parallel.jl`:
 
 | threads | $128^3$ per step | $256^3$ per step |
 |---:|---:|---:|
@@ -577,7 +577,7 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 - Multigroup opacity is piecewise constant across a group. Quokka's other models, which fit a power law across each group and so must keep the Planck, energy and flux means apart, are not implemented; neither is any term that moves energy between groups directly, such as Compton redistribution.
 - Shared-memory threading only, so problem sizes are bounded by one node's memory.
 - A reduced speed of light rescales the radiation diffusion coefficient by $\hat{c}/c$; use $\hat{c}=c$ when the static diffusion limit matters quantitatively.
-- **The hydrodynamics–radiation split is first order in time.** Each subsystem is second or third order on its own — SSP-RK3 for the Euler equations, the second-order IMEX PD-ARS scheme for radiation — but `step!` advances one and then the other, which is Lie splitting and contributes an $O(\Delta t)$ error. This is the same split Quokka uses, and it is invisible whenever the radiation is subcycled hard enough that the splitting error is below the spatial error, which is the usual case. Strang splitting the two subsystems would fix it and is not implemented; *source terms* are already Strang-split (see [`strang_sources`](#source-terms)).
+- **The hydrodynamics–radiation split is first order in time.** Each subsystem is second order on its own — SSP-RK2 for the Euler equations by default (SSP-RK3 is available, but the split takes back its third order), the IMEX PD-ARS scheme for radiation — but `step!` advances one and then the other, which is Lie splitting and contributes an $O(\Delta t)$ error. This is the same split Quokka uses, and it is invisible whenever the radiation is subcycled hard enough that the splitting error is below the spatial error, which is the usual case. Strang splitting the two subsystems would fix it and is not implemented; *source terms* are already Strang-split (see [`strang_sources`](#source-terms)).
 
 ## References
 

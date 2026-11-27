@@ -149,11 +149,12 @@ end
         run!(sim; tmax, verbose=false)
         maximum(gas_temperature(sim)[:, 1, 1])
     end
-    # optically thick and nearly isotropic here, so M1 and P1 agree closely --
-    # but the run must actually differ, or the keyword is doing nothing
+    # optically thick and nearly isotropic here, so M1 and P1 agree closely (to
+    # 0.17% at 128 cells with SSPRK2, 0.007% with SSPRK3) -- but the run must
+    # actually differ, or the keyword is doing nothing
     sM1, sP1 = spike(LevermoreClosure()), spike(EddingtonClosure())
     @test sM1 != sP1
-    @test isapprox(sM1, sP1; rtol=1e-3)
+    @test isapprox(sM1, sP1; rtol=3e-3)
 end
 
 @testset "diagnostics" begin

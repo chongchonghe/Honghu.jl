@@ -76,8 +76,10 @@ end
 end
 
 @testset "convergence order on smooth advection" begin
+    # SSPRK3, so that the order measured is the reconstruction's: the default
+    # SSPRK2 would cap PPM at 2
     function l1(nx, recon)
-        sim, tmax = P.smooth_advection(nx=nx, reconstruction=recon)
+        sim, tmax = P.smooth_advection(nx=nx, reconstruction=recon, integrator=SSPRK3())
         run!(sim; tmax, verbose=false)
         pr = primitives(sim)
         g = sim.grid

@@ -33,6 +33,6 @@ t1 = conserved_totals(sim)
 println("  wrote VTK snapshots to $vtkdir/")
 
 PLOTTING && saveplot(plot(snaps...; layout=(1, 3), size=(1050, 380),
-                          plot_title="Kelvin-Helmholtz, $(n)^2, PPM + SSPRK3",
+                          plot_title="Kelvin-Helmholtz, $(n)^2, PPM + SSPRK2",
                           plot_titlevspan=0.14, bottom_margin=5Plots.mm), "kh.png")
 plotting_note()

@@ -9,7 +9,7 @@
 # default), in three forms: hydrodynamics; with grey M1 radiation coupled, one
 # radiation substep per step; and with a uniform magnetic field (ideal MHD, beta = 1
 # in the ambient gas). The same setup in every column makes the differences the cost
-# of the physics.
+# of the physics. PLM and the default SSPRK2 throughout.
 #
 # The total comes from timing whole steps. The rows below it share that total out by
 # a profile of whole steps: each sample goes to the kernel it was in, so the rows add
@@ -31,7 +31,8 @@ function blast(n; physics::Symbol)
           nothing
     sim = Simulation(; n=(n, n, n), xlo=(-0.5, -0.5, -0.5), xhi=(0.5, 0.5, 0.5),
                      eos=IdealGas(; gamma, cv=1.0), boundaries=Boundaries(Outflow()),
-                     radiation=rad, max_radiation_substeps=1, mhd=physics === :mhd)
+                     radiation=rad, max_radiation_substeps=1, mhd=physics === :mhd,
+                     reconstruction=PLM())
     r0 = 3.5 / n
     pin = (gamma - 1) / (4 / 3 * pi * r0^3)
     pamb = 1e-5
@@ -51,8 +52,8 @@ end
 const SUBTREE = ("radiation_source_step!" => "matter-radiation coupling",
                  "rad_rhs!" => "radiation transport (HLL)")
 const KERNEL = Dict(
-    "_reconstruct_cell!" => "reconstruction (PPM)",
-    "reconstruct!" => "reconstruction (PPM)",
+    "_reconstruct_cell!" => "reconstruction (PLM)",
+    "reconstruct!" => "reconstruction (PLM)",
     "_hydro_flux_cell!" => "Riemann solver",
     "_mhd_flux_cell!" => "Riemann solver",
     "_divergence_cell!" => "flux divergence and stage update",
@@ -69,7 +70,7 @@ const KERNEL = Dict(
     "mhd_ghost_energy!" => "ghost cells",
     "timestep" => "time step",
 )
-const ROWS = ["reconstruction (PPM)", "Riemann solver", "flux divergence and stage update",
+const ROWS = ["reconstruction (PLM)", "Riemann solver", "flux divergence and stage update",
               "EMF and induction", "radiation transport (HLL)", "matter-radiation coupling",
               "conversions and floors", "ghost cells", "time step", "other"]
 

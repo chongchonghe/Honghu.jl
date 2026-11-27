@@ -60,7 +60,9 @@ function figure_convergence(ns=(16, 32, 64, 128, 256))
     for (i, (recon, name, _)) in enumerate(schemes)
         errs = Float64[]
         for nx in ns
-            sim, tmax = P.smooth_advection(; nx, reconstruction=recon)
+            # SSPRK3, so that the slope is the reconstruction's and not the
+            # second order of the default SSPRK2
+            sim, tmax = P.smooth_advection(; nx, reconstruction=recon, integrator=SSPRK3())
             run!(sim; tmax, verbose=false)
             push!(errs, l1(sim))
         end
@@ -177,7 +179,7 @@ function figure_kh(n=256)
                                 ylabel=(t == 0.8 ? "y" : "")))
     end
     save(plot(panels...; layout=(1, 3), size=(1050, 380),
-              plot_title="Kelvin-Helmholtz instability, $(n)^2, PPM + SSPRK3",
+              plot_title="Kelvin-Helmholtz instability, $(n)^2, PPM + SSPRK2",
               plot_titlevspan=0.14, bottom_margin=5Plots.mm), "kh.png")
 end
 

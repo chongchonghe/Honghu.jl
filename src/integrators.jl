@@ -29,7 +29,11 @@ struct ForwardEuler <: AbstractIntegrator end
 """
     SSPRK2()
 
-Two-stage, second-order strong-stability-preserving Runge-Kutta (Heun).
+Two-stage, second-order strong-stability-preserving Runge-Kutta (Heun). The
+default, as in Quokka: the operator split between hydrodynamics and radiation,
+and between the hydrodynamics and the source terms, is first or second order in
+time, so a third-order hydro integrator buys accuracy that the step as a whole
+cannot keep, at 1.5 times the cost.
 """
 struct SSPRK2 <: AbstractIntegrator end
 
@@ -37,8 +41,8 @@ struct SSPRK2 <: AbstractIntegrator end
     SSPRK3()
 
 Three-stage, third-order strong-stability-preserving Runge-Kutta of Shu & Osher
-(1988). The default: it is the natural partner of [`PPM`](@ref) and has the
-largest SSP region of the three.
+(1988). The natural partner of [`PPM`](@ref) for pure hydrodynamics, where no
+operator split limits the order in time.
 """
 struct SSPRK3 <: AbstractIntegrator end
 

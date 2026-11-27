@@ -246,7 +246,7 @@ A three-dimensional (radiation-)hydrodynamics simulation.
     ghost-cell width is taken from whichever needs more.
   - `riemann = HLLC()` : interface flux solver, [`HLLC`](@ref) or [`LLF`](@ref);
     with `mhd = true` an MHD solver, [`HLLD`](@ref) (the default), [`HLLMHD`](@ref) or [`LLFMHD`](@ref).
-  - `integrator = SSPRK3()`  : explicit integrator for the hydro subsystem.
+  - `integrator = SSPRK2()`  : explicit integrator for the hydro subsystem.
   - `boundaries = Boundaries(Outflow())`, `radiation_boundaries = boundaries`.
   - `cfl = 0.4`, `cfl_radiation = 0.3`.
   - `max_radiation_substeps = 10` : if the hydro step would need more radiation
@@ -325,7 +325,7 @@ function Simulation(; n, xlo=(0.0, 0.0, 0.0), xhi=(1.0, 1.0, 1.0),
                     radiation_reconstruction::AbstractReconstruction=reconstruction,
                     mhd::Bool=false,
                     riemann::AbstractRiemannSolver=mhd ? HLLD() : HLLC(),
-                    integrator::AbstractIntegrator=SSPRK3(),
+                    integrator::AbstractIntegrator=SSPRK2(),
                     boundaries::Boundaries=Boundaries(Outflow()),
                     radiation_boundaries::Boundaries=boundaries,
                     cfl=0.4, cfl_radiation=0.3,
