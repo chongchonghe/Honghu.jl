@@ -15,7 +15,7 @@ Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a 
 ## Why Honghu
 
 - **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) ([Zingale 2014](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract); [Harpole et al. 2019](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract)) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, ideal MHD with constrained transport, and radiation with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
-- **Fast on a laptop.** Hydrodynamics runs at 12.6 million cell updates per second at $64^3$ with 8 threads on a laptop (Apple M5 Max), about one-eighth of the throughput of Quokka on a single NVIDIA V100 GPU; radiation hydrodynamics at 6.9 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance).
+- **Fast on a laptop.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 3.9 million cell updates per second with hydrodynamics, 2.1 million with radiation and 1.4 million with MHD. On four cores hydrodynamics reaches 12.7 million, about one-eighth of the throughput of Quokka on a single NVIDIA V100 GPU. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance).
 - **The algorithms of a production code.** HLLC with Batten wave speeds, Rider's correction and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; HLLD and constrained transport for MHD; the M1 system with an HLL solver; and the IMEX PD-ARS scheme for stiff matter-radiation coupling. These are Quokka's methods, and every kernel is written so that it transliterates to Quokka's C++ and back. What you learn here is what production codes do.
 - **Where new methods are born.** Honghu is the reference implementation of the adaptive reduced speed of light approximation (He, Krumholz & Wibking, in preparation), with a stability bound that is exact for the scheme. Its matter-radiation coupling reduces each cell's implicit step to one equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where the Newton formulation Quokka uses fails on 75. Dust-gas thermal coupling is one equation too. Ideas proven here go into Quokka, and a fix found here went into SciML's BracketingNonlinearSolve.
 - **Verified, not only tested.** Over 1400 tests: exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks down to the Zel'dovich spike, measured convergence orders, and invariants that must hold exactly — conservation, direction isotropy, positivity. Every figure on this page is redrawn by the scripts in `docs/`. See [Verification](#verification).
@@ -305,25 +305,30 @@ The test suite (`julia --project=. -t 4 test/runtests.jl`, 1217 tests, ~70 s) ch
 
 ## Performance
 
-`julia --project=. -t 8 test/benchmarks.jl` on a laptop (Apple M5 Max), Julia 1.12, `Float64`, measured 2026-10-21:
+The cost of one step, per cell and per CPU core, for the same 3D blast wave at $128^3$ in three forms: the Sedov blast of `Honghu.Problems.sedov_blast`; the same blast with grey M1 radiation coupled to the gas ($\kappa = 100$, about one optical depth per cell, one radiation substep per step); and the same blast in a uniform magnetic field ($\beta = 1$ in the ambient gas). All three use PPM and SSP-RK3, with HLLC for the hydrodynamics and HLLD with constrained transport for MHD. One thread on a laptop (Apple M5 Max), Julia 1.12, `Float64`, measured 2026-11-27:
 
-| | $32^3$ | $64^3$ |
-|:---|---:|---:|
-| Hydrodynamics | 9.2 Mcell-updates/s | 12.6 Mcell-updates/s |
-| Radiation-hydrodynamics | 5.1 Mcell-updates/s | 6.9 Mcell-updates/s |
+| | Hydrodynamics (blast wave) | Radiation hydrodynamics (blast wave + grey M1) | Magnetohydrodynamics (magnetised blast wave) |
+|:---|---:|---:|---:|
+| **Mcell-updates per CPU-second** | **3.92** | **2.14** | **1.39** |
+| **CPU-ns per cell-update** | **255** | **467** | **721** |
+| reconstruction (PPM) | 97 | 100 | 169 |
+| Riemann solver (HLLC, HLLD) | 115 | 117 | 267 |
+| flux divergence and stage update | 16 | 17 | 18 |
+| EMF and induction (constrained transport) | — | — | 195 |
+| radiation transport (HLL) | — | 139 | — |
+| matter-radiation coupling (implicit) | — | 53 | — |
+| conversions and floors | 8 | 14 | 19 |
+| ghost cells | 2 | 2 | 19 |
+| time step | 1 | 1 | 4 |
+| other (copies, combines) | 17 | 25 | 30 |
 
-Per-kernel breakdown at $64^3$, one sweep or one pass each:
+The rows below the totals are CPU-ns per cell-update and add up to the total: a profile of whole steps assigns each sample to the kernel it was in, and the radiation rows hold everything under the transport operator and the coupling solve, ghost cells and floors included. A radiation run with more substeps per step pays the two radiation rows once per substep. With radiation, reconstruction and the Riemann solver cost what they cost without it, and MHD costs 2.8 times hydrodynamics, mostly in the HLLD solver and the edge-centred EMFs. To measure it on your machine:
 
-| kernel | ns/cell |
-|:---|---:|
-| `cons2prim` | 0.23 |
-| reconstruct, PLM | 1.37 |
-| reconstruct, PPM | 2.69 |
-| HLLC sweep | 2.61 |
-| HLL radiation sweep | 2.48 |
-| implicit matter coupling | 22.6 |
+```bash
+julia --project=. -t 1 test/benchmarks.jl        # prints this table; an argument sets n
+```
 
-The implicit coupling dominates a radiation step, as it should: it is a Newton solve per cell. Allocation per step is flat in the grid size (152 KiB for hydrodynamics, 284 KiB with radiation, all of it threading overhead), and `test/test_performance.jl` asserts that every hot kernel stays below 8 bytes per cell — a regression test for a boxing bug that once cost 12 kB per cell.
+Allocation per step is flat in the grid size (152 KiB for hydrodynamics, 284 KiB with radiation, all of it threading overhead), and `test/test_performance.jl` asserts that every hot kernel stays below 8 bytes per cell — a regression test for a boxing bug that once cost 12 kB per cell.
 
 ### Threads
 

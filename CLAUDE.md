@@ -22,7 +22,7 @@ julia --project=. -t auto examples/orszag_tang.jl [n]  # the Orszag-Tang vortex 
 networks/regenerate.sh --jaff-path ~/softwares/quokka/jaff  # regenerate the chemical networks with JAFF
 julia --project=. -t auto docs/make_animations.jl   # regenerate README GIFs
 julia --project=. docs/make.jl                      # build the docs site into docs/_site (needs quarto)
-julia --project=. -t 8 test/benchmarks.jl           # timing table (BenchmarkTools)
+julia --project=. -t 1 test/benchmarks.jl           # README's per-CPU cost table at 128^3 (n as an argument)
 julia --project=. -t 32 test/benchmarks_parallel.jl [n] [--passes] [--tile=a,b,c|none]  # Sedov thread scaling
 julia --project=test/gpu -t 8 test/gpu/gpu_sweep.jl [n]  # the hydro sweep on a CUDA GPU against the CPU (instantiate test/gpu first)
 julia --project=. -e 'include("src/Honghu.jl")'     # syntax check without precompiling
