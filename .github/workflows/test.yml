@@ -28,8 +28,8 @@ jobs:
       fail-fast: false
       matrix:
         # 1.10 is the lowest version Project.toml allows (the long-term-support
-        # release), 1.12 the one development uses.
-        julia: ['1.10', '1.12']
+        # release), 1.13 the one development uses.
+        julia: ['1.10', '1.13']
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
