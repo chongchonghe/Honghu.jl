@@ -16,7 +16,7 @@ args = if kern == "mhd"
     (H._mhd_flux_cell!, hw.flux, mw.fspd[1], mw.ustar[1], hw.qL, hw.qR, mw.bL, mw.bR, hw.prim, mw.bcc,
      sim.B.b[1], sim.eos, sim.riemann, Val(1), T(5/3), true, true)
 elseif kern == "recon"
-    (H._reconstruct_cell!, hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(1), 5)
+    (H._reconstruct_cell!, hw.qL, hw.qR, hw.prim, sim.reconstruction, Val(1), Val(5))
 elseif kern == "emf"
     (H._emf_cell!, mw.emf[3], sim.B.b[1], sim.B.b[2], mw.ustar[1], mw.ustar[2], mw.fspd[1], mw.fspd[2], sim.reconstruction, sim.B.o[1], sim.B.o[2])
 elseif kern == "bcc"

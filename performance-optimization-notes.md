@@ -260,7 +260,51 @@ as two 256-bit halves (16 flops a cycle) at up to 5.3 GHz. Peak vector throughpu
 is about 100 against 85 GFLOP/s, so for vectorised code the Skylake core is not the weaker
 one. Zen 4's advantage is in scalar code, which is what g++ produced.
 
-Not measured: icpx (oneAPI) is not installed here, and neither is clang.
+### With the Intel compiler
+
+icpx 2026.2 (conda-forge `dpcpp_linux-64`, in a pixi environment under
+`/scratch/magpie/cche/softwares/intel-oneapi`), Athena++'s own `--cxx=icpx` flags
+(`-O3 -ipo -qopenmp-simd`) with `-march=native` for `-xhost`. A `-xhost` binary refuses to
+run on an AMD CPU. Blast, one MeshBlock, no output, 40 cycles, one core, MZone-cycles/s:
+
+| build | 64^3 | 128^3 |
+|:---|---:|---:|
+| g++ 14, best flags above | 2.09 | 1.96 |
+| icpx, `-fp-model=precise` | 2.87 | 2.91 |
+| icpx, default (`-fp-model=fast`) | 4.77 | 5.34 |
+| icpx, default, `-mprefer-vector-width=512` | 3.88 | |
+| **Honghu** (`athena_blast.jl`, 40 steps) | **2.33** | **2.64** |
+
+The icpx and g++ builds take the same steps to round-off (dt after 40 cycles agrees to
+1e-16). icpx vectorises what g++ leaves scalar, and that is worth 1.4x at precise floating
+point. Its default fast floating point (reassociation, approximate reciprocals, vector math
+library) is worth another 1.7-1.8x. 512-bit vectors are slower than icpx's default 256-bit
+on Zen 4. icpx `-fp-model=precise` gives the paper's 2.9 on this core, but the paper's
+compiler would have used its fast default. Honghu does neither reassociation nor
+approximate division, so precise icpx is the like-for-like build. Honghu is at 0.8-0.9x
+of it, and 0.45-0.5x of Athena++ as normally built.
+
+Two cautions on the comparison. VL2's predictor stage is first order (PCM, half step), so
+an Athena++ step costs less than Honghu's two PLM stages of SSPRK2. And Honghu's 3.36 on
+this problem at 128^3 (above) was over the first 20 steps, which are cheaper.
+
+### Honghu slows down as the blast expands
+
+On the 64^3 blast Honghu runs at 2.59 Mcell/s over steps 1-10 and 2.22 over steps 31-40.
+It is not subnormals: `flush_subnormals = false` gives the same. A profile puts all the
+growth in PLM reconstruction, in `limit`/`minmod` (86 to 214 samples), while the Riemann
+solver stays flat. The MC limiter's 3-argument `minmod` returns early, so it is fast
+while most cells are smooth and mispredicts once shocks fill the grid.
+
+A branch-free `minmod` (`ifelse`, `|`) costs the same at every step (2.26-2.28), so it
+only levels the curve: early steps lose what late steps gain. It does not vectorise.
+LLVM's remark for the row loop is "the cost-model indicates that vectorization is not
+beneficial", for every MC formulation tried (no `sign`, compare-and-select `min`, a
+single sign test). Two-argument `MinMod` and `VanLeer` do vectorise. Forcing it with
+`JULIA_LLVM_ARGS=-force-vector-width=8` gave 2.26 against 2.25-2.29, so the cost model is
+right. The change was not kept. Reconstruction fused into the flux kernel (recommendation
+2) is the way to cut this cost, because the interleaved loads and stores of `qL`/`qR`
+are what make the vector loop expensive.
 
 ## Summary, 128^3 Sedov blast, one core
 
