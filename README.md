@@ -12,10 +12,25 @@ Honghu solves the Euler equations, or the equations of ideal MHD, coupled to the
 
 Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, a guide to the physics, numerics and code design of each physics module (so far photochemistry and MHD), and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
+## Speed against Athena++
+
+One core of an AMD Threadripper PRO 7975WX (Zen 4), Athena++'s own MHD blast (`inputs/mhd/athinput.blast`: PLM, HLLD, CFL 0.3, periodic) at $128^3$ as one block, 40 steps, no output:
+
+| Code | Build | Mcell-updates/s |
+|:---|:---|---:|
+| Athena++ | Intel icpx, `-O3 -ipo -qopenmp-simd -march=native -fp-model=precise` | 2.91 |
+| **Honghu** | Julia 1.13 | **2.64** |
+
+Honghu does no reassociation and no approximate division, so Athena++ is built with IEEE-precise floating point too: both codes then do the arithmetic the source says. The schemes are close but not the same: Athena++'s VL2 predictor is a first-order half step, cheaper than the first of Honghu's two PLM stages of SSP-RK2, Honghu's HLLD carries the Minoshima & Miyoshi (2021) low-Mach and carbuncle terms, and its constrained transport is Q26 with LD04 averaging rather than Gardiner & Stone's. The builds and the flags tried are in [`performance-optimization-notes.md`](https://github.com/chongchonghe/Honghu.jl/blob/main/performance-optimization-notes.md). Honghu's side of the table:
+
+```bash
+julia --project=. -t 1 docs/performance-experiments/athena_blast.jl 128 40
+```
+
 ## Why Honghu
 
 - **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) ([Zingale 2014](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract); [Harpole et al. 2019](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract)) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, ideal MHD with constrained transport, and radiation with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
-- **Fast on a laptop.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 8.3 million cell updates per second with hydrodynamics, 3.3 million with radiation and 3.4 million with MHD. On four cores hydrodynamics reaches 23 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance).
+- **Fast, on a laptop and against Athena++.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 8.3 million cell updates per second with hydrodynamics, 3.3 million with radiation and 3.4 million with MHD. On four cores hydrodynamics reaches 23 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance). On one core of a Linux server, Honghu runs Athena++'s own MHD blast within 10% of the speed of Athena++ built with Intel's compiler; see [the comparison](#speed-against-athena) above.
 - **The algorithms of a production code.** HLLC with Batten wave speeds, Rider's correction and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; HLLD and constrained transport for MHD; the M1 system with an HLL solver; and the IMEX PD-ARS scheme for stiff matter-radiation coupling. These are Quokka's methods, and every kernel is written so that it transliterates to Quokka's C++ and back. What you learn here is what production codes do.
 - **Where new methods are born.** Honghu is the reference implementation of the adaptive reduced speed of light approximation (He, Krumholz & Wibking, in preparation), with a stability bound that is exact for the scheme. Its matter-radiation coupling reduces each cell's implicit step to one equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where the Newton formulation Quokka uses fails on 75. Dust-gas thermal coupling is one equation too. Ideas proven here go into Quokka, and a fix found here went into SciML's BracketingNonlinearSolve.
 - **Verified, not only tested.** Over 1400 tests: exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks down to the Zel'dovich spike, measured convergence orders, and invariants that must hold exactly — conservation, direction isotropy, positivity. Every figure on this page is redrawn by the scripts in `docs/`. See [Verification](#verification).
