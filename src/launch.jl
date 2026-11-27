@@ -135,6 +135,15 @@ Base.@propagate_inbounds Base.getindex(A::StaticRows, n::Int, i::Int, j::Int, k:
 Base.@propagate_inbounds Base.setindex!(A::StaticRows, v, n::Int, i::Int, j::Int, k::Int) =
     (A.data[_rows_index(A, n, i, j, k)] = v)
 
+# Whether the CPU launches hand their kernels `StaticRows`: not on ARM. There it buys
+# no vector loop (NEON is two doubles wide, and LLVM vectorises none of the flux
+# loops), and with the strides constant LLVM's SLP vectoriser packs the straight-line
+# HLLC kernel into two-wide operations that run 1.5-1.8 times slower along y and z,
+# which made a hydro step on an Apple M5 Max 22% slower (Julia 1.13). A property of
+# the CPU backend, decided here and never in a kernel, so that a GPU, which does not
+# come through here, runs the same kernel source whatever its host.
+const STATIC_ROWS = Sys.ARCH !== :aarch64
+
 # The arguments of a launch with every array of a few rows given its row count as a
 # type, and tuples (a Runge-Kutta `update`) walked into. One dynamic dispatch per
 # launch, which the barrier `_launch_threads!` / `_launch_serial!` absorbs.
@@ -142,6 +151,7 @@ _static_rows(args::Tuple) = map(_static_row, args)
 _static_row(x) = x
 _static_row(t::Tuple) = map(_static_row, t)
 function _static_row(A::Array{T,4}) where {T}
+    STATIC_ROWS || return A
     R = size(A, 1)
     1 <= R <= 16 || return A
     return StaticRows{R,T,Array{T,4}}(A, size(A), (0, 0, 0))
@@ -153,6 +163,7 @@ end
 _static_row(x, ::Val) = x
 _static_row(t::Tuple, r::Val) = map(a -> _static_row(a, r), t)
 function _static_row(A::Array{T,4}, ::Val{R}) where {T,R}
+    STATIC_ROWS || return A
     size(A, 1) == R || throw(DimensionMismatch("expected $R rows, got $(size(A, 1))"))
     return StaticRows{R,T,Array{T,4}}(A, size(A), (0, 0, 0))
 end

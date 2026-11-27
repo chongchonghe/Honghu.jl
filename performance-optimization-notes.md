@@ -392,3 +392,31 @@ Caveats of what was done:
   (finding 7). A caller of `launch!(::CPUSerial)` in a hot loop must do the same.
 - The README's performance table was measured on an Apple M5 Max and is not
   updated here.
+
+## Apple Silicon (M5 Max): no `StaticRows` on ARM
+
+On one core of an Apple M5 Max the branch as above was no faster than `3b89a4b`, and with
+Julia 1.13 its hydro step was 20% slower. No flux loop vectorises over cells on aarch64
+(NEON holds two doubles; `vec.jl` finds no `vector.body` in the HLLC or HLLD loop, with
+1.12 or 1.13), so the changes have nothing to buy there. What they did instead: with the
+HLLC kernel straight-line (the select, `_sqrt`) and the strides constant (`StaticRows`),
+LLVM's SLP vectoriser packed it into two-wide operations that run slower along y and z,
+13.9 / 20.6 / 23.9 ns per face along x / y / z against 13.2 for all three before. Undoing
+any one of the three changes, or `JULIA_LLVM_ARGS=-vectorize-slp=false`, removes it.
+
+Fix: `STATIC_ROWS = Sys.ARCH !== :aarch64` in `src/launch.jl`; on ARM the CPU launches
+and the tiled sweep pass the plain arrays (`TileArray` for the tiles). The kernels are
+unchanged, so a GPU runs the same source whatever its host. Reverting the select to a
+branch would have been 13% faster still on the M5 (hydro step 0.226 s against 0.254 s),
+but it puts an architecture switch in a kernel that a GPU also compiles.
+
+`test/benchmarks.jl`, 128^3, one thread, Mcell-updates/(s CPU), hydro / RHD / MHD, two
+runs each:
+
+| Julia | `3b89a4b` | branch, `StaticRows` on ARM | branch, without |
+|:---|:---|:---|:---|
+| 1.12.6 | 8.07 / 3.38 / 3.02; 8.07 / 3.43 / 3.08 | 7.81 / 3.42 / 3.16; 7.83 / 3.44 / 2.99 | 8.31 / 3.30 / 3.29; 8.03 / 3.27 / 3.27 |
+| 1.13.4 | 7.81 / 3.44 / 3.16; 7.88 / 3.30 / 3.23 | 6.62 / 3.18 / 3.27; 6.49 / 3.15 / 3.10 | 8.31 / 3.30 / 3.46; 7.78 / 3.33 / 3.45 |
+
+On the M5 the branch is now even with `3b89a4b` for hydro and RHD and 7% faster for MHD.
+The single-core gains of this branch are an x86 (AVX) result.

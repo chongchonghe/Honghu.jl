@@ -107,8 +107,9 @@ Base.@propagate_inbounds Base.setindex!(A::TileArray, v, n::Int, i::Int, j::Int,
 
 # A tile's scratch as the tiled sweep hands it to its kernels (see `StaticRows`): the
 # row count is the caller's `Val`, so that building it is type-stable.
+# Without `STATIC_ROWS` (ARM), the plain `TileArray`.
 _static_tile(buf::Vector{T}, dims, off, ::Val{R}) where {T,R} =
-    StaticRows{R,T,Vector{T}}(buf, dims, off)
+    STATIC_ROWS ? StaticRows{R,T,Vector{T}}(buf, dims, off) : TileArray{T}(buf, dims, off)
 
 """
     has_tiled_method(reconstruction) -> Bool
