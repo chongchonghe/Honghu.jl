@@ -122,6 +122,10 @@ Threads.nthreads() == 1 ||
     @warn "run on one thread (-t 1): the per-CPU numbers assume it"
 @printf("Honghu %s, Julia %s, %d thread(s), %d^3 cells\n",
         pkgversion(Honghu), VERSION, Threads.nthreads(), N)
+let cpu = Sys.cpu_info()
+    @printf("CPU: %s, %d logical cores, %.0f GiB memory, %s\n", strip(cpu[1].model),
+            length(cpu), Sys.total_memory() / 2^30, Sys.MACHINE)
+end
 
 cols = (:hydro, :rhd, :mhd)
 res = Dict(p => measure(p) for p in cols)
