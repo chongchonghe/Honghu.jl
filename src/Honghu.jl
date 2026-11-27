@@ -1,12 +1,14 @@
 """
     Honghu
 
-A three-dimensional radiation-hydrodynamics code in pure Julia.
+A three-dimensional radiation-magnetohydrodynamics code in pure Julia.
 
 The Euler equations are solved with an unsplit finite-volume method-of-lines
 scheme: piecewise-constant, -linear or -parabolic reconstruction of the
 primitive variables, a choice of Riemann solver (HLLC or LLF), and a
-strong-stability-preserving Runge-Kutta integrator.
+strong-stability-preserving Runge-Kutta integrator. With `mhd = true` it
+solves ideal MHD instead, with the field face-centred and advanced by
+constrained transport (HLLD or LLF, the Q26 EMF and LD04 averaging).
 
 Radiation is treated with the two-moment (M1) approximation, grey or resolved
 into `NG` frequency groups (see `RadiationGroups`). Transport uses

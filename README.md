@@ -1,22 +1,22 @@
 # Honghu.jl
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23569081.svg)](https://doi.org/10.5281/zenodo.23569081)
+[![](https://zenodo.org/badge/DOI/10.5281/zenodo.23569081.svg)](https://doi.org/10.5281/zenodo.23569081)
 
 <p align="center"><img src="docs/figures/honghu-logo.png" alt="Honghu.jl logo" width="300"></p>
 
 Honghu is named after 鸿鹄 (hóng hú), an ancient Chinese term for the large, high-flying swan.
 
-**Three-dimensional radiation hydrodynamics in pure Julia: simple enough to learn from, fast enough to run on a laptop, and good enough to invent new methods with.**
+**Three-dimensional radiation magnetohydrodynamics in pure Julia: simple enough to learn from, fast enough to run on a laptop, and good enough to invent new methods with.**
 
-Honghu solves the Euler equations, or the equations of ideal MHD, coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — in one, two or three dimensions on a uniform Cartesian grid. It uses the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics (Wibking & Krumholz 2022; He, Wibking & Krumholz 2024), written out so that a student can read them and a developer can change them.
+Honghu solves the Euler equations, or the equations of ideal MHD, coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — in one, two or three dimensions on a uniform Cartesian grid. It uses the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics ([Wibking & Krumholz 2022](https://scixplorer.org/abs/2022MNRAS.512.1430W/abstract); [He, Wibking & Krumholz 2024a](https://scixplorer.org/abs/2024MNRAS.531.1228H/abstract), [2024b](https://scixplorer.org/abs/2024MNRAS.535.3059H/abstract); [He et al. 2026](https://scixplorer.org/abs/2026OJAp....959235H/abstract)), written out so that a student can read them and a developer can change them.
 
 Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, a guide to the physics, numerics and code design of each physics module (so far photochemistry and MHD), and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
 ## Why Honghu
 
-- **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) (Zingale 2014; Harpole et al. 2019) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, and radiation hydrodynamics with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
+- **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) ([Zingale 2014](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract); [Harpole et al. 2019](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract)) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, ideal MHD with constrained transport, and radiation with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
 - **Fast on a laptop.** Hydrodynamics runs at 12.6 million cell updates per second at $64^3$ with 8 threads on a laptop (Apple M5 Max), about one-eighth of the throughput of Quokka on a single NVIDIA V100 GPU; radiation hydrodynamics at 6.9 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance).
-- **The algorithms of a production code.** HLLC with Batten wave speeds, Rider's correction and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; the M1 system with an HLL solver; and the IMEX PD-ARS scheme for stiff matter-radiation coupling. These are Quokka's methods, and every kernel is written so that it transliterates to Quokka's C++ and back. What you learn here is what production codes do.
+- **The algorithms of a production code.** HLLC with Batten wave speeds, Rider's correction and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; HLLD and constrained transport for MHD; the M1 system with an HLL solver; and the IMEX PD-ARS scheme for stiff matter-radiation coupling. These are Quokka's methods, and every kernel is written so that it transliterates to Quokka's C++ and back. What you learn here is what production codes do.
 - **Where new methods are born.** Honghu is the reference implementation of the adaptive reduced speed of light approximation (He, Krumholz & Wibking, in preparation), with a stability bound that is exact for the scheme. Its matter-radiation coupling reduces each cell's implicit step to one equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where the Newton formulation Quokka uses fails on 75. Dust-gas thermal coupling is one equation too. Ideas proven here go into Quokka, and a fix found here went into SciML's BracketingNonlinearSolve.
 - **Verified, not only tested.** Over 1400 tests: exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks down to the Zel'dovich spike, measured convergence orders, and invariants that must hold exactly — conservation, direction isotropy, positivity. Every figure on this page is redrawn by the scripts in `docs/`. See [Verification](#verification).
 - **Reproducible research.** One script, `examples/irsla_paper.jl`, reproduces every number and data file of the numerical tests in the adaptive reduced speed of light paper.
@@ -24,10 +24,13 @@ Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a 
 - **Light to install.** Three standard libraries and three packages; plotting loads only when you load Plots. Julia 1.10, the long-term-support release, and newer, tested on both in CI.
 - **Documentation for people and for AI agents.** Every page of the [documentation](https://chongchonghe.github.io/Honghu.jl/) is published as HTML and as Markdown, all pages come as one file, and an `llms.txt` index points coding agents at them.
 
-| Kelvin-Helmholtz instability | M1 radiation shadow | Orszag-Tang MHD vortex |
-|:---:|:---:|:---:|
-| ![Kelvin-Helmholtz](docs/figures/kh.gif) | ![shadow](docs/figures/shadow.gif) | ![Orszag-Tang](docs/figures/orszag_tang.gif) |
-| $256^2$, PPM + SSPRK3 | a beam striking an opaque clump; colour is $\log_{10}E_r$ over ten decades | density, $256^2$, HLLD + constrained transport, PPM + SSPRK2 |
+| Kelvin-Helmholtz instability | Sedov blast |
+|:---:|:---:|
+| ![Kelvin-Helmholtz](docs/figures/kh.gif) | ![Sedov blast](docs/figures/sedov.gif) |
+| $512^2$, PPM + SSPRK3 | density in the mid-plane slice, $64^3$, PPM + SSPRK3 |
+| **M1 radiation shadow** | **Orszag-Tang MHD vortex** |
+| ![shadow](docs/figures/shadow.gif) | ![Orszag-Tang](docs/figures/orszag_tang.gif) |
+| $500\times200$, a beam striking an opaque clump; colour is $\log_{10}E_r$ over ten decades | density, $256^2$, HLLD + constrained transport, PPM + SSPRK2 |
 
 ## What it solves
 
@@ -37,9 +40,9 @@ $$\partial_t \rho + \nabla\cdot(\rho\mathbf{v}) = 0, \qquad \partial_t (\rho\mat
 
 with an ideal-gas equation of state.
 
-**Magnetohydrodynamics.** With `Simulation(mhd = true)`, the equations of ideal MHD, with the field face-centred and advanced by constrained transport, so that $\nabla\cdot\mathbf{b}$ stays at round-off. The scheme is Quokka's: the HLLD Riemann solver, the Q26 EMF and Londrillo & Del Zanna averaging; with piecewise-constant reconstruction it reproduces Quokka's shock tubes to round-off. Radiation and photochemistry run on a magnetised gas.
+**Magnetohydrodynamics.** With `Simulation(mhd = true)`, the equations of ideal MHD, with the field face-centred and advanced by constrained transport, so that $\nabla\cdot\mathbf{b}$ stays at round-off. The scheme is Quokka's: the HLLD Riemann solver, the Q26 EMF and [Londrillo & Del Zanna (2004)](https://scixplorer.org/abs/2004JCoPh.195...17L/abstract) averaging; with piecewise-constant reconstruction it reproduces Quokka's shock tubes to round-off. Radiation and photochemistry run on a magnetised gas.
 
-**Radiation.** The first two angular moments of the radiative transfer equation, closed with the Levermore (1984) M1 closure,
+**Radiation.** The first two angular moments of the radiative transfer equation, closed with the [Levermore (1984)](https://scixplorer.org/abs/1984JQSRT..31..149L/abstract) M1 closure,
 
 $$\partial_t E_r + \frac{\hat{c}}{c}\nabla\cdot\mathbf{F}_r = S, \qquad \partial_t \mathbf{F}_r + \hat{c}\,c\,\nabla\cdot(\mathbb{T}E_r) = \mathbf{S}_F,$$
 
@@ -54,9 +57,9 @@ Space and time are separated by the **method of lines**: a spatial operator $L(U
 | Component | Choice |
 |:---|:---|
 | Reconstruction | piecewise constant (`PCM`), piecewise linear (`PLM`, four limiters), piecewise parabolic (`PPM`) |
-| Hydro Riemann solver | `HLLC` (default) with Batten wave speeds, Rider's nonlinear correction, and the Minoshima & Miyoshi (2021) carbuncle cure and low-dissipation pressure; or `LLF` |
-| MHD | `HLLD` (default; Miyoshi & Kusano 2005 with the Minoshima & Miyoshi 2021 corrections), `LLFMHD` or `HLLMHD`; constrained transport with the Q26 EMF and LD04 averaging |
-| Radiation Riemann solver | `HLL` on the M1 system with frozen-Eddington-tensor wave speeds (Skinner & Ostriker 2013; Balsara 1999) |
+| Hydro Riemann solver | `HLLC` (default) with Batten wave speeds, Rider's nonlinear correction, and the [Minoshima & Miyoshi (2021)](https://scixplorer.org/abs/2021JCoPh.44610639M/abstract) carbuncle cure and low-dissipation pressure; or `LLF` |
+| MHD | `HLLD` (default; [Miyoshi & Kusano 2005](https://scixplorer.org/abs/2005JCoPh.208..315M/abstract) with the [Minoshima & Miyoshi 2021](https://scixplorer.org/abs/2021JCoPh.44610639M/abstract) corrections), `LLFMHD` or `HLLMHD`; constrained transport with the Q26 EMF and LD04 averaging |
+| Radiation Riemann solver | `HLL` on the M1 system with frozen-Eddington-tensor wave speeds ([Skinner & Ostriker 2013](https://scixplorer.org/abs/2013ApJS..206...21S/abstract); [Balsara 1999](https://scixplorer.org/abs/1999JQSRT..61..617B/abstract)) |
 | Hydro time integration | SSP Runge-Kutta, first to third order (`ForwardEuler`, `SSPRK2`, `SSPRK3`) |
 | Radiation time integration | **IMEX PD-ARS**: transport explicit, stiff matter coupling implicit; second order and asymptotic-preserving |
 | Matter-radiation coupling, grey | 2×2 Newton-Raphson per cell in $(E_\mathrm{int}, R)$, with an analytic flux/momentum update and a lagged outer iteration for the $\mathbf{v}\cdot\mathbf{F}$ work term |
@@ -284,7 +287,7 @@ julia --project=. -t auto test/runtests.jl --figures # ... and redraw the figure
 
 ![radiative shock](docs/figures/radshock.png)
 
-**Mach 3 radiative shock** (Lowrie & Edwards 2008), against the semi-analytic solution. This is the most demanding one-dimensional problem in the suite: an optically thick, strongly coupled shock with a radiative precursor ahead of the front and, just behind it, a *Zel'dovich spike* where the matter temperature overshoots its own downstream value ($4.26$ against $3.66$). The spike appears only if the velocity-dependent coupling terms, the implicit solve and the shock capturing are all correct at once. Relative $L_1$ error in $T_\mathrm{rad}$ is $0.19\%$ at 256 cells, against the $1\%$ Quokka asks for.
+**Mach 3 radiative shock** ([Lowrie & Edwards 2008](https://scixplorer.org/abs/2008ShWav..18..129L/abstract)), against the semi-analytic solution. This is the most demanding one-dimensional problem in the suite: an optically thick, strongly coupled shock with a radiative precursor ahead of the front and, just behind it, a *Zel'dovich spike* where the matter temperature overshoots its own downstream value ($4.26$ against $3.66$). The spike appears only if the velocity-dependent coupling terms, the implicit solve and the shock capturing are all correct at once. Relative $L_1$ error in $T_\mathrm{rad}$ is $0.19\%$ at 256 cells, against the $1\%$ Quokka asks for.
 
 The test suite (`julia --project=. -t 4 test/runtests.jl`, 1217 tests, ~70 s) checks, among other things:
 
@@ -573,15 +576,27 @@ Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well 
 
 ## References
 
-- Colella & Woodward (1984), *JCP* 54, 174 — PPM
-- Toro (2009), *Riemann Solvers and Numerical Methods for Fluid Dynamics* — HLLC, exact Riemann solver
-- Minoshima & Miyoshi (2021), *JCP* 446, 110639 — low-dissipation HLL/HLLC
-- Levermore (1984), *JQSRT* 31, 149 — M1 closure
-- Skinner & Ostriker (2013), *ApJS* 206, 21 — M1 wave speeds, reduced speed of light
-- Chu et al. (2019), *JCP* 389, 62 — IMEX PD-ARS
-- Vaytet et al. (2011), *JQSRT* 112, 1323 — multigroup M1, and the frequency-dependent Marshak wave
-- Wibking & Krumholz (2022), *MNRAS* 512, 1430; He, Wibking & Krumholz (2024), *MNRAS* 531, 3906 — Quokka
-- Zingale (2014), *Astronomy and Computing* 6, 52; Harpole et al. (2019), *JOSS* 4, 1265 — pyro
+Quokka:
+
+- B. D. Wibking & M. R. Krumholz, 2022, "QUOKKA: a code for two-moment AMR radiation hydrodynamics on GPUs", *MNRAS* 512, 1430. [SciX/ADS](https://scixplorer.org/abs/2022MNRAS.512.1430W/abstract)
+- C.-C. He, B. D. Wibking & M. R. Krumholz, 2024a, "An asymptotically correct implicit-explicit time integration scheme for finite volume radiation-hydrodynamics", *MNRAS* 531, 1228. [SciX/ADS](https://scixplorer.org/abs/2024MNRAS.531.1228H/abstract)
+- C.-C. He, B. D. Wibking & M. R. Krumholz, 2024b, "A novel numerical method for mixed-frame multigroup radiation-hydrodynamics with GPU acceleration implemented in the QUOKKA code", *MNRAS* 535, 3059. [SciX/ADS](https://scixplorer.org/abs/2024MNRAS.535.3059H/abstract)
+- C.-C. He, B. D. Wibking, A. Vijayan, M. R. Krumholz & P. S. Li, 2026, "A novel algorithm for GPU-accelerated particle-mesh interactions implemented in the QUOKKA code", *The Open Journal of Astrophysics* 9, 159235. [SciX/ADS](https://scixplorer.org/abs/2026OJAp....959235H/abstract)
+
+Methods and test problems:
+
+- [Colella & Woodward (1984)](https://scixplorer.org/abs/1984JCoPh..54..174C/abstract), *JCP* 54, 174 — PPM
+- [Toro (2009)](https://doi.org/10.1007/b79761), *Riemann Solvers and Numerical Methods for Fluid Dynamics* — HLLC, exact Riemann solver
+- [Miyoshi & Kusano (2005)](https://scixplorer.org/abs/2005JCoPh.208..315M/abstract), *JCP* 208, 315 — HLLD
+- [Minoshima & Miyoshi (2021)](https://scixplorer.org/abs/2021JCoPh.44610639M/abstract), *JCP* 446, 110639 — low-dissipation HLLD, and its HLLC limit
+- [Londrillo & Del Zanna (2004)](https://scixplorer.org/abs/2004JCoPh.195...17L/abstract), *JCP* 195, 17 — EMF averaging for constrained transport
+- [Levermore (1984)](https://scixplorer.org/abs/1984JQSRT..31..149L/abstract), *JQSRT* 31, 149 — M1 closure
+- [Balsara (1999)](https://scixplorer.org/abs/1999JQSRT..61..617B/abstract), *JQSRT* 61, 617 — frozen-Eddington-tensor wave speeds
+- [Skinner & Ostriker (2013)](https://scixplorer.org/abs/2013ApJS..206...21S/abstract), *ApJS* 206, 21 — M1 wave speeds, reduced speed of light
+- [Chu et al. (2019)](https://scixplorer.org/abs/2019JCoPh.389...62C/abstract), *JCP* 389, 62 — IMEX PD-ARS
+- [Vaytet et al. (2011)](https://scixplorer.org/abs/2011JQSRT.112.1323V/abstract), *JQSRT* 112, 1323 — multigroup M1, and the frequency-dependent Marshak wave
+- [Lowrie & Edwards (2008)](https://scixplorer.org/abs/2008ShWav..18..129L/abstract), *Shock Waves* 18, 129 — radiative shock solutions
+- [Zingale (2014)](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract), *Astronomy and Computing* 6, 52; [Harpole et al. (2019)](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract), *JOSS* 4, 1265 — pyro
 
 ## Contributing, support and citing
 

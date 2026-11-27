@@ -94,11 +94,20 @@ function Honghu.animate_run(sim::Simulation; tmax, nframes::Integer=100,
     end
     plotkw = clims === nothing ? kwargs : (; clims=clims, kwargs...)
 
+    # The title keeps its width from frame to frame, or it jitters as the
+    # animation plays: a fixed number of decimals, enough to tell frames apart,
+    # and no step count.
+    nd = max(0, ceil(Int, -log10(dtf)))
+    label = last(field(sim, var))
+    _, _, k = _plane(sim, get(kwargs, :slice, nothing))
+    suffix = ndim(sim.grid) == 3 ? @sprintf("  [%s slice %d]", _axislabel(3), k) : ""
+    title() = @sprintf("%s   t = %.*f", label, nd, sim.t) * suffix
+
     anim = Animation()
-    frame(anim, Honghu.plotstate(sim; var=var, plotkw...))
+    frame(anim, Honghu.plotstate(sim; var=var, title=title(), plotkw...))
     for m in 1:nframes
         Honghu.run!(sim; tmax=min(t0 + m * dtf, tmax), verbose=false)
-        frame(anim, Honghu.plotstate(sim; var=var, plotkw...))
+        frame(anim, Honghu.plotstate(sim; var=var, title=title(), plotkw...))
         verbose && m % 10 == 0 && @printf("  frame %d/%d  t = %.4g\n", m, nframes, sim.t)
     end
     gif(anim, filename; fps=fps, show_msg=false)

@@ -16,11 +16,11 @@ const P = Honghu.Problems
 
 const OUT = joinpath(@__DIR__, "figures")
 mkpath(OUT)
-default(fontfamily="sans-serif", framestyle=:box, dpi=100, titlefontsize=10,
+default(fontfamily="sans-serif", framestyle=:box, dpi=200, titlefontsize=10,
         guidefontsize=9)
 
 # --- Kelvin-Helmholtz: the classic roll-up ----------------------------------
-function anim_kh(n=256, nframes=90)
+function anim_kh(n=512, nframes=90)
     println("Kelvin-Helmholtz ($(n)^2, $nframes frames)")
     sim, tmax = P.kelvin_helmholtz(; n)
     animate_run(sim; tmax, nframes, var=:density, fps=20,
@@ -31,7 +31,7 @@ end
 # --- Radiation shadow: the beam sweeping past the clump ---------------------
 function anim_shadow(nframes=90)
     println("radiation shadow ($nframes frames)")
-    sim, tmax = P.radiation_shadow(n=(200, 80))
+    sim, tmax = P.radiation_shadow(n=(500, 200))
     # log scale spans 10 decades, so the colour range has to be given explicitly
     animate_run(sim; tmax, nframes, var=:Erad, fps=18,
                 filename=joinpath(OUT, "shadow.gif"),
