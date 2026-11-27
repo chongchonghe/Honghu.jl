@@ -44,6 +44,16 @@ Prefer building example figures out of `plotstate` / `plotpanels` rather than ra
 
 Each physics module gets a **physics guide**, a hand-written page in the site's Physics menu that starts with the governing equations and then gives the numerical method at the level of techniques (operator splitting, the method of lines, error-controlled integrators), and links into the module's generated reference page rather than repeating the docstrings. Which file or type does what, and implementation details, belong to the reference, not to the guide. `docs/photochemistry.md` is the first and the model for the rest. Its Test problems section documents each problem with the template in `docs/documentation.md` ("A test problem": a setup table of physics, domain, initial and boundary conditions, source, evolution, reference and how to run it, then a figure and an error table), and every figure and number there is made by a function in `docs/make_figures.jl`. When a module's physics or algorithm changes, its guide changes in the same commit.
 
+## Branches and worktrees
+
+Never edit `main` directly. Implement every feature on its own branch, in its own worktree under `.claude/worktrees/`, and leave the main checkout on `main`:
+
+```bash
+git worktree add .claude/worktrees/<name> -b feat/<name>
+```
+
+The feature lands on `main` as one squash commit once the suite passes.
+
 ## Releases
 
 `RELEASING.md` is the procedure. Zenodo archives every published GitHub release, takes its metadata from `CITATION.cff` and its version from the tag, so the version is written in `Project.toml`, `CITATION.cff` and the tag alike, and `CHANGELOG.md` needs a section for it; `test/test_metadata.jl` fails if the three files disagree. Record each user-visible change in the changelog's newest section as it is made, not at release time.
