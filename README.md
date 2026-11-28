@@ -6,9 +6,9 @@
 
 Honghu is named after 鸿鹄 (hóng hú), an ancient Chinese term for the large, high-flying swan.
 
-**Three-dimensional radiation magnetohydrodynamics in pure Julia: simple enough to learn from, fast enough to run on a laptop, and good enough to invent new methods with.**
+**Three-dimensional radiation magnetohydrodynamics in pure Julia, written for teaching, laptop runs, and method development.**
 
-Honghu ([He 2026](https://doi.org/10.5281/zenodo.23569082)) solves the Euler equations, or the equations of ideal MHD, coupled to the two-moment (M1) radiation transport equations — grey, or resolved into frequency groups — in one, two or three dimensions on a uniform Cartesian grid. It uses the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics ([Wibking & Krumholz 2022](https://scixplorer.org/abs/2022MNRAS.512.1430W/abstract); [He, Wibking & Krumholz 2024a](https://scixplorer.org/abs/2024MNRAS.531.1228H/abstract), [2024b](https://scixplorer.org/abs/2024MNRAS.535.3059H/abstract); [He et al. 2026](https://scixplorer.org/abs/2026OJAp....959235H/abstract)), written out so that a student can read them and a developer can change them.
+Honghu ([He 2026](https://doi.org/10.5281/zenodo.23569082)) solves the Euler equations, or the equations of ideal MHD, coupled to the two-moment (M1) radiation transport equations (grey or multigroup) in one, two, or three dimensions on a uniform Cartesian grid. It implements the algorithms of [Quokka](https://github.com/quokka-astro/quokka), a GPU code for astrophysical radiation hydrodynamics ([Wibking & Krumholz 2022](https://scixplorer.org/abs/2022MNRAS.512.1430W/abstract); [He, Wibking & Krumholz 2024a](https://scixplorer.org/abs/2024MNRAS.531.1228H/abstract), [2024b](https://scixplorer.org/abs/2024MNRAS.535.3059H/abstract); [He et al. 2026](https://scixplorer.org/abs/2026OJAp....959235H/abstract)), in compact, readable Julia so that students can study them and developers can test changes quickly.
 
 Documentation: <https://chongchonghe.github.io/Honghu.jl/> holds this README, a reference built from every docstring, a guide to the physics, numerics and code design of each physics module (so far photochemistry and MHD), and the technical notes in `docs/`. Each page is also published as Markdown, and `honghu-docs.md` holds all of them in one file.
 
@@ -29,15 +29,14 @@ julia --project=. -t 1 notes/performance-experiments/athena_blast.jl 128 40
 
 ## Why Honghu
 
-- **A teaching code that does not stop at two dimensions.** For more than a decade, [pyro](https://github.com/python-hydro/pyro2) ([Zingale 2014](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract); [Harpole et al. 2019](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract)) has been where students learn computational hydrodynamics: readable finite-volume solvers, in Python, in two dimensions. Honghu aims to take over that role for the next generation. It keeps what makes pyro good to learn from — short, readable kernels, built-in test problems, one call to run and one call to plot — and goes where pyro does not: three dimensions, ideal MHD with constrained transport, and radiation with the M1 closure, grey or multigroup. Julia reads like Python and runs like C, so the code a student reads is the code that runs fast.
-- **Fast, on a laptop and against Athena++.** On one core of a laptop (Apple M5 Max), a $128^3$ blast wave runs at 8.3 million cell updates per second with hydrodynamics, 3.3 million with radiation and 3.4 million with MHD. On four cores hydrodynamics reaches 23 million. Every hot kernel is multithreaded and allocation-free, and the test suite fails if one starts to allocate. See [Performance](#performance). On one core of a Linux server, Honghu runs Athena++'s own MHD blast at 91% of the speed of Athena++ built with Intel's compiler; see [the comparison](#speed-against-athena) above.
-- **The algorithms of a production code.** HLLC with Batten wave speeds, Rider's correction and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; HLLD and constrained transport for MHD; the M1 system with an HLL solver; and the IMEX PD-ARS scheme for stiff matter-radiation coupling. These are Quokka's methods, and every kernel is written so that it transliterates to Quokka's C++ and back. What you learn here is what production codes do.
-- **Where new methods are born.** Honghu is the reference implementation of the adaptive reduced speed of light approximation ([He, Krumholz & Wibking 2026](https://scixplorer.org/abs/2026arXiv261121353H/abstract)), with a stability bound that is exact for the scheme. Its matter-radiation coupling reduces each cell's implicit step to one equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where the Newton formulation Quokka uses fails on 75. Dust-gas thermal coupling is one equation too. Ideas proven here go into Quokka, and a fix found here went into SciML's BracketingNonlinearSolve.
-- **Verified, not only tested.** Over 2400 tests: exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks down to the Zel'dovich spike, measured convergence orders, and invariants that must hold exactly — conservation, direction isotropy, positivity. Every figure on this page is redrawn by the scripts in `docs/`. See [Verification](#verification).
-- **Reproducible research.** One script, `examples/irsla_paper.jl`, reproduces every number and data file of the numerical tests in the [adaptive reduced speed of light paper](https://scixplorer.org/abs/2026arXiv261121353H/abstract).
-- **Built to be extended.** A new equation of state, opacity law, Riemann solver, reconstruction, coupling solver or speed-of-light limiter is a new type and a few methods. Julia's multiple dispatch compiles it into the same allocation-free kernels, with no change to the core. See [Extending](#extending).
-- **Light to install.** Three standard libraries and three packages; plotting loads only when you load Plots. Julia 1.10, the long-term-support release, and newer, tested on both in CI.
-- **Documentation for people and for AI agents.** Every page of the [documentation](https://chongchonghe.github.io/Honghu.jl/) is published as HTML and as Markdown, all pages come as one file, and an `llms.txt` index points coding agents at them.
+For over a decade, [pyro](https://github.com/python-hydro/pyro2) ([Zingale 2014](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract); [Harpole et al. 2019](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract)) has been a standard way to learn computational hydrodynamics through readable 2D finite-volume solvers in Python. Honghu brings that style (short kernels, built-in test problems, and single-call execution and plotting) to three dimensions, ideal MHD with constrained transport, and grey or multigroup M1 radiation.
+
+- On one core of an Apple M5 Max laptop, a $128^3$ blast wave runs at 8.3 million cell updates per second with hydrodynamics, 3.3 million with radiation, and 3.4 million with MHD; on four cores, hydrodynamics reaches 23 million. Every hot kernel is multithreaded and allocation-free, guarded by allocation tests in the suite (see [Performance](#performance)). On one core of a Linux server, Honghu runs Athena++'s MHD blast at 91% of the speed of Athena++ compiled with `icpx` (see [the comparison](#speed-against-athena) above).
+- The solvers match Quokka's: HLLC with Batten wave speeds, Rider's correction, and the Minoshima & Miyoshi carbuncle cure; PPM; SSP Runge-Kutta; HLLD and constrained transport for MHD; the M1 system with an HLL solver; and the IMEX PD-ARS integrator for stiff matter-radiation coupling. Kernels are structured to transliterate directly to Quokka's C++ and back.
+- Honghu is the reference implementation of the adaptive reduced speed of light approximation ([He, Krumholz & Wibking 2026](https://scixplorer.org/abs/2026arXiv261121353H/abstract)), using an exact von Neumann stability bound for the scheme, and `examples/irsla_paper.jl` reproduces every number and data file in Section 5 of that paper. Its matter-radiation coupling reduces each cell's implicit step to a single scalar equation and converges on all 240 cells of a stress test spanning optical depths from $10^{-4}$ to $10^{12}$, where Quokka's $(1+N_g)$ Newton formulation fails on 75. Dust-gas thermal coupling reduces to a single scalar equation in the same way. Algorithms proven here port directly to Quokka, and a Brent's method fix found during coupling tests was upstreamed to SciML's BracketingNonlinearSolve.
+- Over 2400 tests check exact Riemann solutions, analytic diffusion and Marshak waves, the Sedov blast, the Lowrie & Edwards radiative shocks (including the Zel'dovich spike), measured convergence orders, and exact conservation, directional isotropy, and positivity. Every figure on this page is generated by scripts in `docs/`; see [Verification](#verification).
+- Adding an equation of state, opacity law, Riemann solver, reconstruction scheme, coupling solver, or speed-of-light limiter only requires defining a type and a few methods. Julia's multiple dispatch compiles user types into the core kernels without overhead; see [Extending](#extending).
+- Honghu depends on three standard libraries and four SciML packages; plotting is a package extension that loads only when you load Plots. It is tested on Julia 1.10 (LTS) and newer in CI, and every page of the [documentation site](https://chongchonghe.github.io/Honghu.jl/) is published as both HTML and Markdown (bundled in `honghu-docs.md` and indexed by `llms.txt`).
 
 | Kelvin-Helmholtz instability | Sedov blast |
 |:---:|:---:|
@@ -61,13 +60,13 @@ with an ideal-gas equation of state.
 
 $$\partial_t E_r + \frac{\hat{c}}{c}\nabla\cdot\mathbf{F}_r = S, \qquad \partial_t \mathbf{F}_r + \hat{c}\,c\,\nabla\cdot(\mathbb{T}E_r) = \mathbf{S}_F,$$
 
-where $\mathbb{T}(\mathbf{f})$ is the Eddington tensor built from the reduced flux $\mathbf{f} = \mathbf{F}_r/(cE_r)$. M1 interpolates between the correct free-streaming limit ($\mathbb{T}\to\hat{n}\hat{n}$, radiation travels in straight lines and casts shadows) and the diffusion limit ($\mathbb{T}\to\mathbb{I}/3$), which is what distinguishes it from flux-limited diffusion.
+where $\mathbb{T}(\mathbf{f})$ is the Eddington tensor built from the reduced flux $\mathbf{f} = \mathbf{F}_r/(cE_r)$. Unlike flux-limited diffusion, M1 interpolates between the free-streaming limit ($\mathbb{T}\to\hat{n}\hat{n}$, where radiation travels in straight lines and casts shadows) and the diffusion limit ($\mathbb{T}\to\mathbb{I}/3$).
 
-That pair of equations is carried once per frequency group. One group is grey and is the default; see [Multigroup radiation](#multigroup-radiation).
+Each frequency group carries its own pair of moment equations. The default is a single grey group; see [Multigroup radiation](#multigroup-radiation).
 
 ## Numerical method
 
-Space and time are separated by the **method of lines**: a spatial operator $L(U) = -(F_{i+1/2}-F_{i-1/2})/\Delta x$ is assembled once per stage, and the stages are pure ODE updates.
+Space and time are separated by the method of lines: a spatial operator $L(U) = -(F_{i+1/2}-F_{i-1/2})/\Delta x$ is assembled once per stage, and the stages are pure ODE updates.
 
 | Component | Choice |
 |:---|:---|
@@ -76,7 +75,7 @@ Space and time are separated by the **method of lines**: a spatial operator $L(U
 | MHD | `HLLD` (default; [Miyoshi & Kusano 2005](https://scixplorer.org/abs/2005JCoPh.208..315M/abstract) with the [Minoshima & Miyoshi 2021](https://scixplorer.org/abs/2021JCoPh.44610639M/abstract) corrections), `LLFMHD` or `HLLMHD`; constrained transport with the Q26 EMF and LD04 averaging |
 | Radiation Riemann solver | `HLL` on the M1 system with frozen-Eddington-tensor wave speeds ([Skinner & Ostriker 2013](https://scixplorer.org/abs/2013ApJS..206...21S/abstract); [Balsara 1999](https://scixplorer.org/abs/1999JQSRT..61..617B/abstract)) |
 | Hydro time integration | SSP Runge-Kutta, first to third order (`ForwardEuler`, `SSPRK2` (default), `SSPRK3`) |
-| Radiation time integration | **IMEX PD-ARS**: transport explicit, stiff matter coupling implicit; second order and asymptotic-preserving |
+| Radiation time integration | IMEX PD-ARS: transport explicit, stiff matter coupling implicit; second order and asymptotic-preserving |
 | Matter-radiation coupling, grey | 2×2 Newton-Raphson per cell in $(E_\mathrm{int}, R)$, with an analytic flux/momentum update and a lagged outer iteration for the $\mathbf{v}\cdot\mathbf{F}$ work term |
 | Matter-radiation coupling, $N_g$ groups | a $(1+N_g)$-dimensional implicit solve per cell, by one of three interchangeable [coupling solvers](#matter-radiation-coupling-solvers) |
 
@@ -84,7 +83,7 @@ Radiation subcycles inside each hydro step at the reduced speed of light $\hat{c
 
 ## Install and run
 
-Requires Julia 1.10, the long-term-support release, or newer. There are two ways to install Honghu.
+Honghu requires Julia 1.10 (the LTS release) or newer. There are two ways to install it.
 
 **1. As a package.** In the Julia REPL, in the environment of your own project:
 
@@ -207,7 +206,7 @@ run!(sim; tmax, outdir = "kh", dtout = 0.02)
 | `alfven_wave` | oblique circularly polarised Alfven wave: second-order convergence of MHD |
 | `orszag_tang` | 2D MHD vortex with interacting shocks, $\nabla\cdot\mathbf{b}$ at round-off |
 
-See `examples/` for scripts that run and post-process these. **Every example writes a figure** whenever Plots is available — that is the default, not a flag — alongside its VTK or text output:
+The scripts in `examples/` run and post-process these problems. When Plots is installed, every example writes a figure by default alongside its VTK or text output:
 
 ```bash
 julia --project=. -t auto examples/sod_1d.jl              # -> sod.png, sod.txt, sod_exact.txt
@@ -216,11 +215,11 @@ julia --project=. -t auto examples/sod_1d.jl --no-plot    # data only, for batch
 julia --project=. -t auto examples/sod_1d.jl --outdir=run # send everything somewhere else
 ```
 
-Without Plots installed the examples still run and still write their data, and say in one line how to get the figures.
+Without Plots, the examples still write their data files and print a one-line note on how to enable plotting.
 
 ## Comparing schemes
 
-The question this code exists to answer is *does variant B beat variant A, and does the answer survive refinement*. `compare` runs a problem once per (scheme, resolution), scores each run with the problem's own metrics, prints a table and writes it to disk.
+`compare` runs a problem across schemes and grid resolutions, scores each run with the problem's metrics, prints a summary table, and writes it to disk.
 
 ```julia
 using Honghu
@@ -241,14 +240,14 @@ compare(P.sod_shock_tube, :riemann, (HLLC(), LLF()); sizes = (64, 128, 256, 512)
   LLF            0.97
 ```
 
-Any keyword the problem forwards to `Simulation` can be swept — `:reconstruction`, `:integrator`, `:closure`, `:cfl` — and the value labels its own rows, so the scheme's name is written once rather than three times. When a variant needs more than one keyword, spell them out:
+You can sweep any keyword that the problem forwards to `Simulation` (such as `:reconstruction`, `:integrator`, `:closure`, or `:cfl`), and each value labels its own rows. When a variant needs more than one keyword, pass a NamedTuple of keyword sets:
 
 ```julia
 compare(P.radhydro_shock, (P1 = (closure = EddingtonClosure(),),
                            M1 = (closure = LevermoreClosure(),)); sizes = (64, 128, 256))
 ```
 
-Underneath both of those, a variant is a **builder**: a function of resolution returning `(sim, tmax)`, which is the contract the problem factories already satisfy. Hand builders in directly and a variant can differ in anything at all — a different initial condition, a different geometry, a global flag — not only in keywords the harness knows how to pass:
+Under the hood, a variant is a builder function mapping resolution to `(sim, tmax)`, the same signature used by the built-in problem factories. Passing builders directly lets variants differ in initial conditions, geometry, or global settings:
 
 ```julia
 compare(["flat"  => nx -> setup(nx, amplitude = 0.1),
@@ -256,9 +255,9 @@ compare(["flat"  => nx -> setup(nx, amplitude = 0.1),
         sizes = (64, 128, 256), metrics = default_metrics(P.smooth_advection))
 ```
 
-Because every built-in problem takes `n` for resolution, nothing has to inspect a factory to discover what it calls it. (`nx` still works everywhere as a human-facing alias.)
+Every built-in problem takes `n` for resolution (with `nx` accepted as an alias).
 
-You can also hand over simulations you have already built, however they differ:
+You can also pass simulations you have already constructed:
 
 ```julia
 a, _ = P.sod_shock_tube(n = 256, riemann = HLLC())
@@ -266,11 +265,11 @@ b, _ = P.sod_shock_tube(n = 256, riemann = LLF())
 compare("HLLC" => a, "LLF" => b; tmax = 0.2, metrics = default_metrics(P.sod_shock_tube))
 ```
 
-There is no sweep in that form — every configuration field of `Simulation` is `const`, so an instance pins its own grid — and therefore no convergence rate. `plotcompare` draws such a table as a bar chart rather than putting a single point per series on a log axis. `tmax` is required, since a simulation carries no stopping time of its own, and the simulations are run in place, so they come back finished and ready to plot.
+Because a `Simulation` instance has a fixed grid, passing pre-built simulations runs a single resolution without a convergence rate, and `plotcompare` renders the result as a bar chart. You must supply `tmax` because `Simulation` does not store a stopping time; `compare` runs the simulations in place so you can plot them afterward.
 
-Every run also records `steps`, `wall_s`, `floors` and the Newton statistics, so a variant that is more accurate *because* it took ten times as long, or that only converged with help from the positivity floors, is visible rather than flattering. The first run of each variant is a discarded warm-up, so `wall_s` measures the solver rather than Julia's compiler.
+Each row also records `steps`, `wall_s`, `floors`, and the Newton iteration counts, showing whether a lower error came from taking smaller steps or hitting the positivity floors. The first run of each variant is a warm-up that is discarded before timing.
 
-The table is the durable artefact; `plotcompare` draws from it, so a figure is reproducible from stored numbers months later, with the git hash that produced them stamped on:
+`compare` writes the table to a text file stamped with the git commit hash, and `plotcompare` reads that file directly:
 
 ```julia
 using Plots
@@ -278,9 +277,9 @@ plotcompare("sod_shock_tube_riemann_compare.txt",
             "smooth_advection_riemann_compare.txt")   # the same schemes, two problems
 ```
 
-Problems with an exact solution carry their own metrics (`default_metrics`, one method per problem in `src/problems/metrics.jl`). The rest need `metrics = (; name = sim -> ...)`; `compare` refuses to invent a number rather than printing an authoritative-looking one.
+Problems with an exact or reference solution define `default_metrics` in `src/problems/metrics.jl`; for other problems, pass `metrics = (; name = sim -> ...)` explicitly.
 
-`examples/compare_schemes.jl` is the worked version — HLLC against LLF on a shock tube *and* on smooth flow, because one problem gives you a ranking and two tell you whether the ranking means anything.
+`examples/compare_schemes.jl` compares HLLC and LLF on both a shock tube and a smooth advection wave.
 
 ## Verification
 
@@ -302,21 +301,17 @@ julia --project=. -t auto test/runtests.jl --figures # ... and redraw the figure
 
 ![radiative shock](docs/figures/radshock.png)
 
-**Mach 3 radiative shock** ([Lowrie & Edwards 2008](https://scixplorer.org/abs/2008ShWav..18..129L/abstract)), against the semi-analytic solution. This is the most demanding one-dimensional problem in the suite: an optically thick, strongly coupled shock with a radiative precursor ahead of the front and, just behind it, a *Zel'dovich spike* where the matter temperature overshoots its own downstream value ($4.26$ against $3.66$). The spike appears only if the velocity-dependent coupling terms, the implicit solve and the shock capturing are all correct at once. Relative $L_1$ error in $T_\mathrm{rad}$ is $0.19\%$ at 256 cells, against the $1\%$ Quokka asks for.
+**Mach 3 radiative shock** ([Lowrie & Edwards 2008](https://scixplorer.org/abs/2008ShWav..18..129L/abstract)), against the semi-analytic solution. This optically thick, strongly coupled shock has a radiative precursor ahead of the front and a Zel'dovich spike just behind it, where the matter temperature overshoots its downstream equilibrium value ($4.26$ against $3.66$). Capturing the spike requires the velocity-dependent coupling terms, the implicit solve, and the shock-capturing reconstruction to work together. Relative $L_1$ error in $T_\mathrm{rad}$ is $0.19\%$ at 256 cells, compared with Quokka's $1\%$ tolerance.
 
-The test suite (`julia --project=. -t 4 test/runtests.jl`, 2430 tests, ~2.5 min) checks, among other things:
+The test suite (`julia --project=. -t 4 test/runtests.jl`, 2430 tests, ~2.5 min) checks:
 
-- **Order of accuracy** on smooth advection: PCM 1, PLM 2, PPM 2.3. PPM stops short of 3 because the Colella-Woodward monotonicity constraint drops to a limited line at the two extrema of the sine wave; this matches the same limiter in Athena++ and Quokka.
-- **Toro's five shock tubes**, including the "123" near-vacuum problem and both strong blasts, all staying positive with no help from the floors.
-- **Conservation**: mass, momentum and total energy to $10^{-14}$ relative on periodic boundaries.
-- **Directional isotropy**: the same problem run along $x$, $y$ and $z$ gives bitwise-comparable profiles.
-- **Free streaming**: the radiation front arrives at $\hat{c}t$ to 2%, with $|\mathbf{F}| \le cE$ everywhere.
-- **Static diffusion**: relative $L_1$ error against the analytic Gaussian of 0.6%, 0.13%, 0.06% at 64, 128, 256 cells — the scheme is asymptotic-preserving, so the answer does not depend on how many mean free paths a cell spans.
-- **Stiff coupling**: a single step $10^{5}$ times longer than the coupling time still lands on radiative equilibrium, conserving $E_\mathrm{int} + (c/\hat{c})E_r$ to $10^{-13}$.
-- **Radiative shock**: relative $L_1$ error in $T_\mathrm{rad}$ of $0.19\%$ at 256 cells against the semi-analytic solution, with the Zel'dovich spike converging to $4.21$ from an exact $4.26$ and no positivity floors triggered.
-- **Radiation force**: momentum transfer matches $\Delta p = (\rho\kappa/c)F_0(1-e^{-\hat{c}\rho\kappa t})/(\hat{c}\rho\kappa)$ to 1%, converging at second order.
-- **Multigroup against grey**: at one group the multigroup source step reproduces the grey driver to round-off, over $\kappa$ from 0 to $10^9$; an optically thick cell relaxes onto $a_rT^4f_g(T)$ group by group, at its own temperature, not merely onto the right total.
-- **The three coupling solvers agree**, deep in equilibrium and in the transparent limit, and away from both the two one-step solvers converge onto the error-controlled one at the measured rate 2 — the local error of a single backward-Euler step, with no accumulation to turn it into 1.
+- Smooth-advection convergence rates of 1 for PCM, 2 for PLM, and 2.3 for PPM (PPM stops below 3 because the Colella-Woodward monotonicity constraint flattens the parabola at the two extrema of the sine wave, as in Athena++ and Quokka).
+- Toro's five shock tubes, including the "123" near-vacuum problem and both strong blasts, without triggering positivity floors.
+- Conservation of mass, momentum, and total energy to $10^{-14}$ relative on periodic boundaries, and bitwise-comparable profiles when the same 1D problem is run along $x$, $y$, or $z$.
+- Radiation free streaming with the front arriving at $\hat{c}t$ to 2% and $|\mathbf{F}| \le cE$ everywhere, and static diffusion with relative $L_1$ errors of 0.6%, 0.13%, and 0.06% at 64, 128, and 256 cells against the analytic Gaussian regardless of cell optical depth.
+- Stiff matter-radiation coupling: a single step $10^{5}$ times longer than the coupling time lands on radiative equilibrium while conserving $E_\mathrm{int} + (c/\hat{c})E_r$ to $10^{-13}$, and radiation momentum transfer matches $\Delta p = (\rho\kappa/c)F_0(1-e^{-\hat{c}\rho\kappa t})/(\hat{c}\rho\kappa)$ to 1% with second-order convergence.
+- The Mach 3 radiative shock to $0.19\%$ relative $L_1$ error in $T_\mathrm{rad}$ at 256 cells against the semi-analytic solution, with the Zel'dovich spike at $4.21$ (exact $4.26$) and zero positivity floor repairs.
+- Multigroup consistency: at $N_g = 1$ the multigroup source step matches the grey 2×2 driver to round-off across $\kappa \in [0, 10^9]$, an optically thick multigroup cell relaxes onto $a_rT^4f_g(T)$ in every group, and at intermediate optical depths the two single-step coupling solvers converge toward the error-controlled ODE reference at second order in $\Delta t$.
 
 ## Performance
 
@@ -343,7 +338,7 @@ The rows below the totals are CPU-ns per cell-update and add up to the total: a 
 julia --project=. -t 1 test/benchmarks.jl        # prints this table; an argument sets n
 ```
 
-Allocation per step is flat in the grid size (152 KiB for hydrodynamics, 284 KiB with radiation, all of it threading overhead), and `test/test_performance.jl` asserts that every hot kernel stays below 8 bytes per cell — a regression test for a boxing bug that once cost 12 kB per cell.
+Allocation per step is flat in the grid size (152 KiB for hydrodynamics, 284 KiB with radiation, all of it threading overhead), and `test/test_performance.jl` asserts that every hot kernel stays below 8 bytes per cell to guard against closure-boxing regressions.
 
 ### Threads
 
@@ -391,15 +386,15 @@ On a 32-core workstation node (AMD Threadripper PRO 7975WX, one NUMA domain), th
 | 32, pinned | 0.082 s | 0.67 s |
 | 64, pinned | 0.078 s | 0.64 s |
 
-Three things are worth knowing on such a machine. Use every core: from 8 threads on, the hydrodynamic sweeps run cache-sized boxes of cells rather than whole-grid passes (`Simulation(tile = :auto)`, the default), and this is what lets them keep scaling past the point where the memory bus saturates (on Apple Silicon tiling was slower at every thread count, so the default does not tile there). When the job has the whole node, pin the threads with `JULIA_EXCLUSIVE=1 julia -t 32` (one thread per physical core, if CPUs `0` to `31` are the physical cores, as `lscpu -e` shows here), which is worth 10% at 32 threads. Do not pin a run that uses only some of the cores, though: pinned to CPUs `0` to `15`, a 16-thread run gets only two of the four L3 caches and is 20% slower than unpinned. Hyperthreads (`-t 64`) add about 5%. `docs/parallel-findings.md` has the measurements and what each change bought.
+From 8 threads on, the hydrodynamic sweeps run on cache-sized boxes of cells rather than whole-grid passes (`Simulation(tile = :auto)`, the default), which lets them keep scaling after the memory bus saturates (on Apple Silicon tiling was slower at every thread count, so `:auto` leaves it off there). When a job has the whole node, pinning threads with `JULIA_EXCLUSIVE=1 julia -t 32` (one thread per physical core, where CPUs `0` to `31` are the physical cores as shown by `lscpu -e`) improves 32-thread speed by about 10%. Avoid pinning a job that uses only part of the node: pinned to CPUs `0` to `15`, a 16-thread run gets only two of the four L3 caches and runs 20% slower than unpinned. Hyperthreads (`-t 64`) add about 5%. `docs/parallel-findings.md` records the full measurements.
 
-**Memory.** Buffers scale as roughly `72 * ncells * 8` bytes when grey radiation is enabled, `35 * ncells * 8` without, where `ncells` includes ghost cells. A $128^3$ radiation-hydrodynamics run needs about 1.4 GB; pure hydrodynamics at $128^3$ needs about 0.7 GB. Every radiation buffer is `4 * ngroups` components wide, so the radiation share of that figure — about half of it in a grey run — scales with the number of frequency groups.
+**Memory.** Buffers scale as roughly `72 * ncells * 8` bytes when grey radiation is enabled and `35 * ncells * 8` without, where `ncells` includes ghost cells. A $128^3$ radiation-hydrodynamics run uses about 1.4 GB; pure hydrodynamics at $128^3$ uses about 0.7 GB. Every radiation buffer has `4 * ngroups` components per cell, so the radiation half of that footprint scales linearly with the number of frequency groups.
 
 ## Output
 
-- `write_vtk(sim, path)` — a self-contained `.vti` image-data file with raw appended binary, written without any dependency. ParaView, VisIt and yt open it directly, and a numbered series (`data_00000.vti`, `data_00001.vti`, …) is read as a time series.
-- `write_line(sim, path; dir, at)` — a plain-text table along one axis, for quick plotting of shock tubes and Marshak waves.
-- `save_checkpoint` / `load_checkpoint!` — raw binary restart files.
+- `write_vtk(sim, path)` writes a self-contained `.vti` image-data file with raw appended binary and no external library dependencies. ParaView, VisIt, and yt open it directly, and a numbered series (`data_00000.vti`, `data_00001.vti`, ...) loads as a time series.
+- `write_line(sim, path; dir, at)` writes a plain-text table along one axis for plotting 1D profiles such as shock tubes and Marshak waves.
+- `save_checkpoint` / `load_checkpoint!` read and write raw binary restart files.
 
 `run!(sim; tmax, outdir, dtout)` writes VTK snapshots on a fixed cadence and trims the step so that it lands exactly on the output times.
 
@@ -433,9 +428,9 @@ animate_run(sim; tmax, nframes = 100, var = :density, fps = 20,
             filename = "kh.gif", c = :magma)   # further keywords go to plotstate
 ```
 
-Call any of them without Plots loaded and you get an error telling you to load it, not a `MethodError`.
+Calling any of them before loading Plots prints instructions on loading it.
 
-In the REPL or VS Code a figure appears as soon as it is displayed; Plots' default backend, GR, opens it in a window. Two things can stop it. In a script run with `julia script.jl`, the window closes when the script ends, so add `readline()` after `display` to keep it open, or write the figure to a file with `savefig(plotstate(sim), "sod.png")`. The example scripts set `ENV["GKSwstype"] = "100"` (in `examples/common.jl`), which makes GR draw off-screen and open no window at all; remove that setting, or set it to `"gksqt"`, to see figures on screen.
+In the REPL or VS Code, `display` opens the figure in a GR window. When running a script from the command line (`julia script.jl`), the process exits as soon as the script finishes, closing the window; call `readline()` after `display` to keep the window open, or save directly to disk with `savefig(plotstate(sim), "sod.png")`. Note that the scripts in `examples/` include `examples/common.jl`, which sets `ENV["GKSwstype"] = "100"` so GR renders off-screen without opening a window; unset that variable or set it to `"gksqt"` if you want interactive windows from an example script.
 
 `docs/make_figures.jl` and `docs/make_animations.jl` regenerate everything shown above.
 
@@ -484,11 +479,11 @@ The radiation field can be resolved into $N_g$ frequency groups. Each group carr
 
 $$\partial_t E_g + \frac{\hat{c}}{c}\nabla\cdot\mathbf{F}_g = \hat{c}\rho\left(\kappa_{P,g}\,a_rT^4f_g(T) - \kappa_{E,g}E_g\right), \qquad g = 1,\dots,N_g,$$
 
-where $f_g(T)$ is the fraction of a Planck spectrum at $T$ that falls in group $g$ — a difference of the normalised incomplete Planck integral $P(x) = (15/\pi^4)\int_0^x t^3/(e^t-1)\,\mathrm{d}t$ evaluated at the group edges, with $x = h\nu/k_BT$. Quokka tabulates $P$ and interpolates; here two series compute it, the Bernoulli expansion below $x = 1$ and the exponential tail above, so there is no table to regenerate. The last group takes $1 - \sum(\mathrm{rest})$, so the fractions sum to exactly one whatever the edges are and the total emitted energy is $a_rT^4$ to round-off.
+where $f_g(T)$ is the fraction of a Planck spectrum at $T$ that falls in group $g$, computed as the difference of the normalised incomplete Planck integral $P(x) = (15/\pi^4)\int_0^x t^3/(e^t-1)\,\mathrm{d}t$ at the group edges ($x = h\nu/k_BT$). Quokka tabulates $P$ and interpolates; Honghu evaluates it directly with the Bernoulli expansion below $x = 1$ and the exponential tail above, avoiding table generation. The last group takes $1 - \sum(\mathrm{rest})$, so the fractions sum to one and the total emitted energy equals $a_rT^4$ to round-off.
 
-**One group is grey, and is the default.** `ngroups` is a type parameter, so every kernel specialises on it and a single-group run takes the code path it took before multigroup existed — the same 2×2 source driver, the same allocation, the same answers to round-off. That equivalence is a test, not an intention.
+**One group is grey and is the default.** Because `ngroups` is a type parameter, every kernel specialises on it and a single-group run dispatches to the 2×2 grey source driver, matching the grey code path to round-off.
 
-**Groups.** `RadiationGroups` takes $N_g + 1$ increasing edges, or a range and a count. `energy_unit` says what an edge *means*: `energy_unit * edge` must be an energy, since what the Planck fraction needs is $x = \mathrm{energy}/k_BT$. Pass `CGS.h_planck` to give the edges in Hz; leave it at `1` to give them directly in units of $k_BT$, which is what the unit-free test problems do.
+**Groups.** `RadiationGroups` takes $N_g + 1$ increasing edges, or a range and a count. `energy_unit * edge` must have units of energy so that $x = \mathrm{energy}/k_BT$ is dimensionless. Pass `CGS.h_planck` when giving edges in Hz, or leave `energy_unit = 1` to specify edges directly in units of $k_BT$ (as the unit-free test problems do).
 
 ```julia
 RadiationGroups([0.1, 1.0, 5.0, 20.0])                                # three groups, edges in units of k_B T
@@ -496,9 +491,9 @@ RadiationGroups(6e10, 6e14, 4; energy_unit = Honghu.CGS.h_planck)     # four log
 RadiationGroups(6e10, 6e14, 4; spacing = :linear)                     # :log is the default, since a Planck spectrum spans decades
 ```
 
-The outermost edges are integration limits rather than cuts: the first group collects everything below `edges[1]` and the last everything above `edges[end]`. `0.0` and `Inf` are legal, and the grey default is exactly `RadiationGroups([0.0, Inf])`.
+The outermost edges act as integration limits: the first group integrates down to `edges[1]` and the last up to `edges[end]`. Both `0.0` and `Inf` are valid, and the grey default is `RadiationGroups([0.0, Inf])`.
 
-**Opacity.** The opacity is **piecewise constant across a group**, evaluated at the geometric mean $\sqrt{\nu_g\nu_{g+1}}$ of the group's edges — Quokka's `piecewise_constant_opacity`. Averaging a constant against any weight returns it, so the Planck, energy and flux means coincide inside a group and one number per group serves all three. `FrequencyOpacity(f)` takes `f(nu, rho, T)`; any other `AbstractOpacity` used with several groups gives the same $\kappa$ in every group, which is a genuine configuration — Vaytet's constant-opacity model — rather than an accident. A frequency-dependent law has no grey value, so `FrequencyOpacity` throws if a single-group run asks it for one, instead of quietly collapsing $\kappa(\nu)$ to some arbitrary frequency.
+**Opacity.** Group opacities are piecewise constant across each group and evaluated at the geometric mean $\sqrt{\nu_g\nu_{g+1}}$ of the group edges (matching Quokka's `piecewise_constant_opacity`). Because a constant opacity cancels out of any spectral average within the group, the Planck, energy, and flux means are equal inside each group. `FrequencyOpacity(f)` takes a function `f(nu, rho, T)` and throws an error if used in a single-group run, since a frequency-dependent law has no well-defined grey evaluation point; passing a grey `AbstractOpacity` subtype to a multigroup run assigns that same $\kappa$ to every group (as in Vaytet's constant-opacity model).
 
 **A run.** Pass `groups`, and `k_B` in whatever units the rest of the problem uses:
 
@@ -520,40 +515,38 @@ end
 run!(sim, tmax = 1e-8)
 ```
 
-A scalar `Erad` in an initial condition is a **total**, split over the groups by the Planck spectrum at the radiation temperature it implies — the only spectrum a single number carries — so a multigroup run starts in equilibrium rather than with everything piled into group 1. A `Fixed` radiation boundary is the one place a group structure has to be written out by hand: its state is the whole radiation vector, `4 * ngroups` long. `Honghu.Problems.marshak_vaytet` builds one from `planck_fractions` and is the worked example.
+Passing a scalar `Erad` in the initial conditions specifies the total radiation energy density, which is distributed across groups according to a Planck spectrum at $T_\mathrm{rad} = (E_\mathrm{rad}/a_r)^{1/4}$. A `Fixed` radiation boundary condition is the only place where you must supply all `4 * ngroups` components explicitly; see `Honghu.Problems.marshak_vaytet` for an example using `planck_fractions`.
 
-Diagnostics stay grey-shaped by default. `field(sim, :Erad)`, `:Fx`, `:reduced_flux` and `radiation_temperature` are summed over the groups, so they mean the same thing in a grey run and a multigroup one; a trailing number picks one group out, as in `field(sim, :Erad_2)`, and `available_fields` lists the per-group names only when there is more than one group.
+Diagnostics default to frequency-integrated totals: `field(sim, :Erad)`, `:Fx`, `:reduced_flux`, and `radiation_temperature` sum over all groups, while a trailing index selects an individual group (such as `field(sim, :Erad_2)`). `available_fields` lists per-group field names whenever `ngroups > 1`.
 
 ## Matter-radiation coupling solvers
 
-With $N_g \geq 2$ groups the implicit energy exchange is a $(1+N_g)$-dimensional stiff solve per cell, and which solver takes it is a property of `RadiationPhysics`:
+With $N_g \geq 2$ groups, the implicit energy exchange solves a $(1+N_g)$-dimensional stiff system per cell, selected via the `coupling` keyword of `RadiationPhysics`:
 
 ```julia
 rad = RadiationPhysics(c = 1.0, a_rad = 1.0, opacity = ConstantOpacity(1e3),
                        groups = groups, coupling = QuokkaCoupling())
 ```
 
-The physics is stated once, in `coupling_coefficients` — the per-group emission rate and absorption coefficient — and the opacity law travels with the cell state, so every temperature derivative, $\mathrm{d}\kappa/\mathrm{d}T$ included, is the derivative of what the solver actually sees. `BracketedCoupling` and `AdaptiveCoupling` are built from it; `QuokkaCoupling` is a separate, hand-derived formulation that shares only its opening guess with them, which is what makes their agreement a check rather than two copies of one derivation. They differ in how the step is taken:
+All coupling solvers read the per-group emission rate and absorption coefficient from `coupling_coefficients`, and the opacity law is carried on the cell state so temperature derivatives ($\mathrm{d}\kappa/\mathrm{d}T$ included) are evaluated directly from the opacity model. `BracketedCoupling` and `AdaptiveCoupling` are built on `coupling_coefficients`, whereas `QuokkaCoupling` is a separate hand-derived formulation in Quokka's variables that shares only its initial guess with them.
 
-| Solver | What it is, and when to reach for it |
+| Solver | Description and use case |
 |:---|:---|
-| `BracketedCoupling()` | **The default, and what to run production with.** Backward Euler in the natural variables $(E_\mathrm{gas}, E_g)$, reduced to one scalar equation. At fixed temperature the group equations are linear in $E_g$, so they are solved in closed form, and what is left is the cell's energy balance as a function of $E_\mathrm{gas}$ alone. That equation always has a sign change on a known interval, so it goes to a bracketing root-finder — BracketingNonlinearSolve's `Brent()` by default, Brent's method with its minimum step, 7.7 evaluations a cell on average — which cannot leave the bracket. No Jacobian, no linear solve, nothing allocated. Over 240 cells spanning three opacity laws and $\tau_\mathrm{cell}$ from $10^{-4}$ to $10^{12}$ it fails none. It is the only solver that supports a dust model. `docs/coupling-new-method.md` describes it in full. |
-| `QuokkaCoupling()` | The $(1+N_g)$ Newton iteration in Quokka's replaced base variables $(E_\mathrm{gas}, R_g)$, where $R_g$ is the energy handed from the gas to group $g$ over the step. Writing the unknown as the *transfer* moves the optical depth $\tau = \hat{c}\rho\kappa\Delta t$ out of the residual, so the conditioning stops tracking it. Kept because Quokka runs it, and because it and the default agree while sharing no residual, no iteration and no linear solve. With a steeply temperature-dependent opacity its Newton direction can go wrong: it fails 75 of the same 240 cells. |
-| `AdaptiveCoupling()` | An error-controlled stiff integrator (`Rosenbrock23` by default) over the same step. **A reference, not a production solver**: it says what the coupling ODE's answer *is*, so the one-step solvers can be checked against a controlled error rather than an assumed one. It takes tens of internal steps per cell per timestep: 12 times the wall time of the one-step solvers at its loosest setting and several hundred times at a tight one, and 8 to 21 kB a cell where they cost nothing. |
+| `BracketedCoupling()` | **Default production solver.** Backward Euler in $(E_\mathrm{gas}, E_g)$, reduced algebraically to a single scalar equation. Because the group equations are linear in $E_g$ at fixed gas temperature, they can be eliminated in closed form, leaving the cell's energy balance as a scalar function of $E_\mathrm{gas}$ on an interval that brackets the root. By default it uses `Brent()` from BracketingNonlinearSolve (averaging 7.7 evaluations per cell), requires no Jacobian or linear solve, allocates zero bytes, and is the only solver that supports dust-gas coupling. Across a 240-cell stress test covering three opacity laws and $\tau_\mathrm{cell}$ from $10^{-4}$ to $10^{12}$, it converges on all 240 cells. See `docs/coupling-new-method.md` for details. |
+| `QuokkaCoupling()` | The $(1+N_g)$ Newton-Raphson solver in Quokka's variables $(E_\mathrm{gas}, R_g)$, where $R_g$ is the energy transferred from gas to group $g$ over the step. Solving for $R_g$ removes $\tau = \hat{c}\rho\kappa\Delta t$ from the residual and keeps the Jacobian well-conditioned at high optical depth. Included for structural parity with Quokka and cross-checking against `BracketedCoupling`. On steeply temperature-dependent opacities its unreduced Newton step can point in the wrong direction, failing on 75 of the 240 stress-test cells. |
+| `AdaptiveCoupling()` | An error-controlled stiff ODE integrator (`Rosenbrock23` by default) over the coupling step. Intended as a reference solver to verify single-step solvers against a tight ODE tolerance: it takes tens of internal steps per cell, runs 12 to several hundred times slower than the single-step solvers, and allocates 8 to 21 kB per cell. |
 
-`QuokkaCoupling` takes one further knob, `linsolve`: how each Newton step's $(1+N_g)\times(1+N_g)$ system is inverted. `ArrowheadSolve()`, the default, eliminates the diagonal group block into the gas row in $O(N_g)$ and forms no matrix; `DenseSolve()` factorises the same system without assuming that structure. The arrowhead is exact only while groups exchange energy solely through the gas, which is a property of the terms in `coupling_rhs` today rather than a truth about radiation — add Compton redistribution or overlapping lines and switch to `DenseSolve`. `BracketedCoupling`'s closed form makes the same assumption and has no such switch: a term that couples groups directly would leave no closed form to use.
+`QuokkaCoupling` also accepts a `linsolve` keyword specifying how each $(1+N_g)\times(1+N_g)$ Newton step is solved. The default, `ArrowheadSolve()`, eliminates the diagonal group block into the gas row in $O(N_g)$ time without forming a matrix; `DenseSolve()` runs a dense LU factorisation on the full matrix. Both `ArrowheadSolve` and `BracketedCoupling`'s closed-form elimination rely on groups coupling only through the gas; adding direct group-to-group exchange (such as Compton redistribution or line overlap) would require `DenseSolve`.
 
-Cells that hit `max_iterations` are counted in `newton_failures` and reported by `run!` rather than throwing, so a solver failing on part of a grid shows up in the run summary rather than silently. It is worth reading: [`future.md`](future.md) records, with a reproduction, a convergence failure of `QuokkaCoupling` on a steeply falling opacity from a gas much hotter than the radiation.
+Cells that reach `max_iterations` without converging increment `newton_failures` in the run summary rather than throwing an exception. See [`future.md`](future.md) for a reproduction of `QuokkaCoupling` failing to converge when a hot gas cools through a steeply falling opacity.
 
-None of this is consulted by a grey run: with one group the coupling is the 2×2 driver in `src/source_terms.jl`, tuned by `RadiationPhysics`'s own `tolerance` and `max_iterations`, and `coupling` is ignored — unless a dust model is set, which sends even a grey run through the multigroup driver and `BracketedCoupling`.
+Single-group runs without dust bypass `coupling` and use the inline 2×2 Newton driver in `src/source_terms.jl` (controlled by `tolerance` and `max_iterations` on `RadiationPhysics`). Setting a dust model routes single-group runs through the multigroup driver and `BracketedCoupling`.
 
 ## Source terms
 
-Two hooks, for two different jobs.
+`source = f(x, y, z, t)` specifies a volumetric radiation energy source and is folded into the implicit matter-radiation coupling step, which keeps stiff emission terms stable.
 
-`source = f(x, y, z, t)` returns a **radiation** energy source density and is applied inside the implicit matter–radiation coupling, where a stiff emission term belongs. It is the right place for a star's luminosity spread over a cell.
-
-`strang_sources = f(sim, t, dt, order)` is the general operator-split hook, applied at $\Delta t/2$ before the advance and $\Delta t/2$ after it, mutating `sim.U` and `sim.R` in place. This is Quokka's `addStrangSplitSources`, called from the same two places in the driver, and it is where gravity, external driving and cooling go. The two half-steps make it second order: the pair is the trapezoid rule in time, so a source with a linear time dependence is integrated exactly.
+`strang_sources = f(sim, t, dt, order)` is a general operator-split hook called for $\Delta t/2$ before the time step and $\Delta t/2$ after it, mutating `sim.U` and `sim.R` in place. It matches Quokka's `addStrangSplitSources` and is where external forces such as gravity, driving, or optically thin cooling can be attached. Applying two half-steps gives second-order accuracy in time (the trapezoid rule, which integrates linear-in-time sources exactly).
 
 ```julia
 function gravity!(sim, t, dt, order)
@@ -569,7 +562,7 @@ end
 Simulation(n = (64, 64, 1), strang_sources = gravity!)
 ```
 
-Nothing is built on this hook — no gravity, no cooling, no driving are shipped. It exists so that adding one does not mean editing `step!`. `order` is `SourceForward` or `SourceReverse`, and matters only if you apply several non-commuting terms in sequence.
+Honghu does not ship built-in gravity, cooling, or driving modules; `strang_sources` provides the hook to add them without modifying `step!`. The `order` argument (`SourceForward` or `SourceReverse`) lets you reverse the sequence of multiple non-commuting operators between the two half-steps.
 
 ## Units
 
@@ -577,22 +570,21 @@ Honghu is unit-agnostic: `c`, `a_rad`, `cv` and the opacities are all supplied b
 
 ## Choosing radiation parameters
 
-Two dimensionless ratios decide whether a radiation-hydrodynamics setup is well posed. Both are worth printing before a long run.
+Two dimensionless ratios determine whether a radiation-hydrodynamics setup is in the regime these equations model:
 
-**Radiation-to-gas energy, $a_r T^4 / (\rho c_v T)$.** These equations are non-relativistic and keep only $O(v/c)$ terms in the coupling. A radiation energy density that dominates the gas by many orders of magnitude will accelerate the matter towards $c$, and the model stops describing anything. Because the ratio scales as $T^3/\rho$, a hot, tenuous medium is radiation-dominated very easily: at $10^5$ K, gas domination needs $\rho \gtrsim 4\times10^{-8}\ \mathrm{g\,cm^{-3}}$. Keep the ratio of order unity or below unless you know the gas stays slow.
+**Radiation-to-gas energy, $a_r T^4 / (\rho c_v T)$.** These equations are non-relativistic and keep only $O(v/c)$ terms in the coupling. A radiation energy density that dominates the gas by many orders of magnitude will accelerate the matter towards $c$, outside the validity of the $O(v/c)$ expansion. Because the ratio scales as $T^3/\rho$, a hot, tenuous medium becomes radiation-dominated quickly: at $10^5$ K, gas domination requires $\rho \gtrsim 4\times10^{-8}\ \mathrm{g\,cm^{-3}}$. Keep the ratio of order unity or below unless the gas remains non-relativistic.
 
-**Reduced speed of light, $\hat{c} / \max(|v| + c_s)$.** The reduced speed of light must still outrun every other signal; a factor of about 20 is comfortable. Making $\hat{c}$ smaller buys a proportionally longer radiation step (`max_radiation_substeps` caps how many substeps one hydro step may take, shortening the hydro step instead of exceeding it), but it also rescales the radiation diffusion coefficient by $\hat{c}/c$ — so use $\hat{c} = c$ wherever the static diffusion limit matters quantitatively.
+**Reduced speed of light, $\hat{c} / \max(|v| + c_s)$.** The reduced speed of light must still outrun every fluid signal; a factor of about 20 is typical. Lowering $\hat{c}$ increases the radiation timestep (`max_radiation_substeps` caps how many radiation substeps one hydro step may take, shrinking the hydro step if needed), at the cost of rescaling the radiation diffusion coefficient by $\hat{c}/c$. Set $\hat{c} = c$ whenever the static diffusion limit matters quantitatively.
 
-`examples/radiating_blast_3d.jl` checks both before it starts, and is a reasonable template.
+See `examples/radiating_blast_3d.jl` for an example that checks both ratios at startup.
 
 ## Limitations
 
-- Uniform grid only — no mesh refinement, no MPI, no GPU.
-- No dust, chemistry, or self-gravity.
-- Multigroup opacity is piecewise constant across a group. Quokka's other models, which fit a power law across each group and so must keep the Planck, energy and flux means apart, are not implemented; neither is any term that moves energy between groups directly, such as Compton redistribution.
-- Shared-memory threading only, so problem sizes are bounded by one node's memory.
-- A reduced speed of light rescales the radiation diffusion coefficient by $\hat{c}/c$; use $\hat{c}=c$ when the static diffusion limit matters quantitatively.
-- **The hydrodynamics–radiation split is first order in time.** Each subsystem is second order on its own — SSP-RK2 for the Euler equations by default (SSP-RK3 is available, but the split takes back its third order), the IMEX PD-ARS scheme for radiation — but `step!` advances one and then the other, which is Lie splitting and contributes an $O(\Delta t)$ error. This is the same split Quokka uses, and it is invisible whenever the radiation is subcycled hard enough that the splitting error is below the spatial error, which is the usual case. Strang splitting the two subsystems would fix it and is not implemented; *source terms* are already Strang-split (see [`strang_sources`](#source-terms)).
+- Uniform Cartesian grids on a single shared-memory node (no adaptive mesh refinement or MPI).
+- No self-gravity.
+- Multigroup opacity is piecewise constant within each group. Power-law in-group profiles (which separate the Planck, energy, and flux group means in Quokka) and direct group-to-group coupling terms such as Compton redistribution are not implemented.
+- Lowering $\hat{c}$ below $c$ rescales the static radiation diffusion coefficient by $\hat{c}/c$.
+- **The hydrodynamics-radiation split is first order in time.** Each subsystem is second order on its own (SSP-RK2 by default for hydrodynamics and IMEX PD-ARS for radiation), while `step!` advances hydrodynamics and then radiation via first-order Lie splitting, as in Quokka. In typical runs where radiation subcycles many times per hydro step, the splitting error stays well below the spatial discretisation error. User source terms passed via [`strang_sources`](#source-terms) are Strang-split to second order.
 
 ## References
 
@@ -605,21 +597,21 @@ Quokka:
 
 Methods and test problems:
 
-- C.-C. He, 2026, Honghu.jl v0.1.0, Zenodo, [doi:10.5281/zenodo.23569082](https://doi.org/10.5281/zenodo.23569082) — this code
-- [Stone et al. (2020)](https://scixplorer.org/abs/2020ApJS..249....4S/abstract), *ApJS* 249, 4 — Athena++, in the speed comparison
-- [He, Krumholz & Wibking (2026)](https://scixplorer.org/abs/2026arXiv261121353H/abstract), arXiv:2611.21353 — the adaptive reduced speed of light approximation (`StabilityBound`)
-- [Colella & Woodward (1984)](https://scixplorer.org/abs/1984JCoPh..54..174C/abstract), *JCP* 54, 174 — PPM
-- [Toro (2009)](https://doi.org/10.1007/b79761), *Riemann Solvers and Numerical Methods for Fluid Dynamics* — HLLC, exact Riemann solver
-- [Miyoshi & Kusano (2005)](https://scixplorer.org/abs/2005JCoPh.208..315M/abstract), *JCP* 208, 315 — HLLD
-- [Minoshima & Miyoshi (2021)](https://scixplorer.org/abs/2021JCoPh.44610639M/abstract), *JCP* 446, 110639 — low-dissipation HLLD, and its HLLC limit
-- [Londrillo & Del Zanna (2004)](https://scixplorer.org/abs/2004JCoPh.195...17L/abstract), *JCP* 195, 17 — EMF averaging for constrained transport
-- [Levermore (1984)](https://scixplorer.org/abs/1984JQSRT..31..149L/abstract), *JQSRT* 31, 149 — M1 closure
-- [Balsara (1999)](https://scixplorer.org/abs/1999JQSRT..61..617B/abstract), *JQSRT* 61, 617 — frozen-Eddington-tensor wave speeds
-- [Skinner & Ostriker (2013)](https://scixplorer.org/abs/2013ApJS..206...21S/abstract), *ApJS* 206, 21 — M1 wave speeds, reduced speed of light
-- [Chu et al. (2019)](https://scixplorer.org/abs/2019JCoPh.389...62C/abstract), *JCP* 389, 62 — IMEX PD-ARS
-- [Vaytet et al. (2011)](https://scixplorer.org/abs/2011JQSRT.112.1323V/abstract), *JQSRT* 112, 1323 — multigroup M1, and the frequency-dependent Marshak wave
-- [Lowrie & Edwards (2008)](https://scixplorer.org/abs/2008ShWav..18..129L/abstract), *Shock Waves* 18, 129 — radiative shock solutions
-- [Zingale (2014)](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract), *Astronomy and Computing* 6, 52; [Harpole et al. (2019)](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract), *JOSS* 4, 1265 — pyro
+- C.-C. He, 2026, Honghu.jl v0.1.0, Zenodo, [doi:10.5281/zenodo.23569082](https://doi.org/10.5281/zenodo.23569082): this code
+- [Stone et al. (2020)](https://scixplorer.org/abs/2020ApJS..249....4S/abstract), *ApJS* 249, 4: Athena++, in the speed comparison
+- [He, Krumholz & Wibking (2026)](https://scixplorer.org/abs/2026arXiv261121353H/abstract), arXiv:2611.21353: the adaptive reduced speed of light approximation (`StabilityBound`)
+- [Colella & Woodward (1984)](https://scixplorer.org/abs/1984JCoPh..54..174C/abstract), *JCP* 54, 174: PPM
+- [Toro (2009)](https://doi.org/10.1007/b79761), *Riemann Solvers and Numerical Methods for Fluid Dynamics*: HLLC, exact Riemann solver
+- [Miyoshi & Kusano (2005)](https://scixplorer.org/abs/2005JCoPh.208..315M/abstract), *JCP* 208, 315: HLLD
+- [Minoshima & Miyoshi (2021)](https://scixplorer.org/abs/2021JCoPh.44610639M/abstract), *JCP* 446, 110639: low-dissipation HLLD, and its HLLC limit
+- [Londrillo & Del Zanna (2004)](https://scixplorer.org/abs/2004JCoPh.195...17L/abstract), *JCP* 195, 17: EMF averaging for constrained transport
+- [Levermore (1984)](https://scixplorer.org/abs/1984JQSRT..31..149L/abstract), *JQSRT* 31, 149: M1 closure
+- [Balsara (1999)](https://scixplorer.org/abs/1999JQSRT..61..617B/abstract), *JQSRT* 61, 617: frozen-Eddington-tensor wave speeds
+- [Skinner & Ostriker (2013)](https://scixplorer.org/abs/2013ApJS..206...21S/abstract), *ApJS* 206, 21: M1 wave speeds, reduced speed of light
+- [Chu et al. (2019)](https://scixplorer.org/abs/2019JCoPh.389...62C/abstract), *JCP* 389, 62: IMEX PD-ARS
+- [Vaytet et al. (2011)](https://scixplorer.org/abs/2011JQSRT.112.1323V/abstract), *JQSRT* 112, 1323: multigroup M1, and the frequency-dependent Marshak wave
+- [Lowrie & Edwards (2008)](https://scixplorer.org/abs/2008ShWav..18..129L/abstract), *Shock Waves* 18, 129: radiative shock solutions
+- [Zingale (2014)](https://scixplorer.org/abs/2014A%26C.....6...52Z/abstract), *Astronomy and Computing* 6, 52; [Harpole et al. (2019)](https://scixplorer.org/abs/2019JOSS....4.1265H/abstract), *JOSS* 4, 1265: pyro
 
 ## Contributing, support and citing
 
